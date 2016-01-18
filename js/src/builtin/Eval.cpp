@@ -435,8 +435,7 @@ js::DirectEval(JSContext* cx, const CallArgs& args)
                JSOp(*iter.pc()) == JSOP_STRICTEVAL ||
                JSOp(*iter.pc()) == JSOP_SPREADEVAL ||
                JSOp(*iter.pc()) == JSOP_STRICTSPREADEVAL);
-    MOZ_ASSERT_IF(caller.isFunctionFrame(),
-                  caller.compartment() == caller.callee()->compartment());
+    MOZ_ASSERT(caller.compartment() == caller.script()->compartment());
 
     RootedObject scopeChain(cx, caller.scopeChain());
     return EvalKernel(cx, args, DIRECT_EVAL, caller, scopeChain, iter.pc());
@@ -484,7 +483,7 @@ js::ExecuteInGlobalAndReturnScope(JSContext* cx, HandleObject global, HandleScri
         return false;
 
     RootedValue rval(cx);
-    if (!ExecuteKernel(cx, script, *scope, UndefinedValue(), EXECUTE_GLOBAL,
+    if (!ExecuteKernel(cx, script, *scope, UndefinedValue(), EXECUTE_GLOBAL_OR_MODULE,
                        NullFramePtr() /* evalInFrame */, rval.address()))
     {
         return false;

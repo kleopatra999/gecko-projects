@@ -65,6 +65,7 @@
 #include "mozilla/unused.h"
 #include "mozilla/TimelineConsumers.h"
 #include "nsAnimationManager.h"
+#include "nsIDOMEvent.h"
 
 #ifdef MOZ_NUWA_PROCESS
 #include "ipc/Nuwa.h"
@@ -1686,10 +1687,6 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
 
         if (tracingStyleFlush) {
           profiler_tracing("Paint", "Styles", TRACING_INTERVAL_END);
-        }
-
-        if (!nsLayoutUtils::AreAsyncAnimationsEnabled()) {
-          mPresContext->TickLastStyleUpdateForAllAnimations();
         }
       }
     } else if  (i == 1) {

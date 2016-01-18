@@ -23,6 +23,7 @@ XPCOMUtils.defineLazyServiceGetter(
     this, "cookieManager", "@mozilla.org/cookiemanager;1", "nsICookieManager2");
 
 Cu.import("chrome://marionette/content/actions.js");
+Cu.import("chrome://marionette/content/interactions.js");
 Cu.import("chrome://marionette/content/elements.js");
 Cu.import("chrome://marionette/content/error.js");
 Cu.import("chrome://marionette/content/modal.js");
@@ -48,7 +49,6 @@ const CLICK_TO_START_PREF = "marionette.debugging.clicktostart";
 const CONTENT_LISTENER_PREF = "marionette.contentListener";
 
 const logger = Log.repository.getLogger("Marionette");
-const uuidGen = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
 const globalMessageManager = Cc["@mozilla.org/globalmessagemanager;1"]
     .getService(Ci.nsIMessageBroadcaster);
 
@@ -164,6 +164,8 @@ this.GeckoDriver = function(appName, device, stopSignal, emulator) {
     "device": device,
     "version": Services.appinfo.version,
   };
+
+  this.interactions = new Interactions(utils, () => this.sessionCapabilities);
 
   this.mm = globalMessageManager;
   this.listener = proxy.toListener(() => this.mm, this.sendAsync.bind(this));
@@ -510,10 +512,9 @@ GeckoDriver.prototype.listeningPromise = function() {
 
 /** Create a new session. */
 GeckoDriver.prototype.newSession = function(cmd, resp) {
-  let uuid = uuidGen.generateUUID().toString();
   this.sessionId = cmd.parameters.sessionId ||
       cmd.parameters.session_id ||
-      uuid.substring(1, uuid.length - 1);
+      elements.generateUUID();
 
   this.newSessionCommandId = cmd.id;
   this.setSessionCapabilities(cmd.parameters.capabilities);
@@ -666,14 +667,14 @@ GeckoDriver.prototype.setSessionCapabilities = function(newCaps) {
   // clone, overwrite, and set
   let caps = copy(this.sessionCapabilities);
   caps = copy(newCaps, caps);
+  logger.config("Changing capabilities: " + JSON.stringify(caps));
   this.sessionCapabilities = caps;
 };
 
-GeckoDriver.prototype.setUpProxy = function (proxy) {
-  logger.debug("Setup Proxy has been entered. Will attempt to setup the following proxy");
-  logger.debug("Proxy object contains " + JSON.stringify(proxy));
-  if (typeof proxy == "object" && proxy.hasOwnProperty("proxyType")) {
+GeckoDriver.prototype.setUpProxy = function(proxy) {
+  logger.debug("User-provided proxy settings: " + JSON.stringify(proxy));
 
+  if (typeof proxy == "object" && proxy.hasOwnProperty("proxyType")) {
     switch (proxy.proxyType.toUpperCase()) {
       case "MANUAL":
         Services.prefs.setIntPref("network.proxy.type", 1);
@@ -712,7 +713,7 @@ GeckoDriver.prototype.setUpProxy = function (proxy) {
         Services.prefs.setIntPref("network.proxy.type", 0);
     }
   } else {
-    throw new InvalidArgumentError("the value of 'proxy' should be an object");
+    throw new InvalidArgumentError("Value of 'proxy' should be an object");
   }
 };
 
@@ -1677,6 +1678,29 @@ GeckoDriver.prototype.switchToFrame = function(cmd, resp) {
           checkTimer.initWithCallback(checkLoad.bind(this), 100, Ci.nsITimer.TYPE_ONE_SHOT);
           return;
         }
+
+        // Check if the frame is XBL anonymous
+        let parent = curWindow.document.getBindingParent(wantedFrame);
+        // Shadow nodes also show up in getAnonymousNodes, we should ignore them.
+        if (parent && !(parent.shadowRoot && parent.shadowRoot.contains(wantedFrame))) {
+          let anonNodes = [...curWindow.document.getAnonymousNodes(parent) || []];
+          if (anonNodes.length > 0) {
+            let el = wantedFrame;
+            while (el) {
+              if (anonNodes.indexOf(el) > -1) {
+                curWindow = wantedFrame.contentWindow;
+                this.curFrame = curWindow;
+                if (focus) {
+                  this.curFrame.focus();
+                }
+                checkTimer.initWithCallback(checkLoad.bind(this), 100, Ci.nsITimer.TYPE_ONE_SHOT);
+                return;
+              }
+              el = el.parentNode;
+            }
+          }
+        }
+
         // else, assume iframe
         let frames = curWindow.document.getElementsByTagName("iframe");
         let numFrames = frames.length;
@@ -1892,7 +1916,7 @@ GeckoDriver.prototype.findElement = function(cmd, resp) {
       resp.body.value = yield new Promise((resolve, reject) => {
         let win = this.getCurrentWindow();
         this.curBrowser.elementManager.find(
-            { frame: win },
+            {frame: win},
             cmd.parameters,
             this.searchTimeout,
             false /* all */,
@@ -1925,7 +1949,7 @@ GeckoDriver.prototype.findElements = function(cmd, resp) {
       resp.body = yield new Promise((resolve, reject) => {
         let win = this.getCurrentWindow();
         this.curBrowser.elementManager.find(
-            { frame: win },
+            {frame: win},
             cmd.parameters,
             this.searchTimeout,
             true /* all */,
@@ -1960,10 +1984,9 @@ GeckoDriver.prototype.clickElement = function(cmd, resp) {
 
   switch (this.context) {
     case Context.CHROME:
-      // click atom fails, fall back to click() action
       let win = this.getCurrentWindow();
-      let el = this.curBrowser.elementManager.getKnownElement(id, { frame: win });
-      el.click();
+      yield this.interactions.clickElement({ frame: win },
+        this.curBrowser.elementManager, id)
       break;
 
     case Context.CONTENT:
@@ -2061,8 +2084,8 @@ GeckoDriver.prototype.isElementDisplayed = function(cmd, resp) {
   switch (this.context) {
     case Context.CHROME:
       let win = this.getCurrentWindow();
-      let el = this.curBrowser.elementManager.getKnownElement(id, {frame: win});
-      resp.body.value = utils.isElementDisplayed(el);
+      resp.body.value = yield this.interactions.isElementDisplayed(
+        {frame: win}, this.curBrowser.elementManager, id);
       break;
 
     case Context.CONTENT:
@@ -2109,8 +2132,8 @@ GeckoDriver.prototype.isElementEnabled = function(cmd, resp) {
     case Context.CHROME:
       // Selenium atom doesn't quite work here
       let win = this.getCurrentWindow();
-      let el = this.curBrowser.elementManager.getKnownElement(id, {frame: win});
-      resp.body.value = !(!!el.disabled);
+      resp.body.value = yield this.interactions.isElementEnabled(
+        {frame: win}, this.curBrowser.elementManager, id);
       break;
 
     case Context.CONTENT:
@@ -2132,14 +2155,8 @@ GeckoDriver.prototype.isElementSelected = function(cmd, resp) {
     case Context.CHROME:
       // Selenium atom doesn't quite work here
       let win = this.getCurrentWindow();
-      let el = this.curBrowser.elementManager.getKnownElement(id, { frame: win });
-      if (typeof el.checked != "undefined") {
-        resp.body.value = !!el.checked;
-      } else if (typeof el.selected != "undefined") {
-        resp.body.value = !!el.selected;
-      } else {
-        resp.body.value = true;
-      }
+      resp.body.value = yield this.interactions.isElementSelected(
+        { frame: win }, this.curBrowser.elementManager, id);
       break;
 
     case Context.CONTENT:
@@ -2188,15 +2205,8 @@ GeckoDriver.prototype.sendKeysToElement = function(cmd, resp) {
   switch (this.context) {
     case Context.CHROME:
       let win = this.getCurrentWindow();
-      let el = this.curBrowser.elementManager.getKnownElement(id, { frame: win });
-      utils.sendKeysToElement(
-          win,
-          el,
-          value,
-          () => {},
-          e => { throw e; },
-          cmd.id,
-          true /* ignore visibility check */);
+      yield this.interactions.sendKeysToElement(
+        { frame: win }, this.curBrowser.elementManager, id, value, true);
       break;
 
     case Context.CONTENT:
@@ -2785,9 +2795,6 @@ GeckoDriver.prototype.sendKeysToDialog = function(cmd, resp) {
       win,
       loginTextbox,
       cmd.parameters.value,
-      () => {},
-      e => { throw e; },
-      this.command_id,
       true /* ignore visibility check */);
 };
 

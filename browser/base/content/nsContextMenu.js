@@ -336,14 +336,18 @@ nsContextMenu.prototype = {
     this.showItem("context-markpageMenu", enablePageMarks && markProviders.length > SocialMarks.MENU_LIMIT);
     let enablePageMarkItems = enablePageMarks && markProviders.length <= SocialMarks.MENU_LIMIT;
     let linkmenus = document.getElementsByClassName("context-markpage");
-    [m.hidden = !enablePageMarkItems for (m of linkmenus)];
+    for (let m of linkmenus) {
+      m.hidden = !enablePageMarkItems;
+    }
 
     let enableLinkMarks = markProviders.length > 0 &&
                             ((this.onLink && !this.onMailtoLink) || this.onPlainTextLink);
     this.showItem("context-marklinkMenu", enableLinkMarks && markProviders.length > SocialMarks.MENU_LIMIT);
     let enableLinkMarkItems = enableLinkMarks && markProviders.length <= SocialMarks.MENU_LIMIT;
     linkmenus = document.getElementsByClassName("context-marklink");
-    [m.hidden = !enableLinkMarkItems for (m of linkmenus)];
+    for (let m of linkmenus) {
+      m.hidden = !enableLinkMarkItems;
+    }
 
     // SocialShare
     let shareButton = SocialShare.shareButton;
@@ -1755,17 +1759,8 @@ nsContextMenu.prototype = {
       selectedText = selectedText.substr(0,truncLength) + this.ellipsis;
     }
 
-    // Use the current engine if the search bar is visible, the default
-    // engine otherwise.
-    var engineName = "";
-    var ss = Cc["@mozilla.org/browser/search-service;1"].
-             getService(Ci.nsIBrowserSearchService);
-    if (isElementVisible(BrowserSearch.searchBar))
-      engineName = ss.currentEngine.name;
-    else
-      engineName = ss.defaultEngine.name;
-
     // format "Search <engine> for <selection>" string to show in menu
+    let engineName = Services.search.currentEngine.name;
     var menuLabel = gNavigatorBundle.getFormattedString("contextMenuSearch",
                                                         [engineName,
                                                          selectedText]);

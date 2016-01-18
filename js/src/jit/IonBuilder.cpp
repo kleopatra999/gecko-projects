@@ -721,6 +721,7 @@ IonBuilder::analyzeNewLoopTypes(MBasicBlock* entry, jsbytecode* start, jsbytecod
               case JSOP_MOD:
               case JSOP_NEG:
                 type = inspector->expectedResultType(last);
+                break;
               default:
                 break;
             }
@@ -1549,7 +1550,7 @@ IonBuilder::traverseBytecode()
                 MOZ_ASSERT(i == 0);
                 if (current->peek(-1) == popped[0])
                     break;
-                // FALL THROUGH
+                MOZ_FALLTHROUGH;
 
               default:
                 MOZ_ASSERT(popped[i]->isImplicitlyUsed() ||
@@ -1940,6 +1941,7 @@ IonBuilder::inspectOpcode(JSOp op)
                 return pushConstant(ObjectValue(*scope));
         }
         // Fall through to JSOP_BINDNAME
+        MOZ_FALLTHROUGH;
       case JSOP_BINDNAME:
         return jsop_bindname(info().getName(pc));
 
@@ -5081,6 +5083,8 @@ IonBuilder::inlineScriptedCall(CallInfo& callInfo, JSFunction* target)
             abortReason_ = AbortReason_Inlining;
         } else if (inlineBuilder.abortReason_ == AbortReason_Inlining) {
             abortReason_ = AbortReason_Inlining;
+        } else if (inlineBuilder.abortReason_ == AbortReason_Alloc) {
+            abortReason_ = AbortReason_Alloc;
         } else if (inlineBuilder.abortReason_ == AbortReason_PreliminaryObjects) {
             const ObjectGroupVector& groups = inlineBuilder.abortedPreliminaryGroups();
             MOZ_ASSERT(!groups.empty());
@@ -6265,6 +6269,9 @@ IonBuilder::createThis(JSFunction* target, MDefinition* callee, MDefinition* new
         current->add(magic);
         return magic;
     }
+
+    if (target->isBoundFunction())
+        return constant(MagicValue(JS_UNINITIALIZED_LEXICAL));
 
     if (target->isDerivedClassConstructor()) {
         MOZ_ASSERT(target->isClassConstructor());
@@ -8369,9 +8376,10 @@ IonBuilder::jsop_intrinsic(PropertyName* name)
 {
     TemporaryTypeSet* types = bytecodeTypes(pc);
 
-    // If we haven't executed this opcode yet, we need to get the intrinsic
-    // value and monitor the result.
-    if (types->empty()) {
+    Value vp = UndefinedValue();
+    // If the intrinsic value doesn't yet exist, we haven't executed this
+    // opcode yet, so we need to get it and monitor the result.
+    if (!script()->global().maybeExistingIntrinsicValue(name, &vp)) {
         MCallGetIntrinsicValue* ins = MCallGetIntrinsicValue::New(alloc(), name);
 
         current->add(ins);
@@ -8383,10 +8391,12 @@ IonBuilder::jsop_intrinsic(PropertyName* name)
         return pushTypeBarrier(ins, types, BarrierKind::TypeSet);
     }
 
+    if (types->empty())
+        types->addType(TypeSet::GetValueType(vp), alloc().lifoAlloc());
+
     // Bake in the intrinsic, guaranteed to exist because a non-empty typeset
     // means the intrinsic was successfully gotten in the VM call above.
     // Assert that TI agrees with us on the type.
-    Value vp = script()->global().existingIntrinsicValue(name);
     MOZ_ASSERT(types->hasType(TypeSet::GetValueType(vp)));
 
     pushConstant(vp);
@@ -8986,7 +8996,7 @@ JSObject*
 IonBuilder::getStaticTypedArrayObject(MDefinition* obj, MDefinition* index)
 {
     Scalar::Type arrayType;
-    if (!ElementAccessIsAnyTypedArray(constraints(), obj, index, &arrayType)) {
+    if (!ElementAccessIsTypedArray(constraints(), obj, index, &arrayType)) {
         trackOptimizationOutcome(TrackedOutcome::AccessNotTypedArray);
         return nullptr;
     }
@@ -9031,7 +9041,7 @@ IonBuilder::getElemTryTypedStatic(bool* emitted, MDefinition* obj, MDefinition* 
         return true;
 
     // LoadTypedArrayElementStatic currently treats uint32 arrays as int32.
-    Scalar::Type viewType = AnyTypedArrayType(tarrObj);
+    Scalar::Type viewType = tarrObj->as<TypedArrayObject>().type();
     if (viewType == Scalar::Uint32) {
         trackOptimizationOutcome(TrackedOutcome::StaticTypedArrayUint32);
         return true;
@@ -9081,7 +9091,7 @@ IonBuilder::getElemTryTypedArray(bool* emitted, MDefinition* obj, MDefinition* i
     MOZ_ASSERT(*emitted == false);
 
     Scalar::Type arrayType;
-    if (!ElementAccessIsAnyTypedArray(constraints(), obj, index, &arrayType)) {
+    if (!ElementAccessIsTypedArray(constraints(), obj, index, &arrayType)) {
         trackOptimizationOutcome(TrackedOutcome::AccessNotTypedArray);
         return true;
     }
@@ -9443,7 +9453,7 @@ IonBuilder::addTypedArrayLengthAndData(MDefinition* obj,
         tarr = obj->resultTypeSet()->maybeSingleton();
 
     if (tarr) {
-        SharedMem<void*> data = AnyTypedArrayViewData(tarr);
+        SharedMem<void*> data = tarr->as<TypedArrayObject>().viewDataEither();
         // Bug 979449 - Optimistically embed the elements and use TI to
         //              invalidate if we move them.
         bool isTenured = !tarr->runtimeFromMainThread()->gc.nursery.isInside(data);
@@ -9457,7 +9467,7 @@ IonBuilder::addTypedArrayLengthAndData(MDefinition* obj,
 
                 obj->setImplicitlyUsedUnchecked();
 
-                int32_t len = AssertedCast<int32_t>(AnyTypedArrayLength(tarr));
+                int32_t len = AssertedCast<int32_t>(tarr->as<TypedArrayObject>().length());
                 *length = MConstant::New(alloc(), Int32Value(len));
                 current->add(*length);
 
@@ -9810,10 +9820,11 @@ IonBuilder::setElemTryTypedStatic(bool* emitted, MDefinition* object,
     if (!tarrObj)
         return true;
 
-    if (tarrObj->runtimeFromMainThread()->gc.nursery.isInside(AnyTypedArrayViewData(tarrObj)))
+    SharedMem<void*> viewData = tarrObj->as<TypedArrayObject>().viewDataEither();
+    if (tarrObj->runtimeFromMainThread()->gc.nursery.isInside(viewData))
         return true;
 
-    Scalar::Type viewType = AnyTypedArrayType(tarrObj);
+    Scalar::Type viewType = tarrObj->as<TypedArrayObject>().type();
     MDefinition* ptr = convertShiftToMaskForStaticTypedArray(index, viewType);
     if (!ptr)
         return true;
@@ -9854,7 +9865,7 @@ IonBuilder::setElemTryTypedArray(bool* emitted, MDefinition* object,
     MOZ_ASSERT(*emitted == false);
 
     Scalar::Type arrayType;
-    if (!ElementAccessIsAnyTypedArray(constraints(), object, index, &arrayType)) {
+    if (!ElementAccessIsTypedArray(constraints(), object, index, &arrayType)) {
         trackOptimizationOutcome(TrackedOutcome::AccessNotTypedArray);
         return true;
     }
@@ -13006,6 +13017,9 @@ IonBuilder::jsop_functionthis()
         current->push(def);
         return true;
     }
+
+    if (IsNullOrUndefined(def->type()))
+        return pushConstant(GetThisValue(&script()->global()));
 
     MComputeThis* thisObj = MComputeThis::New(alloc(), def);
     current->add(thisObj);

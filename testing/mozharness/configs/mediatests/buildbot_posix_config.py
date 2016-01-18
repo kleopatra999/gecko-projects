@@ -41,7 +41,7 @@ config = {
 
     "firefox_media_repo": 'https://github.com/mjzffr/firefox-media-tests.git',
     "firefox_media_branch": 'master',
-    "firefox_media_rev": '453276b8d056fedba45aacd6b02021e7cc637fc2',
+    "firefox_media_rev": '0830e972e4b95fef3507207fc6bce028da27f2d3',
 
     "suite_definitions": {
         "media-tests": {

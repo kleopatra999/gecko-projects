@@ -87,19 +87,20 @@ DCFromDrawTarget::DCFromDrawTarget(DrawTarget& aDrawTarget)
 {
   mDC = nullptr;
   if (aDrawTarget.GetBackendType() == BackendType::CAIRO) {
-    cairo_surface_t *surf = (cairo_surface_t*)
-        aDrawTarget.GetNativeSurface(NativeSurfaceType::CAIRO_SURFACE);
-    if (surf) {
-      cairo_surface_type_t surfaceType = cairo_surface_get_type(surf);
-      if (surfaceType == CAIRO_SURFACE_TYPE_WIN32 ||
-          surfaceType == CAIRO_SURFACE_TYPE_WIN32_PRINTING) {
-        mDC = cairo_win32_surface_get_dc(surf);
-        mNeedsRelease = false;
-        SaveDC(mDC);
-        cairo_t* ctx = (cairo_t*)
-            aDrawTarget.GetNativeSurface(NativeSurfaceType::CAIRO_CONTEXT);
-        cairo_scaled_font_t* scaled = cairo_get_scaled_font(ctx);
-        cairo_win32_scaled_font_select_font(scaled, mDC);
+    cairo_t* ctx = static_cast<cairo_t*>
+      (aDrawTarget.GetNativeSurface(NativeSurfaceType::CAIRO_CONTEXT));
+    if (ctx) {
+      cairo_surface_t* surf = cairo_get_group_target(ctx);
+      if (surf) {
+        cairo_surface_type_t surfaceType = cairo_surface_get_type(surf);
+        if (surfaceType == CAIRO_SURFACE_TYPE_WIN32 ||
+            surfaceType == CAIRO_SURFACE_TYPE_WIN32_PRINTING) {
+          mDC = cairo_win32_surface_get_dc(surf);
+          mNeedsRelease = false;
+          SaveDC(mDC);
+          cairo_scaled_font_t* scaled = cairo_get_scaled_font(ctx);
+          cairo_win32_scaled_font_select_font(scaled, mDC);
+        }
       }
     }
   }
@@ -424,12 +425,6 @@ gfxWindowsPlatform::~gfxWindowsPlatform()
     CoUninitialize();
 }
 
-double
-gfxWindowsPlatform::GetDPIScale()
-{
-  return WinUtils::LogToPhysFactor();
-}
-
 bool
 gfxWindowsPlatform::CanUseHardwareVideoDecoding()
 {
@@ -623,7 +618,7 @@ gfxWindowsPlatform::CreateDevice(RefPtr<IDXGIAdapter1> &adapter1,
 void
 gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
 {
-  if (!Factory::SupportsD2D1() && !gfxPrefs::Direct2DAllow1_0()) {
+  if ((!Factory::SupportsD2D1() || !gfxPrefs::Direct2DUse1_1()) && !gfxPrefs::Direct2DAllow1_0()) {
     return;
   }
 
@@ -700,9 +695,7 @@ gfxWindowsPlatform::CreatePlatformFontList()
 #ifdef CAIRO_HAS_DWRITE_FONT
     // bug 630201 - older pre-RTM versions of Direct2D/DirectWrite cause odd
     // crashers so blacklist them altogether
-    if (IsNotWin7PreRTM() && GetDWriteFactory() &&
-        // Skia doesn't support DirectWrite fonts yet.
-       (gfxPlatform::GetDefaultContentBackend() != BackendType::SKIA)) {
+    if (IsNotWin7PreRTM() && GetDWriteFactory()) {
         pfl = new gfxDWriteFontList();
         if (NS_SUCCEEDED(pfl->InitFontList())) {
             return pfl;
@@ -1789,7 +1782,7 @@ CheckForAdapterMismatch(ID3D11Device *device)
   nsresult ec;
   int32_t vendor = vendorID.ToInteger(&ec, 16);
   if (vendor != desc.VendorId) {
-      gfxCriticalNote << "VendorIDMismatch " << hexa(vendor) << " " << hexa(desc.VendorId);
+      gfxCriticalNote << "VendorIDMismatch V " << hexa(vendor) << " " << hexa(desc.VendorId);
   }
 }
 
@@ -2277,7 +2270,7 @@ gfxWindowsPlatform::ContentAdapterIsParentAdapter(ID3D11Device* device)
       desc.AdapterLuid.HighPart != parent.AdapterLuid.HighPart ||
       desc.AdapterLuid.LowPart != parent.AdapterLuid.LowPart)
   {
-    gfxCriticalNote << "VendorIDMismatch " << hexa(parent.VendorId) << " " << hexa(desc.VendorId);
+    gfxCriticalNote << "VendorIDMismatch P " << hexa(parent.VendorId) << " " << hexa(desc.VendorId);
     return false;
   }
 

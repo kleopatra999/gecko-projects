@@ -50,7 +50,7 @@ BaselineFrame::trace(JSTracer* trc, JitFrameIterator& frameIterator)
 
     if (isEvalFrame()) {
         TraceRoot(trc, &evalScript_, "baseline-evalscript");
-        if (isFunctionFrame())
+        if (script()->isDirectEvalInFunction())
             TraceRoot(trc, evalNewTargetAddress(), "baseline-evalNewTarget");
     }
 
@@ -127,7 +127,7 @@ bool
 BaselineFrame::initFunctionScopeObjects(JSContext* cx)
 {
     MOZ_ASSERT(isNonEvalFunctionFrame());
-    MOZ_ASSERT(fun()->needsCallObject());
+    MOZ_ASSERT(callee()->needsCallObject());
 
     CallObject* callobj = CallObject::createForFunction(cx, this);
     if (!callobj)

@@ -187,6 +187,7 @@ LayerTransactionParent::Destroy()
 
 bool
 LayerTransactionParent::RecvUpdateNoSwap(InfallibleTArray<Edit>&& cset,
+                                         InfallibleTArray<OpDestroy>&& aToDestroy,
                                          const uint64_t& aTransactionId,
                                          const TargetConfig& targetConfig,
                                          PluginsArray&& aPlugins,
@@ -197,7 +198,8 @@ LayerTransactionParent::RecvUpdateNoSwap(InfallibleTArray<Edit>&& cset,
                                          const mozilla::TimeStamp& aTransactionStart,
                                          const int32_t& aPaintSyncId)
 {
-  return RecvUpdate(Move(cset), aTransactionId, targetConfig, Move(aPlugins), isFirstPaint,
+  return RecvUpdate(Move(cset), Move(aToDestroy),
+      aTransactionId, targetConfig, Move(aPlugins), isFirstPaint,
       scheduleComposite, paintSequenceNumber, isRepeatTransaction,
       aTransactionStart, aPaintSyncId, nullptr);
 }
@@ -205,20 +207,32 @@ LayerTransactionParent::RecvUpdateNoSwap(InfallibleTArray<Edit>&& cset,
 class MOZ_STACK_CLASS AutoLayerTransactionParentAsyncMessageSender
 {
 public:
-  explicit AutoLayerTransactionParentAsyncMessageSender(LayerTransactionParent* aLayerTransaction)
-    : mLayerTransaction(aLayerTransaction) {}
+  explicit AutoLayerTransactionParentAsyncMessageSender(LayerTransactionParent* aLayerTransaction,
+                                                        InfallibleTArray<OpDestroy>* aDestroyActors = nullptr)
+    : mLayerTransaction(aLayerTransaction)
+    , mActorsToDestroy(aDestroyActors)
+  {}
 
   ~AutoLayerTransactionParentAsyncMessageSender()
   {
     mLayerTransaction->SendPendingAsyncMessages();
     ImageBridgeParent::SendPendingAsyncMessages(mLayerTransaction->GetChildProcessId());
+    if (mActorsToDestroy) {
+      // Destroy the actors after sending the async messages because the latter may contain
+      // references to some actors.
+      for (const auto& op : *mActorsToDestroy) {
+        mLayerTransaction->DestroyActor(op);
+      }
+    }
   }
 private:
   LayerTransactionParent* mLayerTransaction;
+  InfallibleTArray<OpDestroy>* mActorsToDestroy;
 };
 
 bool
 LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
+                                   InfallibleTArray<OpDestroy>&& aToDestroy,
                                    const uint64_t& aTransactionId,
                                    const TargetConfig& targetConfig,
                                    PluginsArray&& aPlugins,
@@ -241,11 +255,14 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
   MOZ_LAYERS_LOG(("[ParentSide] received txn with %d edits", cset.Length()));
 
   if (mDestroyed || !layer_manager() || layer_manager()->IsDestroyed()) {
+    for (const auto& op : aToDestroy) {
+      DestroyActor(op);
+    }
     return true;
   }
 
+  AutoLayerTransactionParentAsyncMessageSender autoAsyncMessageSender(this, &aToDestroy);
   EditReplyVector replyv;
-  AutoLayerTransactionParentAsyncMessageSender autoAsyncMessageSender(this);
 
   {
     AutoResolveRefLayers resolve(mShadowLayersManager->GetCompositionManager(this));

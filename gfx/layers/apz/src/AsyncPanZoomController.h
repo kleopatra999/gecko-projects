@@ -44,7 +44,7 @@ struct ScrollableLayerGuid;
 class CompositorParent;
 class GestureEventListener;
 class PCompositorParent;
-struct ViewTransform;
+struct AsyncTransform;
 class AsyncPanZoomAnimation;
 class FlingAnimation;
 class InputBlockState;
@@ -52,6 +52,7 @@ class TouchBlockState;
 class PanGestureBlockState;
 class OverscrollHandoffChain;
 class StateChangeNotificationBlocker;
+class CheckerboardEvent;
 
 /**
  * Controller for all panning and zooming logic. Any time a user input is
@@ -166,14 +167,14 @@ public:
    * This function returns the async transform via the |aOutTransform|
    * out parameter.
    */
-  void SampleContentTransformForFrame(ViewTransform* aOutTransform,
+  void SampleContentTransformForFrame(AsyncTransform* aOutTransform,
                                       ParentLayerPoint& aScrollOffset);
 
   /**
    * Return a visual effect that reflects this apzc's
    * overscrolled state, if any.
    */
-  Matrix4x4 GetOverscrollTransform() const;
+  AsyncTransformComponentMatrix GetOverscrollTransform() const;
 
   /**
    * A shadow layer update has arrived. |aLayerMetrics| is the new FrameMetrics
@@ -182,7 +183,8 @@ public:
    * layers code indicating that the frame metrics being sent with this call are
    * the initial metrics and the initial paint of the frame has just happened.
    */
-  void NotifyLayersUpdated(const FrameMetrics& aLayerMetrics, bool aIsFirstPaint);
+  void NotifyLayersUpdated(const FrameMetrics& aLayerMetrics, bool aIsFirstPaint,
+                           bool aThisLayerTreeUpdated);
 
   /**
    * The platform implementation must set the compositor parent so that we can
@@ -218,13 +220,13 @@ public:
    * existing transform, it will make the layer appear with the desired pan/zoom
    * amount.
    */
-  ViewTransform GetCurrentAsyncTransform() const;
+  AsyncTransform GetCurrentAsyncTransform() const;
 
   /**
    * Returns the same transform as GetCurrentAsyncTransform(), but includes
    * any transform due to axis over-scroll.
    */
-  Matrix4x4 GetCurrentAsyncTransformWithOverscroll() const;
+  AsyncTransformComponentMatrix GetCurrentAsyncTransformWithOverscroll() const;
 
   /**
    * Returns the transform to take something from the coordinate space of the
@@ -594,7 +596,8 @@ protected:
   /**
    * Actually send the next pending paint request to gecko.
    */
-  void DispatchRepaintRequest(const FrameMetrics& aFrameMetrics);
+  void DispatchRepaintRequest(const FrameMetrics& aFrameMetrics,
+                              const ParentLayerPoint& aVelocity);
 
   /**
    * Gets the current frame metrics. This is *not* the Gecko copy stored in the
@@ -640,6 +643,9 @@ protected:
   // to a nearby snap position if appropriate. The current scroll position is
   // used as the final destination.
   void RequestSnap();
+  // Same as above, but takes into account the current velocity to find a
+  // predicted destination.
+  void RequestSnapToDestination();
 
   uint64_t mLayersId;
   RefPtr<CompositorParent> mCompositorParent;
@@ -1096,6 +1102,17 @@ private:
   // Flag to track whether or not the APZ transform is not used. This
   // flag is recomputed for every composition frame.
   bool mAsyncTransformAppliedToContent;
+
+
+  /* ===================================================================
+   * The functions and members in this section are used for checkerboard
+   * recording.
+   */
+private:
+  // This is created when this APZC instance is first included as part of a
+  // composite. If a checkerboard event takes place, this is destroyed at the
+  // end of the event, and a new one is created on the next composite.
+  UniquePtr<CheckerboardEvent> mCheckerboardEvent;
 };
 
 } // namespace layers

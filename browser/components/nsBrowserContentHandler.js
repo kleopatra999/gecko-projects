@@ -12,6 +12,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
                                   "resource:///modules/RecentWindow.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ShellService",
+                                  "resource:///modules/ShellService.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
                                    "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 
@@ -38,7 +40,6 @@ const nsIWebNavigation       = Components.interfaces.nsIWebNavigation;
 const nsIWindowMediator      = Components.interfaces.nsIWindowMediator;
 const nsIWindowWatcher       = Components.interfaces.nsIWindowWatcher;
 const nsIWebNavigationInfo   = Components.interfaces.nsIWebNavigationInfo;
-const nsIBrowserSearchService = Components.interfaces.nsIBrowserSearchService;
 const nsICommandLineValidator = Components.interfaces.nsICommandLineValidator;
 
 const NS_BINDING_ABORTED = Components.results.NS_BINDING_ABORTED;
@@ -262,10 +263,7 @@ function logSystemBasedSearch(engine) {
 }
 
 function doSearch(searchTerm, cmdLine) {
-  var ss = Components.classes["@mozilla.org/browser/search-service;1"]
-                     .getService(nsIBrowserSearchService);
-
-  var engine = ss.defaultEngine;
+  var engine = Services.search.defaultEngine;
   logSystemBasedSearch(engine);
 
   var submission = engine.getSubmission(searchTerm, null, "system");
@@ -664,9 +662,7 @@ nsBrowserContentHandler.prototype = {
         var url = Services.urlFormatter.formatURLPref("app.support.baseURL") +
                   "win10-default-browser";
         if (urlParam == url) {
-          var shellSvc = Components.classes["@mozilla.org/browser/shell-service;1"]
-                                   .getService(Components.interfaces.nsIShellService);
-          isDefault = shellSvc.isDefaultBrowser(false, false);
+          isDefault = ShellService.isDefaultBrowser(false, false);
         }
       } catch (ex) {}
       if (isDefault) {
@@ -796,9 +792,7 @@ nsDefaultCommandLineHandler.prototype = {
             }
             if (allowedParams.indexOf(formParam) != -1) {
               var term = params.get("q");
-              var ss = Components.classes["@mozilla.org/browser/search-service;1"]
-                                 .getService(nsIBrowserSearchService);
-              var engine = ss.defaultEngine;
+              var engine = Services.search.defaultEngine;
               logSystemBasedSearch(engine);
               var submission = engine.getSubmission(term, null, "system");
               uri = submission.uri;

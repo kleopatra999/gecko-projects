@@ -444,6 +444,27 @@
     "kind": "flag",
     "description": "Has seen location error"
   },
+  "GEOLOCATION_GETCURRENTPOSITION_SECURE_ORIGIN" : {
+    "expires_in_version" : "55",
+    "kind": "enumerated",
+    "n_values": 10,
+    "bug_numbers": [1230209],
+    "description" : "Number of navigator.geolocation.getCurrentPosition() calls (0=other, 1=http, 2=https)"
+  },
+  "GEOLOCATION_REQUEST_GRANTED": {
+    "expires_in_version": "55",
+    "kind": "enumerated",
+    "n_values": 20,
+    "bug_numbers": [1230209],
+    "description": "Geolocation requests either granted or denied (0=denied/other, 1=denied/http, 2=denied/https, ..., 10=granted/other, 11=granted/http, 12=granted/https)"
+  },
+  "GEOLOCATION_WATCHPOSITION_SECURE_ORIGIN" : {
+    "expires_in_version" : "55",
+    "kind": "enumerated",
+    "n_values": 10,
+    "bug_numbers": [1230209],
+    "description" : "Number of navigator.geolocation.watchPosition() calls (0=other, 1=http, 2=https)"
+  },
   "GEOLOCATION_WIN8_SOURCE_IS_MLS": {
     "expires_in_version": "default",
     "kind": "boolean",
@@ -1248,11 +1269,6 @@
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "Whether a HTTP transaction routed via Alt-Svc was scheme=http"
-  },
-  "HTTP_WAP_CONTENT_TYPE_RECEIVED": {
-    "expires_in_version": "45",
-    "kind": "boolean",
-    "description": "Whether a WAP content type response is served to the browser."
   },
   "HTTP_SCHEME_UPGRADE": {
     "expires_in_version": "never",
@@ -2633,6 +2649,11 @@
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "The URL path contains !//"
+  },
+  "NETWORK_AUTODIAL": {
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "session used autodialer"
   },
   "FIND_PLUGINS": {
     "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
@@ -4224,6 +4245,43 @@
     "n_buckets": 20,
     "description": "Session restore: Number of characters in DOM Storage for a tab. Pages without DOM Storage or with an empty DOM Storage are ignored."
   },
+  "FX_SESSION_RESTORE_AUTO_RESTORE_DURATION_UNTIL_EAGER_TABS_RESTORED_MS": {
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "default",
+    "kind": "exponential",
+    "low": "100",
+    "high": "100000",
+    "n_buckets": 20,
+    "description": "Session restore: If the browser is setup to auto-restore tabs, this probe measures the time elapsed between the instant we start Session Restore and the instant we have finished restoring tabs eagerly. At this stage, the tabs that are restored on demand are not restored yet."
+  },
+  "FX_SESSION_RESTORE_MANUAL_RESTORE_DURATION_UNTIL_EAGER_TABS_RESTORED_MS": {
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "default",
+    "kind": "exponential",
+    "low": "100",
+    "high": "100000",
+    "n_buckets": 20,
+    "description": "Session restore: If a session is restored by the user clicking on 'Restore Session', this probe measures the time elapsed between the instant the user has clicked and the instant we have finished restoring tabs eagerly. At this stage, the tabs that are restored on demand are not restored yet."
+  },
+  "FX_SESSION_RESTORE_NUMBER_OF_TABS_RESTORED": {
+    "expires_in_version": "default",
+    "kind": "exponential",
+    "high": "500",
+    "n_buckets": 20,
+    "description": "Session restore: Number of tabs in the session that has just been restored."
+  },
+  "FX_SESSION_RESTORE_NUMBER_OF_WINDOWS_RESTORED": {
+    "expires_in_version": "default",
+    "kind": "enumerated",
+    "n_values": "50",
+    "description": "Session restore: Number of windows in the session that has just been restored."
+  },
+  "FX_SESSION_RESTORE_NUMBER_OF_EAGER_TABS_RESTORED": {
+    "expires_in_version": "default",
+    "kind": "enumerated",
+    "n_values": "50",
+    "description": "Session restore: Number of tabs restored eagerly in the session that has just been restored."
+  },
   "FX_TABLETMODE_PAGE_LOAD": {
     "expires_in_version": "47",
     "kind": "exponential",
@@ -5021,8 +5079,17 @@
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 10,
-    "description": "The way the GeckoApp was launched. (Normal, URL, Prefetch, WebApp, Guest)",
+    "description": "The way the GeckoApp was launched. (Normal, URL, Prefetch, WebApp, Guest, Restricted)",
     "cpp_guard": "ANDROID"
+  },
+  "FENNEC_RESTRICTED_PROFILE_RESTRICTIONS": {
+    "expires_in_version": "50",
+    "kind": "enumerated",
+    "n_values": 30,
+    "description": "Whether various restrictions are set, keyed by restiction name",
+    "keyed": true,
+    "bug_numbers": [1218942],
+    "alert_emails": ["mobile-frontend@mozilla.com"]
   },
   "FENNEC_STARTUP_TIME_GECKOREADY": {
     "expires_in_version": "never",
@@ -5241,97 +5308,6 @@
     "high": "60000",
     "n_buckets": 50,
     "description": "Time spent on an initially failed cert verification in mozilla::pkix mode (ms)"
-  },
-  "HEALTHREPORT_DB_OPEN_FIRSTRUN_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) spent to open Firefox Health Report's database the first time, including schema setup."
-  },
-  "HEALTHREPORT_DB_OPEN_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) spent to open Firefox Health Report's database."
-  },
-  "HEALTHREPORT_INIT_FIRSTRUN_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) spent to initialize Firefox Health Report the first time, including provider and collector initialization."
-  },
-  "HEALTHREPORT_INIT_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) spent to initialize Firefox Health Report service."
-  },
-  "HEALTHREPORT_GENERATE_JSON_PAYLOAD_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "30000",
-    "n_buckets": 20,
-    "description": "Time (ms) it takes to obtain and format a Health Report JSON payload."
-  },
-  "HEALTHREPORT_JSON_PAYLOAD_SERIALIZE_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "5000",
-    "n_buckets": 10,
-    "description": "Time (ms) it takes to JSON.stringify() the FHR JSON payload."
-  },
-  "HEALTHREPORT_PAYLOAD_UNCOMPRESSED_BYTES": {
-    "expires_in_version": "never",
-    "kind": "linear",
-    "high": "2000000",
-    "n_buckets": 202,
-    "description": "Size (in bytes) of the raw Health Report payload."
-  },
-  "HEALTHREPORT_PAYLOAD_COMPRESSED_BYTES": {
-    "expires_in_version": "never",
-    "kind": "linear",
-    "high": "2000000",
-    "n_buckets": 202,
-    "description": "Size (in bytes) of the compressed Health Report payload. This is what is sent over the wire."
-  },
-  "HEALTHREPORT_UPLOAD_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "60000",
-    "n_buckets": 20,
-    "description": "Time (ms) it takes to upload the Health Report payload."
-  },
-  "HEALTHREPORT_COLLECT_CONSTANT_DATA_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) it takes FHR to collect constant data."
-  },
-  "HEALTHREPORT_COLLECT_DAILY_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) it takes FHR to collect daily data."
-  },
-  "HEALTHREPORT_SHUTDOWN_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) it takes FHR to shut down."
-  },
-  "HEALTHREPORT_POST_COLLECT_CHECKPOINT_MS": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "20000",
-    "n_buckets": 15,
-    "description": "Time (ms) for a WAL checkpoint after collecting all measurements."
   },
   "CRASH_STORE_COMPRESSED_BYTES": {
     "expires_in_version": "never",
@@ -6056,9 +6032,20 @@
     "description": "The time (in milliseconds) that it took a 'reconfigure thread' request to go round trip."
   },
   "MEDIA_RUST_MP4PARSE_SUCCESS": {
+    "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
     "expires_in_version": "50",
     "kind": "boolean",
+    "bug_numbers": [1220885],
     "description": "(Bug 1220885) Whether the rust mp4 demuxer successfully parsed a stream segment.",
+    "cpp_guard": "MOZ_RUST_MP4PARSE"
+  },
+  "MEDIA_RUST_MP4PARSE_ERROR_CODE": {
+    "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
+    "expires_in_version": "50",
+    "kind": "enumerated",
+    "n_values": 32,
+    "bug_numbers": [1238420],
+    "description": "The error code reported when an MP4 parse attempt has failed.",
     "cpp_guard": "MOZ_RUST_MP4PARSE"
   },
   "MEDIA_RUST_MP4PARSE_TRACK_MATCH_AUDIO": {
@@ -8029,7 +8016,8 @@
   "WEAVE_CONFIGURED": {
     "expires_in_version": "default",
     "kind": "boolean",
-    "description": "If any version of Firefox Sync is configured for this device"
+    "description": "If any version of Firefox Sync is configured for this device",
+    "releaseChannelCollection": "opt-out"
   },
   "WEAVE_CONFIGURED_MASTER_PASSWORD": {
     "expires_in_version": "never",
@@ -8049,21 +8037,6 @@
     "high": 1000,
     "n_buckets": 10,
     "description": "The number of times a sync successfully completed in this session"
-  },
-  "WEAVE_CUSTOM_LEGACY_SERVER_CONFIGURATION": {
-    "expires_in_version": "default",
-    "kind": "boolean",
-    "description": "Whether legacy Sync is configured to use a custom server"
-  },
-  "WEAVE_CUSTOM_FXA_SERVER_CONFIGURATION": {
-    "expires_in_version": "default",
-    "kind": "boolean",
-    "description": "Whether FxA Sync is configured to use a custom authentication server"
-  },
-  "WEAVE_CUSTOM_TOKEN_SERVER_CONFIGURATION": {
-    "expires_in_version": "50",
-    "kind": "boolean",
-    "description": "Whether FxA Sync is configured to use a custom token server"
   },
   "WEBCRYPTO_EXTRACTABLE_IMPORT": {
     "expires_in_version": "never",
@@ -8209,6 +8182,13 @@
     "description": "Whether or not a user has tap-to-load enabled.",
     "bug_numbers": [1208167]
   },
+  "ZOOMED_VIEW_ENABLED": {
+    "expires_in_version": "50",
+    "kind": "boolean",
+    "description": "Whether or not a user has the zoomed view (a.k.a. \"Magnify small areas\") enabled.",
+    "alert_emails": ["mobile-frontend@mozilla.com"],
+    "bug_numbers": [1235061]
+  },
   "TRACKING_PROTECTION_ENABLED": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -8283,7 +8263,7 @@
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
-    "description": "Number of times a room URL is shared (0=COPY_FROM_PANEL, 1=COPY_FROM_CONVERSATION, 2=EMAIL_FROM_CALLFAILED, 3=EMAIL_FROM_CONVERSATION)"
+    "description": "Number of times a room URL is shared (0=COPY_FROM_PANEL, 1=COPY_FROM_CONVERSATION, 2=EMAIL_FROM_CALLFAILED, 3=EMAIL_FROM_CONVERSATION, 4=FACEBOOK_FROM_CONVERSATION)"
   },
   "LOOP_ROOM_CREATE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
@@ -8322,11 +8302,6 @@
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Number of sessions where at least one chat message was exchanged"
-  },
-  "E10S_AUTOSTART": {
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Whether a session is set to autostart e10s windows"
   },
   "E10S_AUTOSTART_STATUS": {
     "expires_in_version": "never",
@@ -8740,6 +8715,11 @@
     "keyed": true,
     "kind": "count",
     "description": "Reports the column that logins are sorted by"
+  },
+  "PWMGR_MANAGE_VISIBILITY_TOGGLED": {
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "Whether the visibility of passwords was toggled (0=Hide, 1=Show)"
   },
   "PWMGR_NUM_PASSWORDS_PER_HOSTNAME": {
     "expires_in_version": "never",
@@ -9623,46 +9603,51 @@
   },
   "FXA_CONFIGURED": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "never",
     "kind": "flag",
     "releaseChannelCollection": "opt-out",
-    "description": "If the user is signed in to a Firefox Account on this device"
+    "description": "If the user is signed in to a Firefox Account on this device. Recorded once per session just after startup as Sync is initialized."
   },
-  "FXA_UNVERIFIED_ACCOUNT_ERRORS": {
+  "FXA_SECURE_CREDENTIALS_SAVE_WITH_MP_LOCKED": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
-    "keyed": true,
     "releaseChannelCollection": "opt-out",
-    "description": "FxA key fetch and certificate signing errors caused by an unverified account. Keyed on the FxA auth server endpoint."
+    "description": "The number of times FxA had credentials to save in the login manager but the master-password was locked, implying they may lose those credentials after a restart."
   },
   "FXA_HAWK_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
     "description": "FxA error responses caused by invalid Hawk credentials. Keyed on the FxA auth server endpoint."
   },
-  "FXA_SERVER_ERRORS": {
+  "WEAVE_DEVICE_COUNT_DESKTOP": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
-    "kind": "count",
-    "keyed": true,
+    "bug_numbers": [1232050],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": "10",
     "releaseChannelCollection": "opt-out",
-    "description": "400 and 500-class server errors returned by the FxA auth server. Keyed on the endpoint."
+    "description": "Number of desktop devices (including this device) associated with this Sync account. Recorded each time Sync successfully completes the 'clients' engine."
   },
-  "TOKENSERVER_AUTH_ERRORS": {
+  "WEAVE_DEVICE_COUNT_MOBILE": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
-    "kind": "count",
-    "keyed": true,
+    "bug_numbers": [1232050],
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": "10",
     "releaseChannelCollection": "opt-out",
-    "description": "Token server errors caused by invalid BrowserID assertions. Keyed on the token server error cause."
+    "description": "Number of mobile devices associated with this Sync account. Recorded each time Sync successfully completes the 'clients' engine."
   },
   "WEAVE_ENGINE_APPLY_NEW_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9670,7 +9655,8 @@
   },
   "WEAVE_ENGINE_APPLY_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9678,40 +9664,28 @@
   },
   "WEAVE_ENGINE_SYNC_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "never",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
     "description": "Exceptions thrown by a Sync engine. Keyed on the engine name."
   },
-  "WEAVE_CAN_FETCH_KEYS": {
+  "WEAVE_HAS_NO_KEYS_WHEN_UNLOCKED": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
-    "kind": "flag",
-    "releaseChannelCollection": "opt-out",
-    "description": "Whether Sync keys are present in account storage."
-  },
-  "WEAVE_FXA_KEY_FETCH_ERRORS": {
-    "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
-    "description": "Errors encountered fetching Sync keys, including network errors."
+    "description": "Records how often Sync doesn't have the necessary keys when the master-password is unlocked."
   },
-  "WEAVE_STORAGE_AUTH_ERRORS": {
+  "WEAVE_FXA_KEY_FETCH_AUTH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
-    "kind": "count",
-    "keyed": true,
-    "releaseChannelCollection": "opt-out",
-    "description": "Sync storage server authentication errors. Keyed on the Sync record name."
-  },
-  "WEAVE_HMAC_ERRORS": {
-    "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "47",
+    "bug_numbers": [1236383],
+    "expires_in_version": "49",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
-    "description": "Sync cryptoKeys collection HMAC mismatches."
+    "description": "Authentication errors encountered fetching Sync keys."
   },
   "CONTENT_DOCUMENTS_DESTROYED": {
     "expires_in_version": "never",

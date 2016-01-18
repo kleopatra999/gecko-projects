@@ -93,6 +93,9 @@ this.UITour = {
   urlbarCapture: new WeakMap(),
   appMenuOpenForAnnotation: new Set(),
   availableTargetsCache: new WeakMap(),
+  clearAvailableTargetsCache() {
+    this.availableTargetsCache = new WeakMap();
+  },
 
   _annotationPanelMutationObservers: new WeakMap(),
 
@@ -285,7 +288,7 @@ this.UITour = {
       "onAreaReset",
     ];
     CustomizableUI.addListener(listenerMethods.reduce((listener, method) => {
-      listener[method] = () => this.availableTargetsCache.clear();
+      listener[method] = () => this.clearAvailableTargetsCache();
       return listener;
     }, {}));
   },
@@ -530,13 +533,18 @@ this.UITour = {
           }
 
           let infoOptions = {};
+          if (typeof data.closeButtonCallbackID == "string") {
+            infoOptions.closeButtonCallback = () => {
+              this.sendPageCallback(messageManager, data.closeButtonCallbackID);
+            };
+          }
+          if (typeof data.targetCallbackID == "string") {
+            infoOptions.targetCallback = details => {
+              this.sendPageCallback(messageManager, data.targetCallbackID, details);
+            };
+          }
 
-          if (typeof data.closeButtonCallbackID == "string")
-            infoOptions.closeButtonCallbackID = data.closeButtonCallbackID;
-          if (typeof data.targetCallbackID == "string")
-            infoOptions.targetCallbackID = data.targetCallbackID;
-
-          this.showInfo(window, messageManager, target, data.title, data.text, iconURL, buttons, infoOptions);
+          this.showInfo(window, target, data.title, data.text, iconURL, buttons, infoOptions);
         }).catch(log.error);
         break;
       }
@@ -731,6 +739,18 @@ this.UITour = {
         targetPromise.then(target => {
           ReaderParent.toggleReaderMode({target: target.node});
         });
+        break;
+      }
+
+      case "closeTab": {
+        // Find the <tabbrowser> element of the <browser> for which the event
+        // was generated originally. If the browser where the UI tour is loaded
+        // is windowless, just ignore the request to close the tab. The request
+        // is also ignored if this is the only tab in the window.
+        let tabBrowser = browser.ownerDocument.defaultView.gBrowser;
+        if (tabBrowser && tabBrowser.browsers.length > 1) {
+          tabBrowser.removeTab(tabBrowser.getTabForBrowser(browser));
+        }
         break;
       }
     }
@@ -1395,17 +1415,17 @@ this.UITour = {
    * Show an info panel.
    *
    * @param {ChromeWindow} aChromeWindow
-   * @param {nsIMessageSender} aMessageManager
    * @param {Node}     aAnchor
    * @param {String}   [aTitle=""]
    * @param {String}   [aDescription=""]
    * @param {String}   [aIconURL=""]
    * @param {Object[]} [aButtons=[]]
    * @param {Object}   [aOptions={}]
-   * @param {String}   [aOptions.closeButtonCallbackID]
+   * @param {String}   [aOptions.closeButtonCallback]
+   * @param {String}   [aOptions.targetCallback]
    */
-  showInfo: function(aChromeWindow, aMessageManager, aAnchor, aTitle = "", aDescription = "", aIconURL = "",
-                     aButtons = [], aOptions = {}) {
+  showInfo(aChromeWindow, aAnchor, aTitle = "", aDescription = "",
+           aIconURL = "", aButtons = [], aOptions = {}) {
     function showInfoPanel(aAnchorEl) {
       aAnchorEl.focus();
 
@@ -1461,8 +1481,9 @@ this.UITour = {
       let tooltipClose = document.getElementById("UITourTooltipClose");
       let closeButtonCallback = (event) => {
         this.hideInfo(document.defaultView);
-        if (aOptions && aOptions.closeButtonCallbackID)
-          this.sendPageCallback(aMessageManager, aOptions.closeButtonCallbackID);
+        if (aOptions && aOptions.closeButtonCallback) {
+          aOptions.closeButtonCallback();
+        }
       };
       tooltipClose.addEventListener("command", closeButtonCallback);
 
@@ -1471,16 +1492,16 @@ this.UITour = {
           target: aAnchor.targetName,
           type: event.type,
         };
-        this.sendPageCallback(aMessageManager, aOptions.targetCallbackID, details);
+        aOptions.targetCallback(details);
       };
-      if (aOptions.targetCallbackID && aAnchor.addTargetListener) {
+      if (aOptions.targetCallback && aAnchor.addTargetListener) {
         aAnchor.addTargetListener(document, targetCallback);
       }
 
       tooltip.addEventListener("popuphiding", function tooltipHiding(event) {
         tooltip.removeEventListener("popuphiding", tooltipHiding);
         tooltipClose.removeEventListener("command", closeButtonCallback);
-        if (aOptions.targetCallbackID && aAnchor.removeTargetListener) {
+        if (aOptions.targetCallback && aAnchor.removeTargetListener) {
           aAnchor.removeTargetListener(document, targetCallback);
         }
       });
@@ -1576,7 +1597,7 @@ this.UITour = {
       popup.addEventListener("popuphidden", this.onPanelHidden);
 
       popup.setAttribute("noautohide", true);
-      this.availableTargetsCache.clear();
+      this.clearAvailableTargetsCache();
 
       if (popup.state == "open") {
         if (aOpenCallback) {
@@ -1605,7 +1626,7 @@ this.UITour = {
       panel.setAttribute("noautohide", true);
       if (panel.state != "open") {
         this.recreatePopup(panel);
-        this.availableTargetsCache.clear();
+        this.clearAvailableTargetsCache();
       }
 
       // An event object is expected but we don't want to toggle the panel with a click if the panel
@@ -1725,7 +1746,7 @@ this.UITour = {
   onPanelHidden: function(aEvent) {
     aEvent.target.removeAttribute("noautohide");
     UITour.recreatePopup(aEvent.target);
-    UITour.availableTargetsCache.clear();
+    UITour.clearAvailableTargetsCache();
   },
 
   recreatePopup: function(aPanel) {
@@ -1831,9 +1852,8 @@ this.UITour = {
             let engines = Services.search.getVisibleEngines();
             data = {
               searchEngineIdentifier: Services.search.defaultEngine.identifier,
-              engines: [TARGET_SEARCHENGINE_PREFIX + engine.identifier
-                        for (engine of engines)
-                          if (engine.identifier)]
+              engines: engines.filter((engine) => engine.identifier)
+                              .map((engine) => TARGET_SEARCHENGINE_PREFIX + engine.identifier)
             };
           } else {
             data = {engines: [], searchEngineIdentifier: ""};

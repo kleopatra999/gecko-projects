@@ -7,7 +7,6 @@
 #include "jit/BaselineCompiler.h"
 
 #include "mozilla/Casting.h"
-#include "mozilla/UniquePtr.h"
 
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
@@ -21,6 +20,8 @@
 #endif
 #include "jit/SharedICHelpers.h"
 #include "jit/VMFunctions.h"
+#include "js/UniquePtr.h"
+#include "vm/Interpreter.h"
 #include "vm/ScopeObject.h"
 #include "vm/TraceLogging.h"
 
@@ -195,7 +196,7 @@ BaselineCompiler::compile()
     // Note: There is an extra entry in the bytecode type map for the search hint, see below.
     size_t bytecodeTypeMapEntries = script->nTypeSets() + 1;
 
-    mozilla::UniquePtr<BaselineScript, JS::DeletePolicy<BaselineScript> > baselineScript(
+    UniquePtr<BaselineScript> baselineScript(
         BaselineScript::New(script, prologueOffset_.offset(),
                             epilogueOffset_.offset(),
                             profilerEnterFrameToggleOffset_.offset(),
@@ -1491,7 +1492,8 @@ static const VMFunction DeepCloneObjectLiteralInfo =
 bool
 BaselineCompiler::emit_JSOP_OBJECT()
 {
-    if (JS::CompartmentOptionsRef(cx).cloneSingletons()) {
+    JSCompartment* comp = cx->compartment();
+    if (comp->creationOptions().cloneSingletons()) {
         RootedObject obj(cx, script->getObject(GET_UINT32_INDEX(pc)));
         if (!obj)
             return false;
@@ -1510,7 +1512,7 @@ BaselineCompiler::emit_JSOP_OBJECT()
         return true;
     }
 
-    JS::CompartmentOptionsRef(cx).setSingletonsAsValues();
+    comp->behaviors().setSingletonsAsValues();
     frame.push(ObjectValue(*script->getObject(pc)));
     return true;
 }
@@ -2241,11 +2243,11 @@ BaselineCompiler::emit_JSOP_BINDGNAME()
                 frame.push(ObjectValue(*globalLexical));
                 return true;
             }
-        }
-
-        // We can bind name to the global object if the property exists on the
-        // global and is non-configurable, as then it cannot be shadowed.
-        if (Shape* shape = script->global().lookup(cx, name)) {
+        } else if (Shape* shape = script->global().lookup(cx, name)) {
+            // If the property does not currently exist on the global lexical
+            // scope, we can bind name to the global object if the property
+            // exists on the global and is non-configurable, as then it cannot
+            // be shadowed.
             if (!shape->configurable()) {
                 frame.push(ObjectValue(script->global()));
                 return true;
@@ -3187,6 +3189,27 @@ bool
 BaselineCompiler::emit_JSOP_STRICTSPREADEVAL()
 {
     return emitSpreadCall();
+}
+
+typedef bool (*OptimizeSpreadCallFn)(JSContext*, HandleValue, bool*);
+static const VMFunction OptimizeSpreadCallInfo =
+    FunctionInfo<OptimizeSpreadCallFn>(OptimizeSpreadCall);
+
+bool
+BaselineCompiler::emit_JSOP_OPTIMIZE_SPREADCALL()
+{
+    frame.syncStack(0);
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), R0);
+
+    prepareVMCall();
+    pushArg(R0);
+
+    if (!callVM(OptimizeSpreadCallInfo))
+        return false;
+
+    masm.boxNonDouble(JSVAL_TYPE_BOOLEAN, ReturnReg, R0);
+    frame.push(R0);
+    return true;
 }
 
 typedef bool (*ImplicitThisFn)(JSContext*, HandleObject, HandlePropertyName,

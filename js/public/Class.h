@@ -337,8 +337,8 @@ typedef JSString*
  * (e.g., the DOM attributes for a given node reflected as obj) on demand.
  *
  * JS looks for a property in an object, and if not found, tries to resolve
- * the given id. *resolvedp should be set to true iff the property was
- * was defined on |obj|.
+ * the given id. *resolvedp should be set to true iff the property was defined
+ * on |obj|.
  */
 typedef bool
 (* JSResolveOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
@@ -730,7 +730,7 @@ struct JSClass {
 
 // Fast access to the original value of each standard class's prototype.
 #define JSCLASS_CACHED_PROTO_SHIFT      (JSCLASS_HIGH_FLAGS_SHIFT + 10)
-#define JSCLASS_CACHED_PROTO_MASK       JS_BITMASK(JSCLASS_CACHED_PROTO_WIDTH)
+#define JSCLASS_CACHED_PROTO_MASK       JS_BITMASK(js::JSCLASS_CACHED_PROTO_WIDTH)
 #define JSCLASS_HAS_CACHED_PROTO(key)   (uint32_t(key) << JSCLASS_CACHED_PROTO_SHIFT)
 #define JSCLASS_CACHED_PROTO_KEY(clasp) ((JSProtoKey)                         \
                                          (((clasp)->flags                     \

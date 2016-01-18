@@ -586,9 +586,8 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
   , mCompositorScheduler(nullptr)
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   , mLastPluginUpdateLayerTreeId(0)
-#endif
-#if defined(XP_WIN)
   , mPluginUpdateResponsePending(false)
+  , mDeferPluginWindows(false)
 #endif
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -742,6 +741,13 @@ CompositorParent::RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
                                    const gfx::IntRect& aRect)
 {
   RefPtr<DrawTarget> target = GetDrawTargetForDescriptor(aInSnapshot, gfx::BackendType::CAIRO);
+  MOZ_ASSERT(target);
+  if (!target) {
+    // We kill the content process rather than have it continue with an invalid
+    // snapshot, that may be too harsh and we could decide to return some sort
+    // of error to the child process and let it deal with it...
+    return false;
+  }
   ForceComposeToTarget(target, &aRect);
   return true;
 }
@@ -754,6 +760,10 @@ CompositorParent::RecvMakeWidgetSnapshot(const SurfaceDescriptor& aInSnapshot)
   }
 
   RefPtr<DrawTarget> target = GetDrawTargetForDescriptor(aInSnapshot, gfx::BackendType::CAIRO);
+  MOZ_ASSERT(target);
+  if (!target) {
+    return false;
+  }
   mCompositor->GetWidget()->CaptureWidgetOnScreen(target);
   return true;
 }
@@ -1078,7 +1088,7 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRe
     return;
   }
 
-#if defined(XP_WIN)
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   // Still waiting on plugin update confirmation
   if (mPluginUpdateResponsePending) {
     return;
@@ -1111,12 +1121,10 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRe
    * This is neccessary since plugin windows can leave remnants of window
    * content if moved after the underlying window paints.
    */
-#if defined(XP_WIN)
   if (pluginsUpdatedFlag) {
     mPluginUpdateResponsePending = true;
     return;
   }
-#endif
 
   // We do not support plugins in local content. When switching tabs
   // to local pages, hide every plugin associated with the window.
@@ -1124,11 +1132,9 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRe
       mCachedPluginData.Length()) {
     Unused << SendHideAllPlugins((uintptr_t)GetWidget());
     mCachedPluginData.Clear();
-#if defined(XP_WIN)
     // Wait for confirmation the hide operation is complete.
     mPluginUpdateResponsePending = true;
     return;
-#endif
   }
 #endif
 
@@ -1211,7 +1217,7 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRe
 bool
 CompositorParent::RecvRemotePluginsReady()
 {
-#if defined(XP_WIN)
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   mPluginUpdateResponsePending = false;
   ScheduleComposition();
   return true;
@@ -2122,6 +2128,12 @@ CompositorParent::UpdatePluginWindowState(uint64_t aId)
     pluginMetricsChanged = true;
   }
 
+  // Check if plugin windows are currently hidden due to scrolling
+  if (mDeferPluginWindows) {
+    PLUGINS_LOG("[%" PRIu64 "] suppressing", aId);
+    return false;
+  }
+
   if (!lts.mPluginData.Length()) {
     // We will pass through here in cases where the previous shadow layer
     // tree contained visible plugins and the new tree does not. All we need
@@ -2173,6 +2185,47 @@ CompositorParent::UpdatePluginWindowState(uint64_t aId)
   mLastPluginUpdateLayerTreeId = aId;
   mCachedPluginData = lts.mPluginData;
   return true;
+}
+
+void
+CompositorParent::ScheduleShowAllPluginWindows()
+{
+  CancelableTask *pluginTask =
+    NewRunnableMethod(this, &CompositorParent::ShowAllPluginWindows);
+  MOZ_ASSERT(CompositorLoop());
+  CompositorLoop()->PostTask(FROM_HERE, pluginTask);
+}
+
+void
+CompositorParent::ShowAllPluginWindows()
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  mDeferPluginWindows = false;
+  ScheduleComposition();
+}
+
+void
+CompositorParent::ScheduleHideAllPluginWindows()
+{
+  CancelableTask *pluginTask =
+    NewRunnableMethod(this, &CompositorParent::HideAllPluginWindows);
+  MOZ_ASSERT(CompositorLoop());
+  CompositorLoop()->PostTask(FROM_HERE, pluginTask);
+}
+
+void
+CompositorParent::HideAllPluginWindows()
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  // No plugins in the cache implies no plugins to manage
+  // in this content.
+  if (!mCachedPluginData.Length() || mDeferPluginWindows) {
+    return;
+  }
+  mDeferPluginWindows = true;
+  mPluginUpdateResponsePending = true;
+  Unused << SendHideAllPlugins((uintptr_t)GetWidget());
+  ScheduleComposition();
 }
 #endif // #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 

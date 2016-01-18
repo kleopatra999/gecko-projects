@@ -5,6 +5,7 @@
 Components.utils.import("resource://gre/modules/Downloads.jsm");
 Components.utils.import("resource://gre/modules/FileUtils.jsm");
 Components.utils.import("resource://gre/modules/Task.jsm");
+Components.utils.import("resource:///modules/ShellService.jsm");
 Components.utils.import("resource:///modules/TransientPrefs.jsm");
 #ifdef E10S_TESTING_ONLY
 XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
@@ -379,19 +380,18 @@ var gMainPane = {
       // We should only include visible & non-pinned tabs
 
       tabs = win.gBrowser.visibleTabs.slice(win.gBrowser._numPinnedTabs);
-      
       tabs = tabs.filter(this.isNotAboutPreferences);
     }
-    
+
     return tabs;
   },
-  
+
   /**
    * Check to see if a tab is not about:preferences
    */
   isNotAboutPreferences: function (aElement, aIndex, aArray)
   {
-    return (aElement.linkedBrowser.currentURI.spec.startsWith != "about:preferences");
+    return !aElement.linkedBrowser.currentURI.spec.startsWith("about:preferences");
   },
 
   /**

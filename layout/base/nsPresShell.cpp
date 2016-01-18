@@ -34,12 +34,15 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/unused.h"
 #include <algorithm>
 
 #ifdef XP_WIN
 #include "winuser.h"
 #endif
 
+#include "gfxPrefs.h"
+#include "gfxUserFontSet.h"
 #include "nsPresShell.h"
 #include "nsPresContext.h"
 #include "nsIContent.h"
@@ -346,7 +349,7 @@ public:
   void ClearGrandTotals();
   void DisplayTotals(const char * aStr);
   void DisplayHTMLTotals(const char * aStr);
-  void DisplayDiffsInTotals(const char * aStr);
+  void DisplayDiffsInTotals();
 
   void Add(const char * aName, nsIFrame * aFrame);
   ReflowCounter * LookUp(const char * aName);
@@ -742,6 +745,7 @@ PresShell::PresShell()
   mSelectionFlags = nsISelectionDisplay::DISPLAY_TEXT | nsISelectionDisplay::DISPLAY_IMAGES;
   mIsThemeSupportDisabled = false;
   mIsActive = true;
+  mIsHidden = false;
   // FIXME/bug 735029: find a better solution to this problem
 #if defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ)
   // The java pan/zoom code uses this to mean approximately "request a
@@ -817,8 +821,7 @@ void
 PresShell::Init(nsIDocument* aDocument,
                 nsPresContext* aPresContext,
                 nsViewManager* aViewManager,
-                nsStyleSet* aStyleSet,
-                nsCompatibility aCompatMode)
+                nsStyleSet* aStyleSet)
 {
   NS_PRECONDITION(aDocument, "null ptr");
   NS_PRECONDITION(aPresContext, "null ptr");
@@ -3201,8 +3204,7 @@ ComputeWhereToScroll(int16_t aWhereToScroll,
  *
  * This needs to work even if aRect has a width or height of zero.
  */
-static void ScrollToShowRect(nsIFrame*                aFrame,
-                             nsIScrollableFrame*      aFrameAsScrollable,
+static void ScrollToShowRect(nsIScrollableFrame*      aFrameAsScrollable,
                              const nsRect&            aRect,
                              nsIPresShell::ScrollAxis aVertical,
                              nsIPresShell::ScrollAxis aHorizontal,
@@ -3422,7 +3424,7 @@ PresShell::ScrollFrameRectIntoView(nsIFrame*                aFrame,
         nsMargin padding = container->GetUsedPadding();
         targetRect.Inflate(padding);
       }
-      ScrollToShowRect(container, sf, targetRect - sf->GetScrolledFrame()->GetPosition(),
+      ScrollToShowRect(sf, targetRect - sf->GetScrolledFrame()->GetPosition(),
                        aVertical, aHorizontal, aFlags);
       nsPoint newPosition = sf->GetScrollPosition();
       // If the scroll position increased, that means our content moved up,
@@ -3965,15 +3967,8 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
         mDocument->GetAnimationController()->FlushResampleRequests();
       }
 
-      if (aFlush.mFlushAnimations &&
-          !mPresContext->StyleUpdateForAllAnimationsIsUpToDate()) {
-        if (mPresContext->AnimationManager()) {
-          mPresContext->AnimationManager()->FlushAnimations();
-        }
-        if (mPresContext->TransitionManager()) {
-          mPresContext->TransitionManager()->FlushAnimations();
-        }
-        mPresContext->TickLastStyleUpdateForAllAnimations();
+      if (aFlush.mFlushAnimations && mPresContext->EffectCompositor()) {
+        mPresContext->EffectCompositor()->PostRestyleForThrottledAnimations();
       }
 
       // The FlushResampleRequests() above flushed style changes.
@@ -4290,8 +4285,7 @@ PresShell::ContentRemoved(nsIDocument *aDocument,
       if (data && data->mOverrideContent &&
           nsContentUtils::ContentIsDescendantOf(data->mOverrideContent,
                                                 aChild)) {
-        nsIPresShell::ReleasePointerCapturingContent(
-          iter.Key(), data->mOverrideContent);
+        nsIPresShell::ReleasePointerCapturingContent(iter.Key());
       }
     }
   }
@@ -4424,8 +4418,7 @@ PresShell::RecordStyleSheetChange(CSSStyleSheet* aStyleSheet)
 }
 
 void
-PresShell::StyleSheetAdded(nsIDocument* aDocument,
-                           CSSStyleSheet* aStyleSheet,
+PresShell::StyleSheetAdded(CSSStyleSheet* aStyleSheet,
                            bool aDocumentSheet)
 {
   // We only care when enabled sheets are added
@@ -4437,8 +4430,7 @@ PresShell::StyleSheetAdded(nsIDocument* aDocument,
 }
 
 void
-PresShell::StyleSheetRemoved(nsIDocument* aDocument,
-                             CSSStyleSheet* aStyleSheet,
+PresShell::StyleSheetRemoved(CSSStyleSheet* aStyleSheet,
                              bool aDocumentSheet)
 {
   // We only care when enabled sheets are removed
@@ -4450,9 +4442,7 @@ PresShell::StyleSheetRemoved(nsIDocument* aDocument,
 }
 
 void
-PresShell::StyleSheetApplicableStateChanged(nsIDocument* aDocument,
-                                            CSSStyleSheet* aStyleSheet,
-                                            bool aApplicable)
+PresShell::StyleSheetApplicableStateChanged(CSSStyleSheet* aStyleSheet)
 {
   if (aStyleSheet->HasRules()) {
     RecordStyleSheetChange(aStyleSheet);
@@ -4460,25 +4450,19 @@ PresShell::StyleSheetApplicableStateChanged(nsIDocument* aDocument,
 }
 
 void
-PresShell::StyleRuleChanged(nsIDocument* aDocument,
-                            CSSStyleSheet* aStyleSheet,
-                            mozilla::css::Rule* aStyleRule)
+PresShell::StyleRuleChanged(CSSStyleSheet* aStyleSheet)
 {
   RecordStyleSheetChange(aStyleSheet);
 }
 
 void
-PresShell::StyleRuleAdded(nsIDocument* aDocument,
-                          CSSStyleSheet* aStyleSheet,
-                          mozilla::css::Rule* aStyleRule)
+PresShell::StyleRuleAdded(CSSStyleSheet* aStyleSheet)
 {
   RecordStyleSheetChange(aStyleSheet);
 }
 
 void
-PresShell::StyleRuleRemoved(nsIDocument* aDocument,
-                            CSSStyleSheet* aStyleSheet,
-                            mozilla::css::Rule* aStyleRule)
+PresShell::StyleRuleRemoved(CSSStyleSheet* aStyleSheet)
 {
   RecordStyleSheetChange(aStyleSheet);
 }
@@ -5587,8 +5571,8 @@ PresShell::MarkImagesInSubtreeVisible(nsIFrame* aFrame, const nsRect& aRect)
   if (scrollFrame) {
     nsRect displayPort;
     bool usingDisplayport =
-      nsLayoutUtils::GetDisplayPortForVisibilityTesting(aFrame->GetContent(),
-                                                        &displayPort);
+      nsLayoutUtils::GetDisplayPortForVisibilityTesting(
+        aFrame->GetContent(), &displayPort, RelativeTo::ScrollFrame);
     if (usingDisplayport) {
       rect = displayPort;
     } else {
@@ -5691,15 +5675,12 @@ PresShell::UpdateImageVisibility()
   if (rootScroll) {
     nsIContent* content = rootScroll->GetContent();
     if (content) {
-      nsLayoutUtils::GetDisplayPort(content, &updateRect);
+      Unused << nsLayoutUtils::GetDisplayPortForVisibilityTesting(content, &updateRect,
+        RelativeTo::ScrollFrame);
     }
 
     if (IgnoringViewportScrolling()) {
       builder.SetIgnoreScrollFrame(rootScroll);
-      // The ExpandRectToNearlyVisible that the root scroll frame would do gets short
-      // circuited due to us ignoring the root scroll frame, so we do it here.
-      nsIScrollableFrame* rootScrollable = do_QueryFrame(rootScroll);
-      updateRect = rootScrollable->ExpandRectToNearlyVisible(updateRect);
     }
   }
   builder.IgnorePaintSuppression();
@@ -6095,7 +6076,7 @@ nsIPresShell::SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aConte
 }
 
 /* static */ void
-nsIPresShell::ReleasePointerCapturingContent(uint32_t aPointerId, nsIContent* aContent)
+nsIPresShell::ReleasePointerCapturingContent(uint32_t aPointerId)
 {
   if (gActivePointersIds->Get(aPointerId)) {
     SetCapturingContent(nullptr, CAPTURE_PREVENTDRAG);
@@ -6589,24 +6570,24 @@ class ReleasePointerCaptureCaller
 public:
   ReleasePointerCaptureCaller() :
     mPointerId(0),
-    mContent(nullptr)
+    mIsSet(false)
   {
   }
   ~ReleasePointerCaptureCaller()
   {
-    if (mContent) {
-      nsIPresShell::ReleasePointerCapturingContent(mPointerId, mContent);
+    if (mIsSet) {
+      nsIPresShell::ReleasePointerCapturingContent(mPointerId);
     }
   }
-  void SetTarget(uint32_t aPointerId, nsIContent* aContent)
+  void SetTarget(uint32_t aPointerId)
   {
     mPointerId = aPointerId;
-    mContent = aContent;
+    mIsSet = true;
   }
 
 private:
   int32_t mPointerId;
-  nsCOMPtr<nsIContent> mContent;
+  bool mIsSet;
 };
 
 static bool
@@ -7280,7 +7261,7 @@ PresShell::HandleEvent(nsIFrame* aFrame,
             // Implicitly releasing capture for given pointer.
             // ePointerLostCapture should be send after ePointerUp or
             // ePointerCancel.
-            releasePointerCaptureCaller.SetTarget(pointerId, pointerCapturingContent);
+            releasePointerCaptureCaller.SetTarget(pointerId);
           }
         }
       }
@@ -9806,7 +9787,7 @@ PresShell::DumpReflows()
     }
     mReflowCountMgr->DisplayTotals(uriStr.get());
     mReflowCountMgr->DisplayHTMLTotals(uriStr.get());
-    mReflowCountMgr->DisplayDiffsInTotals("Differences");
+    mReflowCountMgr->DisplayDiffsInTotals();
   }
 }
 
@@ -10051,7 +10032,7 @@ void ReflowCountMgr::PaintCount(const char*     aName,
       nscoord x = 0, y = fm->MaxAscent();
       nscoord width, height = fm->MaxHeight();
       fm->SetTextRunRTL(false);
-      width = fm->GetWidth(buf, len, aRenderingContext);;
+      width = fm->GetWidth(buf, len, drawTarget);
 
       Color color;
       Color color2;
@@ -10346,7 +10327,7 @@ int ReflowCountMgr::DoDisplayDiffTotals(PLHashEntry *he, int i, void *arg)
 }
 
 //------------------------------------------------------------------
-void ReflowCountMgr::DisplayDiffsInTotals(const char * aStr)
+void ReflowCountMgr::DisplayDiffsInTotals()
 {
   if (mCycledOnce) {
     printf("Differences\n");
@@ -10423,6 +10404,10 @@ void PresShell::QueryIsActive()
   if (docshell) {
     bool isActive;
     nsresult rv = docshell->GetIsActive(&isActive);
+    // Even though in theory the docshell here could be "Inactive and
+    // Foreground", thus implying aIsHidden=false for SetIsActive(),
+    // this is a newly created PresShell so we'd like to invalidate anyway
+    // upon being made active to ensure that the contents get painted.
     if (NS_SUCCEEDED(rv))
       SetIsActive(isActive);
   }
@@ -10460,6 +10445,11 @@ PresShell::SetIsActive(bool aIsActive, bool aIsHidden)
   NS_PRECONDITION(mDocument, "should only be called with a document");
 
   mIsActive = aIsActive;
+
+  // Keep track of whether we've called TabChild::MakeHidden() or not.
+  // This can still be true even if aIsHidden is false.
+  mIsHidden |= aIsHidden;
+
   nsPresContext* presContext = GetPresContext();
   if (presContext &&
       presContext->RefreshDriver()->PresContext() == presContext) {
@@ -10499,10 +10489,14 @@ PresShell::SetIsActive(bool aIsActive, bool aIsHidden)
   // and (ii) has easy access to the TabChild.  So we use this
   // notification to signal the TabChild to drop its layer tree and
   // stop trying to repaint.
-  if (aIsHidden) {
+  if (mIsHidden) {
     if (TabChild* tab = TabChild::GetFrom(this)) {
       if (aIsActive) {
         tab->MakeVisible();
+        // The only time we should set this to false is when
+        // TabChild::MakeVisible() is called.
+        mIsHidden = false;
+
         if (!mIsZombie) {
           if (nsIFrame* root = mFrameConstructor->GetRootFrame()) {
             FrameLayerBuilder::InvalidateAllLayersForFrame(

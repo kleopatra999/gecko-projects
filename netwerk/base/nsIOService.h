@@ -31,8 +31,8 @@
 #define NS_IPC_IOSERVICE_SET_OFFLINE_TOPIC "ipc:network:set-offline"
 #define NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC "ipc:network:set-connectivity"
 
-static const char gScheme[][sizeof("resource")] =
-    {"chrome", "file", "http", "https", "jar", "data", "resource"};
+static const char gScheme[][sizeof("moz-safe-about")] =
+    {"chrome", "file", "http", "https", "jar", "data", "about", "moz-safe-about", "resource"};
 
 class nsAsyncRedirectVerifyHelper;
 class nsINetworkLinkService;
@@ -84,7 +84,7 @@ public:
     PRIntervalTime LastOfflineStateChange() { return mLastOfflineStateChange; }
     PRIntervalTime LastConnectivityChange() { return mLastConnectivityChange; }
     PRIntervalTime LastNetworkLinkChange() { return mLastNetworkLinkChange; }
-    bool IsShutdown() { return mShutdown; }
+    bool IsNetTearingDown() { return mShutdown || mOfflineForProfileChange; }
     bool IsLinkUp();
 
     // Should only be called from NeckoChild. Use SetAppOffline instead.
@@ -138,7 +138,7 @@ private:
 
 private:
     bool                                 mOffline;
-    bool                                 mOfflineForProfileChange;
+    mozilla::Atomic<bool, mozilla::Relaxed>  mOfflineForProfileChange;
     bool                                 mManageLinkStatus;
     bool                                 mConnectivity;
     // If true, the connectivity state will be mirrored by IOService.offline
@@ -150,7 +150,7 @@ private:
     bool                                 mSettingOffline;
     bool                                 mSetOfflineValue;
 
-    bool                                 mShutdown;
+    mozilla::Atomic<bool, mozilla::Relaxed> mShutdown;
 
     nsCOMPtr<nsPISocketTransportService> mSocketTransportService;
     nsCOMPtr<nsPIDNSService>             mDNSService;

@@ -595,14 +595,14 @@ MediaDecoder::MediaDecoder(MediaDecoderOwner* aOwner)
   MediaShutdownManager::Instance().Register(this);
 }
 
-void
+RefPtr<ShutdownPromise>
 MediaDecoder::Shutdown()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (mShuttingDown)
-    return;
-
+  if (mShuttingDown) {
+    return ShutdownPromise::CreateAndResolve(true, __func__);
+  }
   mShuttingDown = true;
 
   mResourceCallback->Disconnect();
@@ -614,6 +614,7 @@ MediaDecoder::Shutdown()
   // This changes the decoder state to SHUTDOWN and does other things
   // necessary to unblock the state machine thread if it's blocked, so
   // the asynchronous shutdown in nsDestroyStateMachine won't deadlock.
+  RefPtr<ShutdownPromise> shutdown;
   if (mDecoderStateMachine) {
     mTimedMetadataListener.Disconnect();
     mMetadataLoadedListener.Disconnect();
@@ -622,9 +623,11 @@ MediaDecoder::Shutdown()
     mOnSeekingStart.Disconnect();
     mOnMediaNotSeekable.Disconnect();
 
-    mDecoderStateMachine->BeginShutdown()->Then(
-      AbstractThread::MainThread(), __func__, this,
-      &MediaDecoder::FinishShutdown, &MediaDecoder::FinishShutdown);
+    shutdown = mDecoderStateMachine->BeginShutdown()
+        ->Then(AbstractThread::MainThread(), __func__, this,
+               &MediaDecoder::FinishShutdown,
+               &MediaDecoder::FinishShutdown)
+        ->CompletionPromise();
   }
 
   // Force any outstanding seek and byterange requests to complete
@@ -638,6 +641,8 @@ MediaDecoder::Shutdown()
   ChangeState(PLAY_STATE_SHUTDOWN);
 
   MediaShutdownManager::Instance().Unregister(this);
+
+  return shutdown ? shutdown : ShutdownPromise::CreateAndResolve(true, __func__);
 }
 
 MediaDecoder::~MediaDecoder()
@@ -671,12 +676,13 @@ MediaDecoder::OnPlaybackEvent(MediaEventType aEvent)
   }
 }
 
-void
+RefPtr<ShutdownPromise>
 MediaDecoder::FinishShutdown()
 {
   MOZ_ASSERT(NS_IsMainThread());
   mDecoderStateMachine->BreakCycles();
   SetStateMachine(nullptr);
+  return ShutdownPromise::CreateAndResolve(true, __func__);
 }
 
 MediaResourceCallback*
@@ -866,11 +872,16 @@ MediaDecoder::MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
 
   // Make sure the element and the frame (if any) are told about
   // our new size.
-  Invalidate();
   if (aEventVisibility != MediaDecoderEventVisibility::Suppressed) {
     mFiredMetadataLoaded = true;
     mOwner->MetadataLoaded(mInfo, nsAutoPtr<const MetadataTags>(aTags.forget()));
   }
+  // Invalidate() will end up calling mOwner->UpdateMediaSize with the last
+  // dimensions retrieved from the video frame container. The video frame
+  // container contains more up to date dimensions than aInfo.
+  // So we call Invalidate() after calling mOwner->MetadataLoaded to ensure
+  // the media element has the latest dimensions.
+  Invalidate();
 
   EnsureTelemetryReported();
 }
@@ -1405,16 +1416,11 @@ MediaDecoder::Suspend()
 }
 
 void
-MediaDecoder::Resume(bool aForceBuffering)
+MediaDecoder::Resume()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mResource) {
     mResource->Resume();
-  }
-  if (aForceBuffering) {
-    if (mDecoderStateMachine) {
-      mDecoderStateMachine->DispatchStartBuffering();
-    }
   }
 }
 

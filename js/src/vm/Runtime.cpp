@@ -143,6 +143,9 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     asyncCallIsExplicit(false),
     entryMonitor(nullptr),
     parentRuntime(parentRuntime),
+#ifdef DEBUG
+    updateChildRuntimeCount(parentRuntime),
+#endif
     interrupt_(false),
     telemetryCallback(nullptr),
     handlingSegFault(false),
@@ -202,7 +205,6 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     destroyPrincipals(nullptr),
     readPrincipals(nullptr),
     errorReporter(nullptr),
-    linkedWasmModules(nullptr),
     propertyRemovals(0),
 #if !EXPOSE_INTL_API
     thousandsSeparator(0),
@@ -361,6 +363,7 @@ JSRuntime::init(uint32_t maxbytes, uint32_t maxNurseryBytes)
 JSRuntime::~JSRuntime()
 {
     MOZ_ASSERT(!isHeapBusy());
+    MOZ_ASSERT(childRuntimeCount == 0);
 
     fx.destroyInstance();
 
@@ -871,8 +874,10 @@ JSRuntime::assertCanLock(RuntimeLock which)
     switch (which) {
       case ExclusiveAccessLock:
         MOZ_ASSERT(exclusiveAccessOwner != PR_GetCurrentThread());
+        MOZ_FALLTHROUGH;
       case HelperThreadStateLock:
         MOZ_ASSERT(!HelperThreadState().isLocked());
+        MOZ_FALLTHROUGH;
       case GCLock:
         gc.assertCanLock();
         break;

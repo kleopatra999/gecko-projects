@@ -195,10 +195,6 @@ var AboutHomeListener = {
         sendAsyncMessage("AboutHome:History");
         break;
 
-      case "apps":
-        sendAsyncMessage("AboutHome:Apps");
-        break;
-
       case "addons":
         sendAsyncMessage("AboutHome:Addons");
         break;
@@ -620,6 +616,9 @@ var DOMFullscreenHandler = {
   },
 
   get _windowUtils() {
+    if (!content) {
+      return null;
+    }
     return content.QueryInterface(Ci.nsIInterfaceRequestor)
                   .getInterface(Ci.nsIDOMWindowUtils);
   },
@@ -637,7 +636,9 @@ var DOMFullscreenHandler = {
         break;
       }
       case "DOMFullscreen:CleanUp": {
-        this._windowUtils.exitFullscreen();
+        if (this._windowUtils) {
+          this._windowUtils.exitFullscreen();
+        }
         this._fullscreenDoc = null;
         break;
       }

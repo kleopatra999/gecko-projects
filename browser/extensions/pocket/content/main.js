@@ -162,7 +162,7 @@ var pktUI = (function() {
             {
                 variant = pktApi.getSignupAB();
             }
-            var panelId = showPanel("chrome://pocket/content/panels/signup.html?pockethost=" + Services.prefs.getCharPref("extensions.pocket.site") + "&fxasignedin=" + fxasignedin + "&variant=" + variant + '&inoverflowmenu=' + inOverflowMenu + "&locale=" + getUILocale(), {
+            var panelId = showPanel("about:pocket-signup?pockethost=" + Services.prefs.getCharPref("extensions.pocket.site") + "&fxasignedin=" + fxasignedin + "&variant=" + variant + '&inoverflowmenu=' + inOverflowMenu + "&locale=" + getUILocale(), {
             		onShow: function() {
                     },
         			onHide: panelDidHide,
@@ -190,14 +190,14 @@ var pktUI = (function() {
         	startheight = overflowMenuHeight;
         }
 
-    	var panelId = showPanel("chrome://pocket/content/panels/saved.html?pockethost=" + Services.prefs.getCharPref("extensions.pocket.site") + "&premiumStatus=" + (pktApi.isPremiumUser() ? '1' : '0') + '&inoverflowmenu='+inOverflowMenu + "&locale=" + getUILocale(), {
+    	var panelId = showPanel("about:pocket-saved?pockethost=" + Services.prefs.getCharPref("extensions.pocket.site") + "&premiumStatus=" + (pktApi.isPremiumUser() ? '1' : '0') + '&inoverflowmenu='+inOverflowMenu + "&locale=" + getUILocale(), {
     		onShow: function() {
                 var saveLinkMessageId = 'saveLink';
 
                 // Send error message for invalid url
                 if (!isValidURL) {
                     // TODO: Pass key for localized error in error object
-                    var error = {
+                    let error = {
                         message: 'Only links can be saved',
                         localizedKey: "onlylinkssaved"
                     };
@@ -208,7 +208,7 @@ var pktUI = (function() {
                 // Check online state
                 if (!navigator.onLine) {
                     // TODO: Pass key for localized error in error object
-                    var error = {
+                    let error = {
                         message: 'You must be connected to the Internet in order to save to Pocket. Please connect to the Internet and try again.'
                     };
                     pktUIMessaging.sendErrorMessageToPanel(panelId, saveLinkMessageId, error);

@@ -133,8 +133,8 @@ typedef void* nsNativeWidget;
 #endif
 
 #define NS_IWIDGET_IID \
-{ 0xaaa79c8d, 0xc99d, 0x4fe1, \
-  { 0xa5, 0x11, 0xd3, 0xeb, 0xb1, 0x61, 0x9e, 0x26 } }
+{ 0x73c0a475, 0x450f, 0x4202, \
+  { 0xab, 0xb4, 0x62, 0xf8, 0x9d, 0xbe, 0xf7, 0x9a } }
 
 /*
  * Window shadow styles
@@ -349,6 +349,7 @@ class nsIWidget : public nsISupports {
     typedef mozilla::LayoutDeviceIntRegion LayoutDeviceIntRegion;
     typedef mozilla::LayoutDeviceIntSize LayoutDeviceIntSize;
     typedef mozilla::ScreenIntPoint ScreenIntPoint;
+    typedef mozilla::DesktopIntRect DesktopIntRect;
 
     // Used in UpdateThemeGeometries.
     struct ThemeGeometry {
@@ -399,8 +400,10 @@ class nsIWidget : public nsISupports {
      * independent top level windows).
      *
      * The dimensions given in aRect are specified in the parent's
-     * coordinate system, or for parentless widgets such as top-level
-     * windows, in global CSS pixels.
+     * device coordinate system.
+     * This must not be called for parentless widgets such as top-level
+     * windows, which use the desktop pixel coordinate system; a separate
+     * method is provided for these.
      *
      * @param     aParent       parent nsIWidget
      * @param     aNativeParent native parent widget
@@ -412,6 +415,24 @@ class nsIWidget : public nsISupports {
                       nsNativeWidget aNativeParent,
                       const LayoutDeviceIntRect& aRect,
                       nsWidgetInitData* aInitData = nullptr) = 0;
+
+    /*
+     * As above, but with aRect specified in DesktopPixel units (for top-level
+     * widgets).
+     * Default implementation just converts aRect to device pixels and calls
+     * through to device-pixel Create, but platforms may override this if the
+     * mapping is not straightforward or the native platform needs to use the
+     * desktop pixel values directly.
+     */
+    NS_IMETHOD Create(nsIWidget* aParent,
+                      nsNativeWidget aNativeParent,
+                      const DesktopIntRect& aRect,
+                      nsWidgetInitData* aInitData = nullptr)
+    {
+        LayoutDeviceIntRect devPixRect =
+          RoundedToInt(aRect * GetDesktopToDeviceScale());
+        return Create(aParent, aNativeParent, devPixRect, aInitData);
+    }
 
     /**
      * Allocate, initialize, and return a widget that is a child of
@@ -522,6 +543,13 @@ class nsIWidget : public nsISupports {
      * the number of device pixels per inch.
      */
     virtual float GetDPI() = 0;
+
+    /**
+     * Return the scaling factor between device pixels and the platform-
+     * dependent "desktop pixels" used to manage window positions on a
+     * potentially multi-screen, mixed-resolution desktop.
+     */
+    virtual mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale() = 0;
 
     /**
      * Returns the CompositorVsyncDispatcher associated with this widget
@@ -835,7 +863,7 @@ class nsIWidget : public nsISupports {
     NS_IMETHOD GetBounds(LayoutDeviceIntRect& aRect) = 0;
 
     /**
-     * Get this widget's outside dimensions in global coordinates. This
+     * Get this widget's outside dimensions in device coordinates. This
      * includes any title bar on the window.
      *
      * @param aRect   On return it holds the  x, y, width and height of
@@ -855,7 +883,7 @@ class nsIWidget : public nsISupports {
      * @param aRect   On return it holds the  x, y, width and height of
      *                this widget.
      */
-    NS_IMETHOD GetRestoredBounds(mozilla::LayoutDeviceIntRect& aRect) = 0;
+    NS_IMETHOD GetRestoredBounds(LayoutDeviceIntRect& aRect) = 0;
 
     /**
      * Get this widget's client area bounds, if the window has a 3D border
@@ -866,7 +894,7 @@ class nsIWidget : public nsISupports {
      * @param aRect   On return it holds the  x. y, width and height of
      *                the client area of this widget.
      */
-    NS_IMETHOD GetClientBounds(mozilla::LayoutDeviceIntRect& aRect) = 0;
+    NS_IMETHOD GetClientBounds(LayoutDeviceIntRect& aRect) = 0;
 
     /**
      * Get the non-client area dimensions of the window.
@@ -1142,6 +1170,10 @@ class nsIWidget : public nsISupports {
      * if possible.  (If not, it behaves as if aTargetScreen is null.)
      * If !aFullScreen, aTargetScreen is ignored.
      * aTargetScreen support is currently only implemented on Windows.
+     *
+     * @return NS_OK if the widget is setup properly for fullscreen and
+     * FullscreenChanged callback has been or will be called. If other
+     * value is returned, the caller should continue the change itself.
      */
     NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) = 0;
 
@@ -1256,7 +1288,7 @@ class nsIWidget : public nsISupports {
      * before each composition.
      */
     virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() = 0;
-    virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawingInRegion(nsIntRegion& aInvalidRegion) {
+    virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawingInRegion(LayoutDeviceIntRegion& aInvalidRegion) {
       return StartRemoteDrawing();
     }
 
@@ -1268,7 +1300,7 @@ class nsIWidget : public nsISupports {
      * after each composition.
      */
     virtual void EndRemoteDrawing() = 0;
-    virtual void EndRemoteDrawingInRegion(mozilla::gfx::DrawTarget* aDrawTarget, nsIntRegion& aInvalidRegion) {
+    virtual void EndRemoteDrawingInRegion(mozilla::gfx::DrawTarget* aDrawTarget, LayoutDeviceIntRegion& aInvalidRegion) {
       EndRemoteDrawing();
     }
 
@@ -1792,6 +1824,25 @@ public:
     NS_IMETHOD SetPluginFocused(bool& aFocused) = 0;
 
     /*
+     * Tell the plugin has focus.  It is unnecessary to use IPC
+     */
+    bool PluginHasFocus() 
+    {
+      return GetInputContext().mIMEState.mEnabled == IMEState::PLUGIN;
+    }
+
+    /**
+     * Set IME candidate window position by windowless plugin.
+     */
+    virtual void SetCandidateWindowForPlugin(int32_t aX, int32_t aY) = 0;
+
+    /**
+     * Handle default action when PluginEvent isn't handled
+     */
+    virtual void DefaultProcOfPluginEvent(
+                   const mozilla::WidgetPluginEvent& aEvent) = 0;
+
+    /*
      * Notifies the input context changes.
      */
     NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
@@ -1976,7 +2027,7 @@ public:
      *
      * @return the constraints in device pixels
      */
-    virtual const SizeConstraints& GetSizeConstraints() const = 0;
+    virtual const SizeConstraints GetSizeConstraints() = 0;
 
     /**
      * If this is owned by a TabChild, return that.  Otherwise return

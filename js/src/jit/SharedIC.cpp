@@ -2555,7 +2555,8 @@ TryAttachNativeGetAccessorPropStub(JSContext* cx, HandleScript script, jsbytecod
 
     bool isScripted = false;
     bool cacheableCall = IsCacheableGetPropCall(cx, obj, holder, shape, &isScripted,
-                                                isTemporarilyUnoptimizable);
+                                                isTemporarilyUnoptimizable,
+                                                isDOMProxy);
 
     // Try handling scripted getters.
     if (cacheableCall && isScripted && !isDOMProxy && engine == ICStubCompiler::Engine::Baseline) {
@@ -4731,7 +4732,7 @@ DoTypeMonitorFallback(JSContext* cx, BaselineFrame* frame, ICTypeMonitor_Fallbac
         // In derived class constructors (including nested arrows/eval), the
         // |this| argument or GETALIASEDVAR can return the magic TDZ value.
         MOZ_ASSERT(value.isMagic(JS_UNINITIALIZED_LEXICAL));
-        MOZ_ASSERT(frame->isFunctionFrame());
+        MOZ_ASSERT(frame->isNonEvalFunctionFrame() || frame->isEvalFrame());
         MOZ_ASSERT(stub->monitorsThis() ||
                    *GetNextPc(pc) == JSOP_CHECKTHIS ||
                    *GetNextPc(pc) == JSOP_CHECKRETURN);

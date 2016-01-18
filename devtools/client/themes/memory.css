@@ -90,6 +90,14 @@ html, body, #app, #memory-tool {
   margin-inline-end: 5px;
 }
 
+.devtools-toolbar > label {
+  margin-inline-end: 5px;
+}
+
+#select-view {
+  margin-inline-start: 5px;
+}
+
 #take-snapshot::before {
   background-image: url(images/command-screenshot.png);
 }
@@ -213,6 +221,12 @@ html, body, #app, #memory-tool {
    */
   flex: 1;
   background-color: var(--theme-toolbar-background);
+
+  /**
+   * By default, flex items have min-width: auto;
+   * (https://drafts.csswg.org/css-flexbox/#min-size-auto)
+   */
+  min-width: 0;
 }
 
 #heap-view > .heap-view-panel {
@@ -228,6 +242,12 @@ html, body, #app, #memory-tool {
    * Flexing to fill out remaining horizontal space. @see #heap-view.
    */
   flex: 1;
+
+  /**
+   * By default, flex items have min-width: auto;
+   * (https://drafts.csswg.org/css-flexbox/#min-size-auto)
+   */
+  min-width: 0;
 }
 
 #heap-view > .heap-view-panel > .snapshot-status,
@@ -413,6 +433,14 @@ html, body, #app, #memory-tool {
 /**
  * Frame View components
  */
+
+.separator,
+.not-available,
+.heap-tree-item-address {
+  opacity: .5;
+  margin-left: .5em;
+  margin-right: .5em;
+}
 
 .focused .frame-link-filename,
 .focused .frame-link-column,

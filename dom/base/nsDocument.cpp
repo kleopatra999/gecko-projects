@@ -10,10 +10,12 @@
 
 #include "nsDocument.h"
 
+#include "mozilla/AnimationComparator.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/EffectSet.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Likely.h"
@@ -742,8 +744,7 @@ nsDOMStyleSheetList::NodeWillBeDestroyed(const nsINode *aNode)
 }
 
 void
-nsDOMStyleSheetList::StyleSheetAdded(nsIDocument *aDocument,
-                                     CSSStyleSheet* aStyleSheet,
+nsDOMStyleSheetList::StyleSheetAdded(CSSStyleSheet* aStyleSheet,
                                      bool aDocumentSheet)
 {
   if (aDocumentSheet && -1 != mLength) {
@@ -752,8 +753,7 @@ nsDOMStyleSheetList::StyleSheetAdded(nsIDocument *aDocument,
 }
 
 void
-nsDOMStyleSheetList::StyleSheetRemoved(nsIDocument *aDocument,
-                                       CSSStyleSheet* aStyleSheet,
+nsDOMStyleSheetList::StyleSheetRemoved(CSSStyleSheet* aStyleSheet,
                                        bool aDocumentSheet)
 {
   if (aDocumentSheet && -1 != mLength) {
@@ -2550,12 +2550,12 @@ nsDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
     treeItem->GetSameTypeParent(getter_AddRefs(sameTypeParent));
     if (sameTypeParent) {
       mUpgradeInsecureRequests =
-        sameTypeParent->GetDocument()->GetUpgradeInsecureRequests();
+        sameTypeParent->GetDocument()->GetUpgradeInsecureRequests(false);
       // if the parent document makes use of upgrade-insecure-requests
       // then subdocument preloads should always be upgraded.
       mUpgradeInsecurePreloads =
         mUpgradeInsecureRequests ||
-        sameTypeParent->GetDocument()->GetUpgradeInsecurePreloads();
+        sameTypeParent->GetDocument()->GetUpgradeInsecureRequests(true);
     }
   }
 
@@ -2785,19 +2785,8 @@ nsDocument::InitCSP(nsIChannel* aChannel)
     }
   }
 
-  csp = do_CreateInstance("@mozilla.org/cspcontext;1", &rv);
-
-  if (NS_FAILED(rv)) {
-    MOZ_LOG(gCspPRLog, LogLevel::Debug, ("Failed to create CSP object: %x", rv));
-    return rv;
-  }
-
-  // used as a "self" identifier for the CSP.
-  nsCOMPtr<nsIURI> selfURI;
-  aChannel->GetURI(getter_AddRefs(selfURI));
-
-  // Store the request context for violation reports
-  csp->SetRequestContext(this, nullptr);
+  rv = principal->EnsureCSP(this, getter_AddRefs(csp));
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // ----- if the doc is an app and we want a default CSP, apply it.
   if (applyAppDefaultCSP) {
@@ -2847,14 +2836,7 @@ nsDocument::InitCSP(nsIChannel* aChannel)
       aChannel->Cancel(NS_ERROR_CSP_FRAME_ANCESTOR_VIOLATION);
     }
   }
-
-  rv = principal->SetCsp(csp);
-  NS_ENSURE_SUCCESS(rv, rv);
-  MOZ_LOG(gCspPRLog, LogLevel::Debug,
-         ("Inserted CSP into principal %p", principal));
-
   ApplySettingsFromCSP(false);
-
   return NS_OK;
 }
 
@@ -3134,6 +3116,32 @@ nsDocument::Timeline()
   }
 
   return mDocumentTimeline;
+}
+
+void
+nsDocument::GetAnimations(nsTArray<RefPtr<Animation>>& aAnimations)
+{
+  FlushPendingNotifications(Flush_Style);
+
+  // Bug 1174575: Until we implement a suitable PseudoElement interface we
+  // don't have anything to return for the |target| attribute of
+  // KeyframeEffect(ReadOnly) objects that refer to pseudo-elements.
+  // Rather than return some half-baked version of these objects (e.g.
+  // we a null effect attribute) we simply don't provide access to animations
+  // whose effect refers to a pseudo-element until we can support them
+  // properly.
+  for (nsIContent* node = nsINode::GetFirstChild();
+       node;
+       node = node->GetNextNode(this)) {
+    if (!node->IsElement()) {
+      continue;
+    }
+
+    node->AsElement()->GetAnimationsUnsorted(aAnimations);
+  }
+
+  // Sort animations by priority
+  aAnimations.Sort(AnimationPtrComparator<RefPtr<Animation>>());
 }
 
 /* Return true if the document is in the focused top-level window, and is an
@@ -3666,14 +3674,12 @@ nsDocument::CreateShell(nsPresContext* aContext, nsViewManager* aViewManager,
   // Don't add anything here.  Add it to |doCreateShell| instead.
   // This exists so that subclasses can pass other values for the 4th
   // parameter some of the time.
-  return doCreateShell(aContext, aViewManager, aStyleSet,
-                       eCompatibility_FullStandards);
+  return doCreateShell(aContext, aViewManager, aStyleSet);
 }
 
 already_AddRefed<nsIPresShell>
 nsDocument::doCreateShell(nsPresContext* aContext,
-                          nsViewManager* aViewManager, nsStyleSet* aStyleSet,
-                          nsCompatibility aCompatMode)
+                          nsViewManager* aViewManager, nsStyleSet* aStyleSet)
 {
   NS_ASSERTION(!mPresShell, "We have a presshell already!");
 
@@ -3682,7 +3688,7 @@ nsDocument::doCreateShell(nsPresContext* aContext,
   FillStyleSet(aStyleSet);
 
   RefPtr<PresShell> shell = new PresShell;
-  shell->Init(this, aContext, aViewManager, aStyleSet, aCompatMode);
+  shell->Init(this, aContext, aViewManager, aStyleSet);
 
   // Note: we don't hold a ref to the shell (it holds a ref to us)
   mPresShell = shell;
@@ -3731,8 +3737,8 @@ nsIDocument::ShouldThrottleFrameRequests()
     return false;
   }
 
-  if (!mIsShowing) {
-    // We're not showing (probably in a background tab or the bf cache).
+  if (Hidden()) {
+    // We're not visible (probably in a background tab or the bf cache).
     return true;
   }
 
@@ -4075,7 +4081,7 @@ nsDocument::AddStyleSheetToStyleSets(CSSStyleSheet* aSheet)
 void
 nsDocument::NotifyStyleSheetAdded(CSSStyleSheet* aSheet, bool aDocumentSheet)
 {
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, aSheet, aDocumentSheet));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (aSheet, aDocumentSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleSheetChangeEvent,
@@ -4088,7 +4094,7 @@ nsDocument::NotifyStyleSheetAdded(CSSStyleSheet* aSheet, bool aDocumentSheet)
 void
 nsDocument::NotifyStyleSheetRemoved(CSSStyleSheet* aSheet, bool aDocumentSheet)
 {
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetRemoved, (this, aSheet, aDocumentSheet));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetRemoved, (aSheet, aDocumentSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleSheetChangeEvent,
@@ -4216,8 +4222,7 @@ nsDocument::SetStyleSheetApplicableState(CSSStyleSheet* aSheet,
   // that are children of sheets in our style set, as well as some
   // sheets for nsHTMLEditor.
 
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetApplicableStateChanged,
-                               (this, aSheet, aApplicable));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetApplicableStateChanged, (aSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleSheetApplicableStateChangeEvent,
@@ -5140,9 +5145,7 @@ void
 nsDocument::StyleRuleChanged(CSSStyleSheet* aSheet,
                              css::Rule* aStyleRule)
 {
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleChanged,
-                               (this, aSheet,
-                                aStyleRule));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleChanged, (aSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleRuleChangeEvent,
@@ -5156,8 +5159,7 @@ void
 nsDocument::StyleRuleAdded(CSSStyleSheet* aSheet,
                            css::Rule* aStyleRule)
 {
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleAdded,
-                               (this, aSheet, aStyleRule));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleAdded, (aSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleRuleChangeEvent,
@@ -5172,8 +5174,7 @@ void
 nsDocument::StyleRuleRemoved(CSSStyleSheet* aSheet,
                              css::Rule* aStyleRule)
 {
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleRemoved,
-                               (this, aSheet, aStyleRule));
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleRuleRemoved, (aSheet));
 
   if (StyleSheetChangeEventsEnabled()) {
     DO_STYLESHEET_NOTIFICATION(StyleRuleChangeEvent,
@@ -5665,7 +5666,7 @@ nsIDocument::CreateAttribute(const nsAString& aName, ErrorResult& rv)
   }
 
   RefPtr<Attr> attribute = new Attr(nullptr, nodeInfo.forget(),
-                                      EmptyString(), false);
+                                    EmptyString());
   return attribute.forget();
 }
 
@@ -5698,7 +5699,7 @@ nsIDocument::CreateAttributeNS(const nsAString& aNamespaceURI,
   }
 
   RefPtr<Attr> attribute = new Attr(nullptr, nodeInfo.forget(),
-                                      EmptyString(), true);
+                                    EmptyString());
   return attribute.forget();
 }
 
@@ -8757,6 +8758,13 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
       }
     }
   }
+
+  #ifdef MOZ_WEBSPEECH
+  nsGlobalWindow* globalWindow = static_cast<nsGlobalWindow*>(win);
+  if (globalWindow->HasActiveSpeechSynthesis()) {
+    return false;
+  }
+  #endif
 
   return true;
 }
@@ -12021,7 +12029,7 @@ public:
     mUserInputOrChromeCaller(aUserInputOrChromeCaller)
   {
     nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocument);
-    if (doc) {
+    if (doc && doc->GetInnerWindow()) {
       mRequester = new nsContentPermissionRequester(doc->GetInnerWindow());
     }
   }

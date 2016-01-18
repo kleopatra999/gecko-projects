@@ -143,7 +143,7 @@ nsHttpHandler::nsHttpHandler()
     , mResponseTimeout(PR_SecondsToInterval(300))
     , mResponseTimeoutEnabled(false)
     , mNetworkChangedTimeout(5000)
-    , mMaxRequestAttempts(10)
+    , mMaxRequestAttempts(3)
     , mMaxRequestDelay(10)
     , mIdleSynTimeout(250)
     , mH2MandatorySuiteEnabled(false)
@@ -396,6 +396,11 @@ nsHttpHandler::MakeNewRequestTokenBucket()
 nsresult
 nsHttpHandler::InitConnectionMgr()
 {
+    // Init ConnectionManager only on parent!
+    if (IsNeckoChild()) {
+        return NS_OK;
+    }
+
     nsresult rv;
 
     if (!mConnMgr) {
@@ -549,6 +554,8 @@ nsHttpHandler::GetCookieService()
 nsresult
 nsHttpHandler::GetIOService(nsIIOService** result)
 {
+    NS_ENSURE_ARG_POINTER(result);
+
     NS_ADDREF(*result = mIOService);
     return NS_OK;
 }
@@ -2049,10 +2056,6 @@ nsHttpHandler::Observe(nsISupports *subject,
         if (mWifiTickler)
             mWifiTickler->Cancel();
 
-        // ensure connection manager is shutdown
-        if (mConnMgr)
-            mConnMgr->Shutdown();
-
         // need to reset the session start time since cache validation may
         // depend on this value.
         mSessionStartTime = NowInSeconds();
@@ -2339,6 +2342,15 @@ nsHttpsHandler::AllowPort(int32_t aPort, const char *aScheme, bool *_retval)
     // don't override anything.
     *_retval = false;
     return NS_OK;
+}
+
+void
+nsHttpHandler::ShutdownConnectionManager()
+{
+    // ensure connection manager is shutdown
+    if (mConnMgr) {
+        mConnMgr->Shutdown();
+    }
 }
 
 } // namespace net

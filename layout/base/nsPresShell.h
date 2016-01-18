@@ -79,8 +79,7 @@ public:
   static bool BeforeAfterKeyboardEventEnabled();
 
   void Init(nsIDocument* aDocument, nsPresContext* aPresContext,
-            nsViewManager* aViewManager, nsStyleSet* aStyleSet,
-            nsCompatibility aCompatMode);
+            nsViewManager* aViewManager, nsStyleSet* aStyleSet);
   virtual void Destroy() override;
   virtual void MakeZombie() override;
 
@@ -495,6 +494,8 @@ protected:
   friend class nsPresShellEventCB;
 
   bool mCaretEnabled;
+
+  bool mIsHidden;
 #ifdef DEBUG
   nsStyleSet* CloneStyleSet(nsStyleSet* aSet);
   bool VerifyIncrementalReflow();
@@ -644,9 +645,6 @@ protected:
   void QueryIsActive();
   nsresult UpdateImageLockingState();
 
-#ifdef ANDROID
-  nsIDocument* GetTouchEventTargetDocument();
-#endif
   bool InZombieDocument(nsIContent *aContent);
   already_AddRefed<nsIPresShell> GetParentPresShellForEventHandling();
   nsIContent* GetCurrentEventContent();
@@ -721,7 +719,9 @@ protected:
   virtual void SysColorChanged() override { mPresContext->SysColorChanged(); }
   virtual void ThemeChanged() override { mPresContext->ThemeChanged(); }
   virtual void BackingScaleFactorChanged() override { mPresContext->UIResolutionChanged(); }
-
+#ifdef ANDROID
+  virtual nsIDocument* GetTouchEventTargetDocument();
+#endif
   void UpdateImageVisibility();
   void UpdateActivePointerState(mozilla::WidgetGUIEvent* aEvent);
 

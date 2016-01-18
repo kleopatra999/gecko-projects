@@ -22,8 +22,8 @@
 #include "gc/Marking.h"
 #include "js/Conversions.h"
 #include "js/GCAPI.h"
+#include "js/GCVector.h"
 #include "js/HeapAPI.h"
-#include "js/TraceableVector.h"
 #include "vm/Shape.h"
 #include "vm/String.h"
 #include "vm/Xdr.h"
@@ -34,7 +34,7 @@ struct ClassInfo;
 
 namespace js {
 
-using PropertyDescriptorVector = TraceableVector<PropertyDescriptor>;
+using PropertyDescriptorVector = GCVector<PropertyDescriptor>;
 class GCMarker;
 class Nursery;
 
@@ -247,12 +247,11 @@ class JSObject : public js::gc::Cell
     // exist on the scope chain) are kept.
     inline bool isUnqualifiedVarObj() const;
 
-    /*
-     * Objects with an uncacheable proto can have their prototype mutated
-     * without inducing a shape change on the object. Property cache entries
-     * and JIT inline caches should not be filled for lookups across prototype
-     * lookups on the object.
-     */
+    // Objects with an uncacheable proto can have their prototype mutated
+    // without inducing a shape change on the object. JIT inline caches should
+    // do an explicit group guard to guard against this. Singletons always
+    // generate a new shape when their prototype changes, regardless of this
+    // hasUncacheableProto flag.
     inline bool hasUncacheableProto() const;
     bool setUncacheableProto(js::ExclusiveContext* cx) {
         return setFlags(cx, js::BaseShape::UNCACHEABLE_PROTO, GENERATE_SHAPE);

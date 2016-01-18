@@ -228,9 +228,20 @@ ParseGLSLVersion(GLContext* gl, uint32_t* out_version)
         return true;
     }
 
+    const auto fnSkipPrefix = [&versionString](const char* prefix) {
+        const auto len = strlen(prefix);
+        if (strncmp(versionString, prefix, len) == 0)
+            versionString += len;
+    };
+
     const char kGLESVersionPrefix[] = "OpenGL ES GLSL ES";
-    if (strncmp(versionString, kGLESVersionPrefix, strlen(kGLESVersionPrefix)) == 0)
-        versionString += strlen(kGLESVersionPrefix);
+    fnSkipPrefix(kGLESVersionPrefix);
+
+    if (gl->WorkAroundDriverBugs()) {
+        // Nexus 7 2013 (bug 1234441)
+        const char kBadGLESVersionPrefix[] = "OpenGL ES GLSL";
+        fnSkipPrefix(kBadGLESVersionPrefix);
+    }
 
     const char* itr = versionString;
     char* end = nullptr;
@@ -1705,11 +1716,18 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
         }
 #endif
 #ifdef MOZ_X11
-        if (mWorkAroundDriverBugs &&
-            mVendor == GLVendor::Nouveau) {
-            // see bug 814716. Clamp MaxCubeMapTextureSize at 2K for Nouveau.
-            mMaxCubeMapTextureSize = std::min(mMaxCubeMapTextureSize, 2048);
-            mNeedsTextureSizeChecks = true;
+        if (mWorkAroundDriverBugs) {
+            if (mVendor == GLVendor::Nouveau) {
+                // see bug 814716. Clamp MaxCubeMapTextureSize at 2K for Nouveau.
+                mMaxCubeMapTextureSize = std::min(mMaxCubeMapTextureSize, 2048);
+                mNeedsTextureSizeChecks = true;
+            } else if (mVendor == GLVendor::Intel) {
+                // Bug 1199923. Driver seems to report a larger max size than
+                // actually supported.
+                mMaxTextureSize /= 2;
+                mMaxRenderbufferSize /= 2;
+                mNeedsTextureSizeChecks = true;
+            }
         }
 #endif
         if (mWorkAroundDriverBugs &&

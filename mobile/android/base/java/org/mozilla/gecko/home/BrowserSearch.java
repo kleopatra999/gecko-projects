@@ -485,7 +485,7 @@ public class BrowserSearch extends HomeFragment
     LinkedHashSet<String> domains = null;
     private LinkedHashSet<String> getDomains() {
         if (domains == null) {
-            domains = new LinkedHashSet<String>();
+            domains = new LinkedHashSet<String>(500);
             BufferedReader buf = null;
             try {
                 buf = new BufferedReader(new InputStreamReader(getResources().openRawResource(R.raw.topdomains)));
@@ -511,10 +511,6 @@ public class BrowserSearch extends HomeFragment
     }
 
     private String searchDomains(String search) {
-        if (AppConstants.NIGHTLY_BUILD == false) {
-            return null;
-        }
-
         for (String domain : getDomains()) {
             if (domain.startsWith(search)) {
                 return domain;
@@ -1124,18 +1120,22 @@ public class BrowserSearch extends HomeFragment
 
         @Override
         public void onLoadFinished(Loader<Cursor> loader, Cursor c) {
-            mAdapter.swapCursor(c);
+            if (mAdapter != null) {
+                mAdapter.swapCursor(c);
 
-            // We should handle autocompletion based on the search term
-            // associated with the loader that has just provided
-            // the results.
-            SearchCursorLoader searchLoader = (SearchCursorLoader) loader;
-            handleAutocomplete(searchLoader.getSearchTerm(), c);
+                // We should handle autocompletion based on the search term
+                // associated with the loader that has just provided
+                // the results.
+                SearchCursorLoader searchLoader = (SearchCursorLoader) loader;
+                handleAutocomplete(searchLoader.getSearchTerm(), c);
+            }
         }
 
         @Override
         public void onLoaderReset(Loader<Cursor> loader) {
-            mAdapter.swapCursor(null);
+            if (mAdapter != null) {
+                mAdapter.swapCursor(null);
+            }
         }
     }
 

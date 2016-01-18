@@ -4390,6 +4390,16 @@
         "url": "/html/rendering/non-replaced-elements/lists/ol-type-unsupported-disc.html"
       },
       {
+        "path": "html/rendering/non-replaced-elements/lists/ol-type-unsupported-invalid.html",
+        "references": [
+          [
+            "/html/rendering/non-replaced-elements/lists/ol-type-unsupported-ref.html",
+            "=="
+          ]
+        ],
+        "url": "/html/rendering/non-replaced-elements/lists/ol-type-unsupported-invalid.html"
+      },
+      {
         "path": "html/rendering/non-replaced-elements/lists/ol-type-unsupported-lower-alpha.html",
         "references": [
           [
@@ -4488,6 +4498,16 @@
           ]
         ],
         "url": "/html/rendering/non-replaced-elements/lists/ul-type-unsupported-decimal.html"
+      },
+      {
+        "path": "html/rendering/non-replaced-elements/lists/ul-type-unsupported-invalid.html",
+        "references": [
+          [
+            "/html/rendering/non-replaced-elements/lists/ul-type-unsupported-ref.html",
+            "=="
+          ]
+        ],
+        "url": "/html/rendering/non-replaced-elements/lists/ul-type-unsupported-invalid.html"
       },
       {
         "path": "html/rendering/non-replaced-elements/lists/ul-type-unsupported-lower-alpha.html",
@@ -26560,6 +26580,10 @@
         "url": "/vibration/silent-ignore.html"
       },
       {
+        "path": "web-animations/animation/constructor.html",
+        "url": "/web-animations/animation/constructor.html"
+      },
+      {
         "path": "web-animations/animation-node/animation-node-after.html",
         "url": "/web-animations/animation-node/animation-node-after.html"
       },
@@ -26602,6 +26626,10 @@
       {
         "path": "web-animations/keyframe-effect/constructor.html",
         "url": "/web-animations/keyframe-effect/constructor.html"
+      },
+      {
+        "path": "web-animations/keyframe-effect/getComputedTiming.html",
+        "url": "/web-animations/keyframe-effect/getComputedTiming.html"
       },
       {
         "path": "webaudio/the-audio-api/the-audiobuffer-interface/idl-test.html",
@@ -30152,7 +30180,94 @@
   },
   "local_changes": {
     "deleted": [],
-    "items": {},
+    "items": {
+      "testharness": {
+        "html/syntax/serializing-xml-fragments/outerHTML.html": [
+          {
+            "path": "html/syntax/serializing-xml-fragments/outerHTML.html",
+            "url": "/html/syntax/serializing-xml-fragments/outerHTML.html"
+          }
+        ],
+        "streams/byte-length-queuing-strategy.https.html": [
+          {
+            "path": "streams/byte-length-queuing-strategy.https.html",
+            "url": "/streams/byte-length-queuing-strategy.https.html"
+          }
+        ],
+        "streams/count-queuing-strategy.https.html": [
+          {
+            "path": "streams/count-queuing-strategy.https.html",
+            "url": "/streams/count-queuing-strategy.https.html"
+          }
+        ],
+        "streams/readable-streams/bad-strategies.https.html": [
+          {
+            "path": "streams/readable-streams/bad-strategies.https.html",
+            "url": "/streams/readable-streams/bad-strategies.https.html"
+          }
+        ],
+        "streams/readable-streams/bad-underlying-sources.https.html": [
+          {
+            "path": "streams/readable-streams/bad-underlying-sources.https.html",
+            "url": "/streams/readable-streams/bad-underlying-sources.https.html"
+          }
+        ],
+        "streams/readable-streams/brand-checks.https.html": [
+          {
+            "path": "streams/readable-streams/brand-checks.https.html",
+            "url": "/streams/readable-streams/brand-checks.https.html"
+          }
+        ],
+        "streams/readable-streams/cancel.https.html": [
+          {
+            "path": "streams/readable-streams/cancel.https.html",
+            "url": "/streams/readable-streams/cancel.https.html"
+          }
+        ],
+        "streams/readable-streams/count-queuing-strategy-integration.https.html": [
+          {
+            "path": "streams/readable-streams/count-queuing-strategy-integration.https.html",
+            "url": "/streams/readable-streams/count-queuing-strategy-integration.https.html"
+          }
+        ],
+        "streams/readable-streams/garbage-collection.https.html": [
+          {
+            "path": "streams/readable-streams/garbage-collection.https.html",
+            "url": "/streams/readable-streams/garbage-collection.https.html"
+          }
+        ],
+        "streams/readable-streams/general.https.html": [
+          {
+            "path": "streams/readable-streams/general.https.html",
+            "url": "/streams/readable-streams/general.https.html"
+          }
+        ],
+        "streams/readable-streams/pipe-through.https.html": [
+          {
+            "path": "streams/readable-streams/pipe-through.https.html",
+            "url": "/streams/readable-streams/pipe-through.https.html"
+          }
+        ],
+        "streams/readable-streams/readable-stream-reader.https.html": [
+          {
+            "path": "streams/readable-streams/readable-stream-reader.https.html",
+            "url": "/streams/readable-streams/readable-stream-reader.https.html"
+          }
+        ],
+        "streams/readable-streams/tee.https.html": [
+          {
+            "path": "streams/readable-streams/tee.https.html",
+            "url": "/streams/readable-streams/tee.https.html"
+          }
+        ],
+        "streams/readable-streams/templated.https.html": [
+          {
+            "path": "streams/readable-streams/templated.https.html",
+            "url": "/streams/readable-streams/templated.https.html"
+          }
+        ]
+      }
+    },
     "reftest_nodes": {}
   },
   "reftest_nodes": {

@@ -154,8 +154,8 @@ class GCSchedulingTunables
     /*
      * Controls the number of empty chunks reserved for future allocation.
      */
-    unsigned minEmptyChunkCount_;
-    unsigned maxEmptyChunkCount_;
+    uint32_t minEmptyChunkCount_;
+    uint32_t maxEmptyChunkCount_;
 
   public:
     GCSchedulingTunables()
@@ -190,7 +190,7 @@ class GCSchedulingTunables
     unsigned minEmptyChunkCount(const AutoLockGC&) const { return minEmptyChunkCount_; }
     unsigned maxEmptyChunkCount() const { return maxEmptyChunkCount_; }
 
-    void setParameter(JSGCParamKey key, uint32_t value, const AutoLockGC& lock);
+    bool setParameter(JSGCParamKey key, uint32_t value, const AutoLockGC& lock);
 };
 
 /*
@@ -593,7 +593,7 @@ class GCRuntime
     void removeRoot(Value* vp);
     void setMarkStackLimit(size_t limit, AutoLockGC& lock);
 
-    void setParameter(JSGCParamKey key, uint32_t value, AutoLockGC& lock);
+    bool setParameter(JSGCParamKey key, uint32_t value, AutoLockGC& lock);
     uint32_t getParameter(JSGCParamKey key, const AutoLockGC& lock);
 
     bool triggerGC(JS::gcreason::Reason reason);
@@ -756,6 +756,9 @@ class GCRuntime
 
     void setGCCallback(JSGCCallback callback, void* data);
     void callGCCallback(JSGCStatus status) const;
+    void setObjectsTenuredCallback(JSObjectsTenuredCallback callback,
+                                   void* data);
+    void callObjectsTenuredCallback();
     bool addFinalizeCallback(JSFinalizeCallback callback, void* data);
     void removeFinalizeCallback(JSFinalizeCallback func);
     bool addWeakPointerZoneGroupCallback(JSWeakPointerZoneGroupCallback callback, void* data);
@@ -1273,6 +1276,7 @@ class GCRuntime
     bool fullCompartmentChecks;
 
     Callback<JSGCCallback> gcCallback;
+    Callback<JSObjectsTenuredCallback> tenuredCallback;
     CallbackVector<JSFinalizeCallback> finalizeCallbacks;
     CallbackVector<JSWeakPointerZoneGroupCallback> updateWeakPointerZoneGroupCallbacks;
     CallbackVector<JSWeakPointerCompartmentCallback> updateWeakPointerCompartmentCallbacks;

@@ -561,6 +561,17 @@ nsDocShellTreeOwner::GetUnscaledDevicePixelsPerCSSPixel(double* aScale)
 }
 
 NS_IMETHODIMP
+nsDocShellTreeOwner::GetDevicePixelsPerDesktopPixel(double* aScale)
+{
+  if (mWebBrowser) {
+    return mWebBrowser->GetDevicePixelsPerDesktopPixel(aScale);
+  }
+
+  *aScale = 1.0;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDocShellTreeOwner::SetPosition(int32_t aX, int32_t aY)
 {
   nsCOMPtr<nsIEmbeddingSiteWindow> ownerWin = GetOwnerWin();
@@ -1124,10 +1135,13 @@ DefaultTooltipTextProvider::GetNodeText(nsIDOMNode* aNode, char16_t** aText,
                                          mTag_dialogheader,
                                          mTag_window)) {
           // first try the normal title attribute...
-          currElement->GetAttribute(NS_LITERAL_STRING("title"), outText);
-          if (outText.Length()) {
-            found = true;
-          } else {
+          if (!content->IsSVGElement()) {
+            currElement->GetAttribute(NS_LITERAL_STRING("title"), outText);
+            if (outText.Length()) {
+              found = true;
+            }
+          }
+          if (!found) {
             // ...ok, that didn't work, try it in the XLink namespace
             NS_NAMED_LITERAL_STRING(xlinkNS, "http://www.w3.org/1999/xlink");
             nsCOMPtr<mozilla::dom::Link> linkContent(
@@ -1136,8 +1150,7 @@ DefaultTooltipTextProvider::GetNodeText(nsIDOMNode* aNode, char16_t** aText,
               nsCOMPtr<nsIURI> uri(linkContent->GetURIExternal());
               if (uri) {
                 currElement->GetAttributeNS(
-                  NS_LITERAL_STRING("http://www.w3.org/1999/xlink"),
-                  NS_LITERAL_STRING("title"), outText);
+                  xlinkNS, NS_LITERAL_STRING("title"), outText);
                 if (outText.Length()) {
                   found = true;
                 }
@@ -1147,7 +1160,7 @@ DefaultTooltipTextProvider::GetNodeText(nsIDOMNode* aNode, char16_t** aText,
                 lookingForSVGTitle = UseSVGTitle(currElement);
               }
               if (lookingForSVGTitle) {
-                nsINodeList* childNodes = node->ChildNodes();
+                nsINodeList* childNodes = content->ChildNodes();
                 uint32_t childNodeCount = childNodes->Length();
                 for (uint32_t i = 0; i < childNodeCount; i++) {
                   nsIContent* child = childNodes->Item(i);

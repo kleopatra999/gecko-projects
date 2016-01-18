@@ -33,7 +33,6 @@
 #include "nsQueryFrame.h"
 #include "nsCoord.h"
 #include "nsColor.h"
-#include "nsCompatibility.h"
 #include "nsFrameManagerBase.h"
 #include "nsRect.h"
 #include "nsRegionFwd.h"
@@ -138,10 +137,10 @@ typedef struct CapturingContentInfo {
   mozilla::StaticRefPtr<nsIContent> mContent;
 } CapturingContentInfo;
 
-// 5023beaa-0e54-4fc7-b9dc-0344dc4fb8be
+// 6654f67f-c5aa-4934-b611-6d8d01e6193f
 #define NS_IPRESSHELL_IID \
-{ 0x5023beaa, 0x0e54, 0x4fc7, \
-  { 0xb9, 0xdc, 0x03, 0x44, 0xdc, 0x4f, 0xb8, 0xbe } }
+{ 0x6654f67f, 0xc5aa, 0x4934, \
+  { 0xb6, 0x11, 0x6d, 0x8d, 0x01, 0xe6, 0x19, 0x3f } }
 
 // debug VerifyReflow flags
 #define VERIFY_REFLOW_ON                    0x01
@@ -1278,7 +1277,7 @@ public:
                                                    bool aIsPrimary,
                                                    nsIContent* aCaptureTarget);
   static void SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
-  static void ReleasePointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
+  static void ReleasePointerCapturingContent(uint32_t aPointerId);
   static nsIContent* GetPointerCapturingContent(uint32_t aPointerId);
 
   // CheckPointerCaptureState checks cases, when got/lostpointercapture events should be fired.
@@ -1660,6 +1659,10 @@ public:
     { return mReflowScheduled || mReflowContinueTimer; }
 
   void SyncWindowProperties(nsView* aView);
+
+#ifdef ANDROID
+  virtual nsIDocument* GetTouchEventTargetDocument() = 0;
+#endif
 
 protected:
   friend class nsRefreshDriver;

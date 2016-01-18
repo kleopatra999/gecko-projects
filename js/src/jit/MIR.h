@@ -565,6 +565,21 @@ class MDefinition : public MNode
         Truncate = 3
     };
 
+    static const char * TruncateKindString(TruncateKind kind) {
+        switch(kind) {
+          case NoTruncate:
+            return "NoTruncate";
+          case TruncateAfterBailouts:
+            return "TruncateAfterBailouts";
+          case IndirectTruncate:
+            return "IndirectTruncate";
+          case Truncate:
+            return "Truncate";
+          default:
+            MOZ_CRASH("Unknown truncate kind.");
+        }
+    }
+
     // |needTruncation| records the truncation kind of the results, such that it
     // can be used to truncate the operands of this instruction.  If
     // |needTruncation| function returns true, then the |truncate| function is
@@ -5433,13 +5448,16 @@ class MBinaryBitwiseInstruction
 {
   protected:
     MBinaryBitwiseInstruction(MDefinition* left, MDefinition* right)
-      : MBinaryInstruction(left, right)
+      : MBinaryInstruction(left, right), maskMatchesLeftRange(false),
+        maskMatchesRightRange(false)
     {
         setResultType(MIRType_Int32);
         setMovable();
     }
 
     void specializeAsInt32();
+    bool maskMatchesLeftRange;
+    bool maskMatchesRightRange;
 
   public:
     MDefinition* foldsTo(TempAllocator& alloc) override;
@@ -5447,7 +5465,9 @@ class MBinaryBitwiseInstruction
     virtual MDefinition* foldIfZero(size_t operand) = 0;
     virtual MDefinition* foldIfNegOne(size_t operand) = 0;
     virtual MDefinition* foldIfEqual()  = 0;
+    virtual MDefinition* foldIfAllBitsSet(size_t operand)  = 0;
     virtual void infer(BaselineInspector* inspector, jsbytecode* pc);
+    void collectRangeInfoPreTrunc() override;
 
     bool congruentTo(const MDefinition* ins) const override {
         return binaryCongruentTo(ins);
@@ -5481,6 +5501,10 @@ class MBitAnd : public MBinaryBitwiseInstruction
     MDefinition* foldIfEqual() override {
         return getOperand(0); // x & x => x;
     }
+    MDefinition* foldIfAllBitsSet(size_t operand) override {
+        // e.g. for uint16: x & 0xffff => x;
+        return getOperand(1 - operand);
+    }
     void computeRange(TempAllocator& alloc) override;
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
@@ -5511,6 +5535,9 @@ class MBitOr : public MBinaryBitwiseInstruction
     MDefinition* foldIfEqual() override {
         return getOperand(0); // x | x => x
     }
+    MDefinition* foldIfAllBitsSet(size_t operand) override {
+        return this;
+    }
     void computeRange(TempAllocator& alloc) override;
     bool writeRecoverData(CompactBufferWriter& writer) const override;
     bool canRecoverOnBailout() const override {
@@ -5540,6 +5567,9 @@ class MBitXor : public MBinaryBitwiseInstruction
     MDefinition* foldIfEqual() override {
         return this;
     }
+    MDefinition* foldIfAllBitsSet(size_t operand) override {
+        return this;
+    }
     void computeRange(TempAllocator& alloc) override;
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
@@ -5563,6 +5593,9 @@ class MShiftInstruction
         return this;
     }
     MDefinition* foldIfEqual() override {
+        return this;
+    }
+    MDefinition* foldIfAllBitsSet(size_t operand) override {
         return this;
     }
     virtual void infer(BaselineInspector* inspector, jsbytecode* pc) override;
@@ -7496,41 +7529,55 @@ class MRegExp : public MNullaryInstruction
     }
 };
 
-class MRegExpExec
-  : public MBinaryInstruction,
-    public MixPolicy<ConvertToStringPolicy<0>, ObjectPolicy<1> >::Data
+class MRegExpMatcher
+  : public MAryInstruction<4>,
+    public Mix4Policy<ObjectPolicy<0>,
+                      StringPolicy<1>,
+                      IntPolicy<2>,
+                      BooleanPolicy<3> >::Data
 {
   private:
 
-    MRegExpExec(MDefinition* regexp, MDefinition* string)
-      : MBinaryInstruction(string, regexp)
+    MRegExpMatcher(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex,
+                   MDefinition* sticky)
+      : MAryInstruction<4>()
     {
+        initOperand(0, regexp);
+        initOperand(1, string);
+        initOperand(2, lastIndex);
+        initOperand(3, sticky);
+
+        setMovable();
         // May be object or null.
         setResultType(MIRType_Value);
     }
 
   public:
-    INSTRUCTION_HEADER(RegExpExec)
+    INSTRUCTION_HEADER(RegExpMatcher)
 
-    static MRegExpExec* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string) {
-        return new(alloc) MRegExpExec(regexp, string);
-    }
-
-    MDefinition* string() const {
-        return getOperand(0);
+    static MRegExpMatcher* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string,
+                               MDefinition* lastIndex, MDefinition* sticky)
+    {
+        return new(alloc) MRegExpMatcher(regexp, string, lastIndex, sticky);
     }
 
     MDefinition* regexp() const {
+        return getOperand(0);
+    }
+    MDefinition* string() const {
         return getOperand(1);
+    }
+    MDefinition* lastIndex() const {
+        return getOperand(2);
+    }
+    MDefinition* sticky() const {
+        return getOperand(3);
     }
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
 
     bool canRecoverOnBailout() const override {
-        // XXX: always return false for now, to work around bug 1132128.
-        if (false && regexp()->isRegExp())
-            return !regexp()->toRegExp()->source()->needUpdateLastIndex();
-        return false;
+        return true;
     }
 
     bool possiblyCalls() const override {
@@ -7538,30 +7585,48 @@ class MRegExpExec
     }
 };
 
-class MRegExpTest
-  : public MBinaryInstruction,
-    public MixPolicy<ObjectPolicy<1>, ConvertToStringPolicy<0> >::Data
+class MRegExpTester
+  : public MAryInstruction<4>,
+    public Mix4Policy<ObjectPolicy<0>,
+                      StringPolicy<1>,
+                      IntPolicy<2>,
+                      BooleanPolicy<3> >::Data
 {
   private:
 
-    MRegExpTest(MDefinition* regexp, MDefinition* string)
-      : MBinaryInstruction(string, regexp)
+    MRegExpTester(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex,
+                  MDefinition* sticky)
+      : MAryInstruction<4>()
     {
-        setResultType(MIRType_Boolean);
+        initOperand(0, regexp);
+        initOperand(1, string);
+        initOperand(2, lastIndex);
+        initOperand(3, sticky);
+
+        setMovable();
+        setResultType(MIRType_Int32);
     }
 
   public:
-    INSTRUCTION_HEADER(RegExpTest)
+    INSTRUCTION_HEADER(RegExpTester)
 
-    static MRegExpTest* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string) {
-        return new(alloc) MRegExpTest(regexp, string);
+    static MRegExpTester* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string,
+                              MDefinition* lastIndex, MDefinition* sticky)
+    {
+        return new(alloc) MRegExpTester(regexp, string, lastIndex, sticky);
     }
 
-    MDefinition* string() const {
+    MDefinition* regexp() const {
         return getOperand(0);
     }
-    MDefinition* regexp() const {
+    MDefinition* string() const {
         return getOperand(1);
+    }
+    MDefinition* lastIndex() const {
+        return getOperand(2);
+    }
+    MDefinition* sticky() const {
+        return getOperand(3);
     }
 
     bool possiblyCalls() const override {
@@ -7570,13 +7635,7 @@ class MRegExpTest
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
     bool canRecoverOnBailout() const override {
-        // RegExpTest has a side-effect on the regexp object's lastIndex
-        // when sticky or global flags are set.
-        // Return false unless we are sure it's not the case.
-        // XXX: always return false for now, to work around bug 1132128.
-        if (false && regexp()->isRegExp())
-            return !regexp()->toRegExp()->source()->needUpdateLastIndex();
-        return false;
+        return true;
     }
 };
 
@@ -7682,7 +7741,10 @@ class MStringReplace
     bool writeRecoverData(CompactBufferWriter& writer) const override;
     bool canRecoverOnBailout() const override {
         if (isFlatReplacement_)
-            return false;
+        {
+            MOZ_ASSERT(!pattern()->isRegExp());
+            return true;
+        }
         if (pattern()->isRegExp())
             return !pattern()->toRegExp()->source()->global();
         return false;
@@ -9774,7 +9836,7 @@ class MLoadTypedArrayElementStatic
     }
 
     Scalar::Type accessType() const {
-        return AnyTypedArrayType(someTypedArray_);
+        return someTypedArray_->as<TypedArrayObject>().type();
     }
     SharedMem<void*> base() const;
     size_t length() const;
@@ -10011,7 +10073,7 @@ class MStoreTypedArrayElementStatic :
     MStoreTypedArrayElementStatic(JSObject* someTypedArray, MDefinition* ptr, MDefinition* v,
                                   int32_t offset, bool needsBoundsCheck)
         : MBinaryInstruction(ptr, v),
-          StoreUnboxedScalarBase(AnyTypedArrayType(someTypedArray)),
+          StoreUnboxedScalarBase(someTypedArray->as<TypedArrayObject>().type()),
           someTypedArray_(someTypedArray),
           offset_(offset), needsBoundsCheck_(needsBoundsCheck)
     {}
@@ -14087,9 +14149,9 @@ bool ElementAccessIsDenseNative(CompilerConstraintList* constraints,
                                 MDefinition* obj, MDefinition* id);
 JSValueType UnboxedArrayElementType(CompilerConstraintList* constraints, MDefinition* obj,
                                     MDefinition* id);
-bool ElementAccessIsAnyTypedArray(CompilerConstraintList* constraints,
-                                  MDefinition* obj, MDefinition* id,
-                                  Scalar::Type* arrayType);
+bool ElementAccessIsTypedArray(CompilerConstraintList* constraints,
+                               MDefinition* obj, MDefinition* id,
+                               Scalar::Type* arrayType);
 bool ElementAccessIsPacked(CompilerConstraintList* constraints, MDefinition* obj);
 bool ElementAccessMightBeCopyOnWrite(CompilerConstraintList* constraints, MDefinition* obj);
 bool ElementAccessHasExtraIndexedProperty(IonBuilder* builder, MDefinition* obj);

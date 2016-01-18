@@ -176,6 +176,7 @@ private:
   DECL_GFX_PREF(Live, "apz.overscroll.stretch_factor",         APZOverscrollStretchFactor, float, 0.5f);
   DECL_GFX_PREF(Live, "apz.pan_repaint_interval",              APZPanRepaintInterval, int32_t, 250);
   DECL_GFX_PREF(Live, "apz.printtree",                         APZPrintTree, bool, false);
+  DECL_GFX_PREF(Live, "apz.record_checkerboarding",            APZRecordCheckerboarding, bool, false);
   DECL_GFX_PREF(Live, "apz.smooth_scroll_repaint_interval",    APZSmoothScrollRepaintInterval, int32_t, 75);
   DECL_GFX_PREF(Live, "apz.test.logging_enabled",              APZTestLoggingEnabled, bool, false);
   DECL_GFX_PREF(Live, "apz.touch_move_tolerance",              APZTouchMoveTolerance, float, 0.0);
@@ -204,6 +205,8 @@ private:
   DECL_GFX_PREF(Live, "dom.w3c_touch_events.enabled",          TouchEventsEnabled, int32_t, 0);
 
   DECL_GFX_PREF(Live, "general.smoothScroll",                  SmoothScrollEnabled, bool, true);
+  DECL_GFX_PREF(Live, "general.smoothScroll.currentVelocityWeighting",
+                SmoothScrollCurrentVelocityWeighting, float, 0.25);
   DECL_GFX_PREF(Live, "general.smoothScroll.durationToIntervalRatio",
                 SmoothScrollDurationToIntervalRatio, int32_t, 200);
   DECL_GFX_PREF(Live, "general.smoothScroll.mouseWheel",       WheelSmoothScrollEnabled, bool, true);
@@ -211,6 +214,8 @@ private:
                 WheelSmoothScrollMaxDurationMs, int32_t, 400);
   DECL_GFX_PREF(Live, "general.smoothScroll.mouseWheel.durationMinMS",
                 WheelSmoothScrollMinDurationMs, int32_t, 200);
+  DECL_GFX_PREF(Live, "general.smoothScroll.stopDecelerationWeighting",
+                SmoothScrollStopDecelerationWeighting, float, 0.4f);
 
   DECL_GFX_PREF(Once, "gfx.android.rgb16.force",               AndroidRGB16Force, bool, false);
 #if defined(ANDROID)
@@ -256,6 +261,8 @@ private:
   DECL_GFX_PREF(Live, "gfx.SurfaceTexture.detach.enabled",     SurfaceTextureDetachEnabled, bool, true);
   DECL_GFX_PREF(Live, "gfx.testing.device-reset",              DeviceResetForTesting, int32_t, 0);
   DECL_GFX_PREF(Live, "gfx.testing.device-fail",               DeviceFailForTesting, bool, false);
+
+  DECL_GFX_PREF(Live, "gfx.content.use-native-pushlayer",      UseNativePushLayer, bool, false);
 
   // These times should be in milliseconds
   DECL_GFX_PREF(Once, "gfx.touch.resample.delay-threshold",    TouchResampleVsyncDelayThreshold, int32_t, 20);
@@ -315,7 +322,6 @@ private:
   DECL_GFX_PREF(Once, "layers.componentalpha.enabled",         ComponentAlphaEnabled, bool, true);
 #endif
   DECL_GFX_PREF(Live, "layers.composer2d.enabled",             Composer2DCompositionEnabled, bool, false);
-  DECL_GFX_PREF(Live, "layers.screen-recording.enabled",       ScreenRecordingEnabled, bool, false);
   DECL_GFX_PREF(Once, "layers.d3d11.disable-warp",             LayersD3D11DisableWARP, bool, false);
   DECL_GFX_PREF(Once, "layers.d3d11.force-warp",               LayersD3D11ForceWARP, bool, false);
   DECL_GFX_PREF(Live, "layers.deaa.enabled",                   LayersDEAAEnabled, bool, false);

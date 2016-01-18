@@ -13,6 +13,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/CSSStyleSheet.h"
+#include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/MemoryReporting.h"
@@ -28,7 +29,6 @@
 #include "nsIContent.h"
 #include "nsRuleData.h"
 #include "nsRuleProcessorData.h"
-#include "nsTransitionManager.h"
 #include "nsAnimationManager.h"
 #include "nsStyleSheetService.h"
 #include "mozilla/dom/Element.h"
@@ -450,11 +450,13 @@ nsStyleSet::GatherRuleProcessors(SheetType aType)
     // levels that do not contain CSS style sheets
     case SheetType::Animation:
       MOZ_ASSERT(mSheets[aType].IsEmpty());
-      mRuleProcessors[aType] = PresContext()->AnimationManager();
+      mRuleProcessors[aType] = PresContext()->EffectCompositor()->
+        RuleProcessor(EffectCompositor::CascadeLevel::Animations);
       return NS_OK;
     case SheetType::Transition:
       MOZ_ASSERT(mSheets[aType].IsEmpty());
-      mRuleProcessors[aType] = PresContext()->TransitionManager();
+      mRuleProcessors[aType] = PresContext()->EffectCompositor()->
+        RuleProcessor(EffectCompositor::CascadeLevel::Transitions);
       return NS_OK;
     case SheetType::StyleAttr:
       MOZ_ASSERT(mSheets[aType].IsEmpty());
@@ -1553,8 +1555,9 @@ nsStyleSet::RuleNodeWithReplacement(Element* aElement,
           if (aPseudoType == nsCSSPseudoElements::ePseudo_NotPseudoElement ||
               aPseudoType == nsCSSPseudoElements::ePseudo_before ||
               aPseudoType == nsCSSPseudoElements::ePseudo_after) {
-            nsIStyleRule* rule = PresContext()->AnimationManager()->
-              GetAnimationRule(aElement, aPseudoType);
+            nsIStyleRule* rule = PresContext()->EffectCompositor()->
+              GetAnimationRule(aElement, aPseudoType,
+                               EffectCompositor::CascadeLevel::Animations);
             if (rule) {
               ruleWalker.ForwardOnPossiblyCSSRule(rule);
               ruleWalker.CurrentNode()->SetIsAnimationRule();
@@ -1566,8 +1569,9 @@ nsStyleSet::RuleNodeWithReplacement(Element* aElement,
           if (aPseudoType == nsCSSPseudoElements::ePseudo_NotPseudoElement ||
               aPseudoType == nsCSSPseudoElements::ePseudo_before ||
               aPseudoType == nsCSSPseudoElements::ePseudo_after) {
-            nsIStyleRule* rule = PresContext()->TransitionManager()->
-              GetAnimationRule(aElement, aPseudoType);
+            nsIStyleRule* rule = PresContext()->EffectCompositor()->
+              GetAnimationRule(aElement, aPseudoType,
+                               EffectCompositor::CascadeLevel::Transitions);
             if (rule) {
               ruleWalker.ForwardOnPossiblyCSSRule(rule);
               ruleWalker.CurrentNode()->SetIsAnimationRule();
@@ -2388,12 +2392,13 @@ nsStyleSet::HasStateDependentStyle(Element* aElement,
 }
 
 struct MOZ_STACK_CLASS AttributeData : public AttributeRuleProcessorData {
-  AttributeData(nsPresContext* aPresContext,
-                Element* aElement, nsIAtom* aAttribute, int32_t aModType,
+  AttributeData(nsPresContext* aPresContext, Element* aElement,
+                int32_t aNameSpaceID, nsIAtom* aAttribute, int32_t aModType,
                 bool aAttrHasChanged, const nsAttrValue* aOtherValue,
                 TreeMatchContext& aTreeMatchContext)
-    : AttributeRuleProcessorData(aPresContext, aElement, aAttribute, aModType,
-                                 aAttrHasChanged, aOtherValue, aTreeMatchContext),
+    : AttributeRuleProcessorData(aPresContext, aElement, aNameSpaceID,
+                                 aAttribute, aModType, aAttrHasChanged,
+                                 aOtherValue, aTreeMatchContext),
       mHint(nsRestyleHint(0))
   {}
   nsRestyleHint mHint;
@@ -2413,6 +2418,7 @@ SheetHasAttributeStyle(nsIStyleRuleProcessor* aProcessor, void *aData)
 // Test if style is dependent on content state
 nsRestyleHint
 nsStyleSet::HasAttributeDependentStyle(Element*       aElement,
+                                       int32_t        aNameSpaceID,
                                        nsIAtom*       aAttribute,
                                        int32_t        aModType,
                                        bool           aAttrHasChanged,
@@ -2423,7 +2429,7 @@ nsStyleSet::HasAttributeDependentStyle(Element*       aElement,
   TreeMatchContext treeContext(false, nsRuleWalker::eLinksVisitedOrUnvisited,
                                aElement->OwnerDoc());
   InitStyleScopes(treeContext, aElement);
-  AttributeData data(PresContext(), aElement, aAttribute,
+  AttributeData data(PresContext(), aElement, aNameSpaceID, aAttribute,
                      aModType, aAttrHasChanged, aOtherValue, treeContext);
   WalkRuleProcessors(SheetHasAttributeStyle, &data, false);
   if (!(data.mHint & eRestyle_Subtree)) {

@@ -25,6 +25,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
 XPCOMUtils.defineLazyGetter(this, "gPocketBundle", function() {
   return Services.strings.createBundle("chrome://pocket/locale/pocket.properties");
 });
+XPCOMUtils.defineLazyGetter(this, "gPocketStyleURI", function() {
+  return Services.io.newURI("chrome://pocket/skin/pocket.css", null, null);
+});
 
 
 const PREF_BRANCH = "extensions.pocket.";
@@ -70,6 +73,62 @@ function createElementWithAttrs(document, type, attrs) {
   })
   return element;
 }
+
+XPCOMUtils.defineLazyGetter(this, "AboutSaved", function() {
+  return new PocketAboutPage("chrome://pocket/content/panels/saved.html",
+                             "pocket-saved",
+                             "{3e759f54-37af-7843-9824-f71b5993ceed}",
+                             "About Pocket Saved");
+});
+
+XPCOMUtils.defineLazyGetter(this, "AboutSignup", function() {
+  return new PocketAboutPage("chrome://pocket/content/panels/signup.html",
+                             "pocket-signup",
+                             "{8548329d-00c4-234e-8f17-75026db3b56e}",
+                             "About Pocket Signup");
+});
+
+
+function PocketAboutPage(chromeURL, aboutHost, classID, description) {
+  this.chromeURL = chromeURL;
+  this.aboutHost = aboutHost;
+  this.classID = Components.ID(classID);
+  this.description = description;
+}
+PocketAboutPage.prototype = {
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAboutModule]),
+  getURIFlags: function(aURI) {
+    return Ci.nsIAboutModule.ALLOW_SCRIPT |
+           Ci.nsIAboutModule.URI_SAFE_FOR_UNTRUSTED_CONTENT |
+           Ci.nsIAboutModule.HIDE_FROM_ABOUTABOUT |
+           Ci.nsIAboutModule.MAKE_UNLINKABLE;
+  },
+
+  newChannel: function(aURI) {
+    let channel = Services.io.newChannel(this.chromeURL, null, null);
+    channel.originalURI = aURI;
+    return channel;
+  },
+
+  createInstance: function(outer, iid) {
+    if (outer != null) {
+      throw Cr.NS_ERROR_NO_AGGREGATION;
+    }
+    return this.QueryInterface(iid);
+  },
+
+  register: function() {
+    Cm.QueryInterface(Ci.nsIComponentRegistrar).registerFactory(
+      this.classID, this.description,
+      "@mozilla.org/network/protocol/about;1?what=" + this.aboutHost, this);
+  },
+
+  unregister: function() {
+    Cm.QueryInterface(Ci.nsIComponentRegistrar).unregisterFactory(
+      this.classID, this);
+  }
+};
+
 
 function CreatePocketWidget(reason) {
   let id = "pocket-button"
@@ -286,11 +345,14 @@ function pktUIGetter(prop, window) {
 
 var PocketOverlay = {
   startup: function(reason) {
-    this.registerStylesheet();
+    let styleSheetService = Cc["@mozilla.org/content/style-sheet-service;1"]
+                              .getService(Ci.nsIStyleSheetService);
+    this._sheetType = styleSheetService.AUTHOR_SHEET;
+    this._cachedSheet = styleSheetService.preloadSheet(gPocketStyleURI,
+                                                       this._sheetType);
+    AboutSaved.register();
+    AboutSignup.register();
     CreatePocketWidget(reason);
-    Services.obs.addObserver(this,
-                             "browser-delayed-startup-finished",
-                             false);
     CustomizableUI.addListener(this);
     PocketContextMenu.init();
     PocketReader.startup();
@@ -298,11 +360,14 @@ var PocketOverlay = {
     if (reason == ADDON_ENABLE) {
       for (let win of allBrowserWindows()) {
         this.setWindowScripts(win);
+        this.addStyles(win);
         this.updateWindow(win);
       }
     }
   },
   shutdown: function(reason) {
+    AboutSaved.unregister();
+    AboutSignup.unregister();
     CustomizableUI.removeListener(this);
     for (let window of allBrowserWindows()) {
       for (let id of ["panelMenu_pocket", "menu_pocket", "BMB_pocket",
@@ -312,6 +377,7 @@ var PocketOverlay = {
         if (element)
           element.remove();
       }
+      this.removeStyles(window);
       // remove script getters/objects
       delete window.Pocket;
       delete window.pktUI;
@@ -320,12 +386,10 @@ var PocketOverlay = {
     CustomizableUI.destroyWidget("pocket-button");
     PocketContextMenu.shutdown();
     PocketReader.shutdown();
-    this.unregisterStylesheet();
   },
-  observe: function(aSubject, aTopic, aData) {
-    // new browser window, initialize the "overlay"
-    let window = aSubject;
+  onWindowOpened: function(window) {
     this.setWindowScripts(window);
+    this.addStyles(window);
     this.updateWindow(window);
   },
   setWindowScripts: function(window) {
@@ -433,26 +497,14 @@ var PocketOverlay = {
     }
   },
 
-  registerStylesheet: function() {
-    let styleSheetService= Components.classes["@mozilla.org/content/style-sheet-service;1"]
-                                     .getService(Components.interfaces.nsIStyleSheetService);
-    let styleSheetURI = Services.io.newURI("chrome://pocket/skin/pocket.css", null, null);
-    styleSheetService.loadAndRegisterSheet(styleSheetURI, styleSheetService.AUTHOR_SHEET);
-    styleSheetURI = Services.io.newURI("chrome://pocket-shared/skin/pocket.css", null, null);
-    styleSheetService.loadAndRegisterSheet(styleSheetURI, styleSheetService.AUTHOR_SHEET);
+  addStyles: function(win) {
+    let utils = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+    utils.addSheet(this._cachedSheet, this._sheetType);
   },
 
-  unregisterStylesheet: function() {
-    let styleSheetService = Components.classes["@mozilla.org/content/style-sheet-service;1"]
-                                      .getService(Components.interfaces.nsIStyleSheetService);
-    let styleSheetURI = Services.io.newURI("chrome://pocket/skin/pocket.css", null, null);
-    if (styleSheetService.sheetRegistered(styleSheetURI, styleSheetService.AUTHOR_SHEET)) {
-      styleSheetService.unregisterSheet(styleSheetURI, styleSheetService.AUTHOR_SHEET);
-    }
-    styleSheetURI = Services.io.newURI("chrome://pocket-shared/skin/pocket.css", null, null);
-    if (styleSheetService.sheetRegistered(styleSheetURI, styleSheetService.AUTHOR_SHEET)) {
-      styleSheetService.unregisterSheet(styleSheetURI, styleSheetService.AUTHOR_SHEET);
-    }
+  removeStyles: function(win) {
+    let utils = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+    utils.removeSheet(gPocketStyleURI, this._sheetType);
   }
 
 }

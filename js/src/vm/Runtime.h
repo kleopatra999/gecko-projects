@@ -14,7 +14,6 @@
 #include "mozilla/PodOperations.h"
 #include "mozilla/Scoped.h"
 #include "mozilla/ThreadLocal.h"
-#include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 
 #include <setjmp.h>
@@ -33,11 +32,12 @@
 #include "gc/Tracer.h"
 #include "irregexp/RegExpStack.h"
 #include "js/Debug.h"
+#include "js/GCVector.h"
 #include "js/HashTable.h"
 #ifdef DEBUG
 # include "js/Proxy.h" // For AutoEnterPolicy
 #endif
-#include "js/TraceableVector.h"
+#include "js/UniquePtr.h"
 #include "js/Vector.h"
 #include "vm/CodeCoverage.h"
 #include "vm/CommonPropertyNames.h"
@@ -146,7 +146,7 @@ struct ScopeCoordinateNameCache {
     void purge();
 };
 
-using ScriptAndCountsVector = TraceableVector<ScriptAndCounts, 0, SystemAllocPolicy>;
+using ScriptAndCountsVector = GCVector<ScriptAndCounts, 0, SystemAllocPolicy>;
 
 struct EvalCacheEntry
 {
@@ -796,6 +796,31 @@ struct JSRuntime : public JS::shadow::Runtime,
     JSRuntime* parentRuntime;
 
   private:
+#ifdef DEBUG
+    /* The number of child runtimes that have this runtime as their parent. */
+    mozilla::Atomic<size_t> childRuntimeCount;
+
+    class AutoUpdateChildRuntimeCount
+    {
+        JSRuntime* parent_;
+
+      public:
+        explicit AutoUpdateChildRuntimeCount(JSRuntime* parent)
+          : parent_(parent)
+        {
+            if (parent_)
+                parent_->childRuntimeCount++;
+        }
+
+        ~AutoUpdateChildRuntimeCount() {
+            if (parent_)
+                parent_->childRuntimeCount--;
+        }
+    };
+
+    AutoUpdateChildRuntimeCount updateChildRuntimeCount;
+#endif
+
     mozilla::Atomic<uint32_t, mozilla::Relaxed> interrupt_;
 
     /* Call this to accumulate telemetry data. */
@@ -952,6 +977,10 @@ struct JSRuntime : public JS::shadow::Runtime,
     static js::GlobalObject*
     createSelfHostingGlobal(JSContext* cx);
 
+    bool getUnclonedSelfHostedValue(JSContext* cx, js::HandlePropertyName name,
+                                    js::MutableHandleValue vp);
+    JSFunction* getUnclonedSelfHostedFunction(JSContext* cx, js::HandlePropertyName name);
+
     /* Space for interpreter frames. */
     js::InterpreterStack interpreterStack_;
 
@@ -983,10 +1012,16 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
     bool isSelfHostingCompartment(JSCompartment* comp) const;
     bool isSelfHostingZone(const JS::Zone* zone) const;
+    bool createLazySelfHostedFunctionClone(JSContext* cx, js::HandlePropertyName selfHostedName,
+                                           js::HandleAtom name, unsigned nargs,
+                                           js::HandleObject proto,
+                                           js::NewObjectKind newKind,
+                                           js::MutableHandleFunction fun);
     bool cloneSelfHostedFunctionScript(JSContext* cx, js::Handle<js::PropertyName*> name,
                                        js::Handle<JSFunction*> targetFun);
     bool cloneSelfHostedValue(JSContext* cx, js::Handle<js::PropertyName*> name,
                               js::MutableHandleValue vp);
+    void assertSelfHostedFunctionHasCanonicalName(JSContext* cx, js::HandlePropertyName name);
 
     //-------------------------------------------------------------------------
     // Locale information
@@ -1189,9 +1224,6 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     /* AsmJSCache callbacks are runtime-wide. */
     JS::AsmJSCacheOps   asmJSCacheOps;
-
-    /* Head of the linked list of linked wasm modules. */
-    js::wasm::Module*   linkedWasmModules;
 
     /*
      * The propertyRemovals counter is incremented for every JSObject::clear,
@@ -1918,7 +1950,7 @@ class MOZ_RAII AutoEnterIonCompilation
 template <typename T>
 class MOZ_STACK_CLASS AutoInitGCManagedObject
 {
-    typedef mozilla::UniquePtr<T, JS::DeletePolicy<T>> UniquePtrT;
+    typedef UniquePtr<T> UniquePtrT;
 
     UniquePtrT ptr_;
 

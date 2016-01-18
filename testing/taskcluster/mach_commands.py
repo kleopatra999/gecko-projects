@@ -260,6 +260,9 @@ class Graph(object):
     @CommandArgument('--owner',
         required=True,
         help='email address of who owns this graph')
+    @CommandArgument('--level',
+        default="1",
+        help='SCM level of this repository')
     @CommandArgument('--extend-graph',
         action="store_true", dest="ci", help='Omit create graph arguments')
     @CommandArgument('--interactive',
@@ -346,6 +349,7 @@ class Graph(object):
             'month': pushdate[4:6],
             'day': pushdate[6:8],
             'owner': params['owner'],
+            'level': params['level'],
             'from_now': json_time_from_now,
             'now': current_json_time(),
             'revision_hash': params['revision_hash']
@@ -365,7 +369,7 @@ class Graph(object):
         # Task graph we are generating for taskcluster...
         graph = {
             'tasks': [],
-            'scopes': []
+            'scopes': set(),
         }
 
         if params['revision_hash']:
@@ -373,10 +377,10 @@ class Graph(object):
                 route = 'queue:route:{}.{}'.format(
                             routes_transform.TREEHERDER_ROUTES[env],
                             treeherder_route)
-                graph['scopes'].append(route)
+                graph['scopes'].add(route)
 
         graph['metadata'] = {
-            'source': 'http://todo.com/what/goes/here',
+            'source': '{repo}file/{rev}/testing/taskcluster/mach_commands.py'.format(repo=params['head_repository'], rev=params['head_rev']),
             'owner': params['owner'],
             # TODO: Add full mach commands to this example?
             'description': 'Task graph generated via ./mach taskcluster-graph',
@@ -389,6 +393,7 @@ class Graph(object):
             interactive = cmdline_interactive or build["interactive"]
             build_parameters = merge_dicts(parameters, build['additional-parameters']);
             build_parameters['build_slugid'] = slugid()
+            build_parameters['source'] = '{repo}file/{rev}/testing/taskcluster/{file}'.format(repo=params['head_repository'], rev=params['head_rev'], file=build['task'])
             build_task = templates.load(build['task'], build_parameters)
 
             # Copy build_* attributes to expose them to post-build tasks
@@ -441,10 +446,10 @@ class Graph(object):
                     ))
                 all_routes[route] = build_task['task']['metadata']['name']
 
-            graph['scopes'].append(define_task)
-            graph['scopes'].extend(build_task['task'].get('scopes', []))
+            graph['scopes'].add(define_task)
+            graph['scopes'] |= set(build_task['task'].get('scopes', []))
             route_scopes = map(lambda route: 'queue:route:' + route, build_task['task'].get('routes', []))
-            graph['scopes'].extend(route_scopes)
+            graph['scopes'] |= set(route_scopes)
 
             # Treeherder symbol configuration for the graph required for each
             # build so tests know which platform they belong to.
@@ -539,10 +544,10 @@ class Graph(object):
                         test_task['task']['workerType']
                     )
 
-                    graph['scopes'].append(define_task)
-                    graph['scopes'].extend(test_task['task'].get('scopes', []))
+                    graph['scopes'].add(define_task)
+                    graph['scopes'] |= set(test_task['task'].get('scopes', []))
 
-        graph['scopes'] = list(set(graph['scopes']))
+        graph['scopes'] = sorted(graph['scopes'])
 
         if params['print_names_only']:
             tIDs = defaultdict(list)
@@ -570,7 +575,7 @@ class Graph(object):
             graph.pop('scopes', None)
             graph.pop('metadata', None)
 
-        print(json.dumps(graph, indent=4))
+        print(json.dumps(graph, indent=4, sort_keys=True))
 
 @CommandProvider
 class CIBuild(object):
@@ -589,6 +594,9 @@ class CIBuild(object):
     @CommandArgument('--owner',
         default='foobar@mozilla.com',
         help='email address of who owns this graph')
+    @CommandArgument('--level',
+        default="1",
+        help='SCM level of this repository')
     @CommandArgument('build_task',
         help='path to build task definition')
     @CommandArgument('--interactive',
@@ -614,6 +622,12 @@ class CIBuild(object):
 
         head_ref = params['head_ref'] or head_rev
 
+        # Default to current time if querying the head rev fails
+        pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime())
+        pushinfo = query_pushinfo(params['head_repository'], params['head_rev'])
+        if pushinfo:
+            pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime(pushinfo.pushdate))
+
         from taskcluster_graph.from_now import (
             json_time_from_now,
             current_json_time,
@@ -621,12 +635,18 @@ class CIBuild(object):
         build_parameters = dict(gaia_info().items() + {
             'docker_image': docker_image,
             'owner': params['owner'],
+            'level': params['level'],
             'from_now': json_time_from_now,
             'now': current_json_time(),
             'base_repository': params['base_repository'] or head_repository,
             'head_repository': head_repository,
             'head_rev': head_rev,
             'head_ref': head_ref,
+            'pushdate': pushdate,
+            'pushtime': pushdate[8:],
+            'year': pushdate[0:4],
+            'month': pushdate[4:6],
+            'day': pushdate[6:8],
         }.items())
 
         try:

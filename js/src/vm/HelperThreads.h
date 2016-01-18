@@ -479,15 +479,16 @@ struct ParseTask
     // Holds the final script between the invocation of the callback and the
     // point where FinishOffThreadScript is called, which will destroy the
     // ParseTask.
-    JSScript* script;
+    PersistentRootedScript script;
 
     // Holds the ScriptSourceObject generated for the script compilation.
-    ScriptSourceObject* sourceObject;
+    PersistentRooted<ScriptSourceObject*> sourceObject;
 
     // Any errors or warnings produced during compilation. These are reported
     // when finishing the script.
     Vector<frontend::CompileError*> errors;
     bool overRecursed;
+    bool outOfMemory;
 
     ParseTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
               JSContext* initCx, const char16_t* chars, size_t length,

@@ -44,7 +44,7 @@ IsCacheableNonGlobalScope(JSObject* obj)
 inline HandleObject
 InterpreterFrame::scopeChain() const
 {
-    MOZ_ASSERT_IF(!(flags_ & HAS_SCOPECHAIN), isFunctionFrame());
+    MOZ_ASSERT_IF(!(flags_ & HAS_SCOPECHAIN), isNonEvalFunctionFrame());
     if (!(flags_ & HAS_SCOPECHAIN)) {
         scopeChain_ = callee().environment();
         flags_ |= HAS_SCOPECHAIN;
@@ -73,13 +73,6 @@ InterpreterFrame::extensibleLexicalScope() const
     return NearestEnclosingExtensibleLexicalScope(scopeChain());
 }
 
-inline JSCompartment*
-InterpreterFrame::compartment() const
-{
-    MOZ_ASSERT(scopeChain()->compartment() == script()->compartment());
-    return scopeChain()->compartment();
-}
-
 inline void
 InterpreterFrame::initCallFrame(JSContext* cx, InterpreterFrame* prev, jsbytecode* prevpc,
                                 Value* prevsp, JSFunction& callee, JSScript* script, Value* argv,
@@ -91,8 +84,8 @@ InterpreterFrame::initCallFrame(JSContext* cx, InterpreterFrame* prev, jsbytecod
     /* Initialize stack frame members. */
     flags_ = FUNCTION | HAS_SCOPECHAIN | flagsArg;
     argv_ = argv;
-    exec.fun = &callee;
-    u.nactual = nactual;
+    script_ = script;
+    nactual_ = nactual;
     scopeChain_ = callee.environment();
     prev_ = prev;
     prevpc_ = prevpc;
@@ -225,14 +218,14 @@ InterpreterFrame::replaceInnermostScope(ScopeObject& scope)
 bool
 InterpreterFrame::hasCallObj() const
 {
-    MOZ_ASSERT(isStrictEvalFrame() || fun()->needsCallObject());
+    MOZ_ASSERT(isStrictEvalFrame() || callee().needsCallObject());
     return flags_ & HAS_CALL_OBJ;
 }
 
 inline CallObject&
 InterpreterFrame::callObj() const
 {
-    MOZ_ASSERT(fun()->needsCallObject());
+    MOZ_ASSERT(callee().needsCallObject());
 
     JSObject* pobj = scopeChain();
     while (MOZ_UNLIKELY(!pobj->is<CallObject>()))
@@ -571,33 +564,25 @@ AbstractFramePtr::createSingleton() const
 }
 
 inline bool
-AbstractFramePtr::isFunctionFrame() const
+AbstractFramePtr::isGlobalOrModuleFrame() const
 {
     if (isInterpreterFrame())
-        return asInterpreterFrame()->isFunctionFrame();
+        return asInterpreterFrame()->isGlobalOrModuleFrame();
     if (isBaselineFrame())
-        return asBaselineFrame()->isFunctionFrame();
-    return asRematerializedFrame()->isFunctionFrame();
-}
-
-inline bool
-AbstractFramePtr::isModuleFrame() const
-{
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->isModuleFrame();
-    if (isBaselineFrame())
-        return asBaselineFrame()->isModuleFrame();
-    return asRematerializedFrame()->isModuleFrame();
+        return asBaselineFrame()->isGlobalOrModuleFrame();
+    return asRematerializedFrame()->isGlobalOrModuleFrame();
 }
 
 inline bool
 AbstractFramePtr::isGlobalFrame() const
 {
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->isGlobalFrame();
-    if (isBaselineFrame())
-        return asBaselineFrame()->isGlobalFrame();
-    return asRematerializedFrame()->isGlobalFrame();
+    return isGlobalOrModuleFrame() && !script()->module();
+}
+
+inline bool
+AbstractFramePtr::isModuleFrame() const
+{
+    return isGlobalOrModuleFrame() && script()->module();
 }
 
 inline bool
@@ -688,26 +673,6 @@ AbstractFramePtr::script() const
     if (isBaselineFrame())
         return asBaselineFrame()->script();
     return asRematerializedFrame()->script();
-}
-
-inline JSFunction*
-AbstractFramePtr::fun() const
-{
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->fun();
-    if (isBaselineFrame())
-        return asBaselineFrame()->fun();
-    return asRematerializedFrame()->fun();
-}
-
-inline JSFunction*
-AbstractFramePtr::maybeFun() const
-{
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->maybeFun();
-    if (isBaselineFrame())
-        return asBaselineFrame()->maybeFun();
-    return asRematerializedFrame()->maybeFun();
 }
 
 inline JSFunction*

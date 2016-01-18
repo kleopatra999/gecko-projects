@@ -100,12 +100,10 @@ using namespace js::shell;
 
 using mozilla::ArrayLength;
 using mozilla::Atomic;
-using mozilla::MakeUnique;
 using mozilla::Maybe;
 using mozilla::NumberEqualsInt32;
 using mozilla::PodCopy;
 using mozilla::PodEqual;
-using mozilla::UniquePtr;
 
 enum JSShellExitCode {
     EXITCODE_RUNTIME_ERROR      = 3,
@@ -131,6 +129,12 @@ static const size_t gMaxStackSize = 128 * sizeof(size_t) * 1024;
  * that represent the time internally in microseconds using 32-bit int.
  */
 static const double MAX_TIMEOUT_INTERVAL = 1800.0;
+
+#ifdef NIGHTLY_BUILD
+# define SHARED_MEMORY_DEFAULT 1
+#else
+# define SHARED_MEMORY_DEFAULT 0
+#endif
 
 // Per-runtime shell state.
 struct ShellRuntime
@@ -169,6 +173,7 @@ static bool enableIon = false;
 static bool enableAsmJS = false;
 static bool enableNativeRegExp = false;
 static bool enableUnboxedArrays = false;
+static bool enableSharedMemory = SHARED_MEMORY_DEFAULT;
 #ifdef JS_GC_ZEAL
 static char gZealStr[128];
 #endif
@@ -599,7 +604,7 @@ RunModule(JSContext* cx, const char* filename, FILE* file, bool compileOnly)
     RootedFunction importFun(cx);
     MOZ_ALWAYS_TRUE(GetImportMethod(cx, loaderObj, &importFun));
 
-    AutoValueArray<2> args(cx);
+    JS::AutoValueArray<2> args(cx);
     args[0].setString(JS_NewStringCopyZ(cx, filename));
     args[1].setUndefined();
 
@@ -1349,14 +1354,14 @@ Evaluate(JSContext* cx, unsigned argc, Value* vp)
 
         {
             if (saveBytecode) {
-                if (!JS::CompartmentOptionsRef(cx).cloneSingletons()) {
+                if (!JS::CompartmentCreationOptionsRef(cx).cloneSingletons()) {
                     JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr,
                                          JSSMSG_CACHE_SINGLETON_FAILED);
                     return false;
                 }
 
                 // cloneSingletons implies that singletons are used as template objects.
-                MOZ_ASSERT(JS::CompartmentOptionsRef(cx).getSingletonsAsTemplates());
+                MOZ_ASSERT(JS::CompartmentBehaviorsRef(cx).getSingletonsAsTemplates());
             }
 
             if (loadBytecode) {
@@ -2172,8 +2177,6 @@ DisassembleScript(JSContext* cx, HandleScript script, HandleFunction fun,
             Sprint(sp, " CONSTRUCTOR");
         if (fun->isExprBody())
             Sprint(sp, " EXPRESSION_CLOSURE");
-        if (fun->isFunctionPrototype())
-            Sprint(sp, " Function.prototype");
         if (fun->isSelfHostedBuiltin())
             Sprint(sp, " SELF_HOSTED");
         if (fun->isArrow())
@@ -2534,6 +2537,23 @@ Clone(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
+Crash(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() == 0)
+        MOZ_CRASH("forced crash");
+    RootedString message(cx, JS::ToString(cx, args[0]));
+    if (!message)
+        return false;
+    char* utf8chars = JS_EncodeStringToUTF8(cx, message);
+    if (!utf8chars)
+        return false;
+    MOZ_ReportCrash(utf8chars, __FILE__, __LINE__);
+    MOZ_CRASH_ANNOTATE("MOZ_CRASH(dynamic)");
+    MOZ_REALLY_CRASH();
+}
+
+static bool
 GetSLX(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -2598,6 +2618,13 @@ static const JSClass sandbox_class = {
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
 };
+
+static void
+SetStandardCompartmentOptions(JS::CompartmentOptions& options)
+{
+    options.behaviors().setVersion(JSVERSION_DEFAULT);
+    options.creationOptions().setSharedMemoryAndAtomicsEnabled(enableSharedMemory);
+}
 
 static JSObject*
 NewSandbox(JSContext* cx, bool lazy)
@@ -2669,7 +2696,7 @@ EvalInContext(JSContext* cx, unsigned argc, Value* vp)
         return true;
     }
 
-    JS::AutoFilename filename;
+    JS::UniqueChars filename;
     unsigned lineno;
 
     DescribeScriptedCaller(cx, &filename, &lineno);
@@ -2729,7 +2756,7 @@ WorkerMain(void* arg)
         return;
     }
 
-    mozilla::UniquePtr<ShellRuntime> sr = MakeUnique<ShellRuntime>();
+    UniquePtr<ShellRuntime> sr = MakeUnique<ShellRuntime>();
     if (!sr) {
         JS_DestroyRuntime(rt);
         js_delete(input);
@@ -2738,6 +2765,7 @@ WorkerMain(void* arg)
 
     sr->isWorker = true;
     JS_SetRuntimePrivate(rt, sr.get());
+    JS_SetFutexCanWait(rt);
     JS_SetErrorReporter(rt, my_ErrorReporter);
     SetWorkerRuntimeOptions(rt);
 
@@ -2760,7 +2788,7 @@ WorkerMain(void* arg)
         JSAutoRequest ar(cx);
 
         JS::CompartmentOptions compartmentOptions;
-        compartmentOptions.setVersion(JSVERSION_DEFAULT);
+        SetStandardCompartmentOptions(compartmentOptions);
         RootedObject global(cx, NewGlobalObject(cx, compartmentOptions, nullptr));
         if (!global)
             break;
@@ -2808,19 +2836,32 @@ EvalInWorker(JSContext* cx, unsigned argc, Value* vp)
     JSLinearString* str = &args[0].toString()->asLinear();
 
     char16_t* chars = (char16_t*) js_malloc(str->length() * sizeof(char16_t));
-    if (!chars)
+    if (!chars) {
+        ReportOutOfMemory(cx);
         return false;
+    }
+
     CopyChars(chars, *str);
 
     WorkerInput* input = js_new<WorkerInput>(cx->runtime(), chars, str->length());
-    if (!input)
+    if (!input) {
+        ReportOutOfMemory(cx);
         return false;
+    }
 
     PRThread* thread = PR_CreateThread(PR_USER_THREAD, WorkerMain, input,
                                        PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD,
                                        gMaxStackSize + 128 * 1024);
-    if (!thread || !workerThreads.append(thread))
+    if (!thread) {
+        ReportOutOfMemory(cx);
         return false;
+    }
+
+    if (!workerThreads.append(thread)) {
+        ReportOutOfMemory(cx);
+        PR_JoinThread(thread);
+        return false;
+    }
 
     return true;
 }
@@ -3313,7 +3354,7 @@ ParseModule(JSContext* cx, unsigned argc, Value* vp)
     if (!scriptContents)
         return false;
 
-    mozilla::UniquePtr<char, JS::FreePolicy> filename;
+    UniqueChars filename;
     CompileOptions options(cx);
     if (args.length() > 1) {
         if (!args[1].isString()) {
@@ -3781,11 +3822,13 @@ EscapeForShell(AutoCStringVector& argv)
 
 static Vector<const char*, 4, js::SystemAllocPolicy> sPropagatedFlags;
 
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
 static bool
 PropagateFlagToNestedShells(const char* flag)
 {
     return sPropagatedFlags.append(flag);
 }
+#endif
 
 static bool
 NestedShell(JSContext* cx, unsigned argc, Value* vp)
@@ -3908,7 +3951,7 @@ ThisFilename(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JS::AutoFilename filename;
+    JS::UniqueChars filename;
     if (!DescribeScriptedCaller(cx, &filename) || !filename.get()) {
         args.rval().setString(cx->runtime()->emptyString);
         return true;
@@ -3952,33 +3995,42 @@ static bool
 NewGlobal(JSContext* cx, unsigned argc, Value* vp)
 {
     JSPrincipals* principals = nullptr;
+
     JS::CompartmentOptions options;
-    options.setVersion(JSVERSION_DEFAULT);
+    JS::CompartmentCreationOptions& creationOptions = options.creationOptions();
+    JS::CompartmentBehaviors& behaviors = options.behaviors();
+
+    SetStandardCompartmentOptions(options);
 
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() == 1 && args[0].isObject()) {
         RootedObject opts(cx, &args[0].toObject());
         RootedValue v(cx);
 
-        if (!JS_GetProperty(cx, opts, "sameZoneAs", &v))
-            return false;
-        if (v.isObject())
-            options.setSameZoneAs(UncheckedUnwrap(&v.toObject()));
-
         if (!JS_GetProperty(cx, opts, "invisibleToDebugger", &v))
             return false;
         if (v.isBoolean())
-            options.setInvisibleToDebugger(v.toBoolean());
+            creationOptions.setInvisibleToDebugger(v.toBoolean());
 
         if (!JS_GetProperty(cx, opts, "cloneSingletons", &v))
             return false;
         if (v.isBoolean())
-            options.setCloneSingletons(v.toBoolean());
+            creationOptions.setCloneSingletons(v.toBoolean());
+
+        if (!JS_GetProperty(cx, opts, "experimentalDateTimeFormatFormatToPartsEnabled", &v))
+            return false;
+        if (v.isBoolean())
+            creationOptions.setExperimentalDateTimeFormatFormatToPartsEnabled(v.toBoolean());
+
+        if (!JS_GetProperty(cx, opts, "sameZoneAs", &v))
+            return false;
+        if (v.isObject())
+            creationOptions.setSameZoneAs(UncheckedUnwrap(&v.toObject()));
 
         if (!JS_GetProperty(cx, opts, "disableLazyParsing", &v))
             return false;
         if (v.isBoolean())
-            options.setDisableLazyParsing(v.toBoolean());
+            behaviors.setDisableLazyParsing(v.toBoolean());
 
         if (!JS_GetProperty(cx, opts, "principal", &v))
             return false;
@@ -4100,12 +4152,12 @@ WithSourceHook(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    UniquePtr<ShellSourceHook> hook =
-        MakeUnique<ShellSourceHook>(cx, args[0].toObject().as<JSFunction>());
+    mozilla::UniquePtr<ShellSourceHook> hook =
+        mozilla::MakeUnique<ShellSourceHook>(cx, args[0].toObject().as<JSFunction>());
     if (!hook)
         return false;
 
-    UniquePtr<SourceHook> savedHook = js::ForgetSourceHook(cx->runtime());
+    mozilla::UniquePtr<SourceHook> savedHook = js::ForgetSourceHook(cx->runtime());
     js::SetSourceHook(cx->runtime(), Move(hook));
 
     RootedObject fun(cx, &args[1].toObject());
@@ -4306,6 +4358,9 @@ GetSharedArrayBuffer(JSContext* cx, unsigned argc, Value* vp)
     SharedArrayRawBuffer* buf = sharedArrayBufferMailbox;
     if (buf) {
         buf->addReference();
+        // Shared memory is enabled globally in the shell: there can't be a worker
+        // that does not enable it if the main thread has it.
+        MOZ_ASSERT(cx->compartment()->creationOptions().getSharedMemoryAndAtomicsEnabled());
         newObj = SharedArrayBufferObject::New(cx, buf);
         if (!newObj) {
             buf->dropReference();
@@ -4587,7 +4642,7 @@ class ShellAutoEntryMonitor : JS::dbg::AutoEntryMonitor {
             return;
         }
 
-        oom = !log.append(make_string_copy("anonymous"));
+        oom = !log.append(DuplicateString("anonymous"));
     }
 
     void Entry(JSContext* cx, JSScript* script, JS::HandleValue asyncStack,
@@ -4756,6 +4811,32 @@ EntryPoints(JSContext* cx, unsigned argc, Value* vp)
 
     JS_ReportError(cx, "bad 'params' object");
     return false;
+}
+
+static bool
+SetARMHwCapFlags(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() != 1) {
+        JS_ReportError(cx, "Wrong number of arguments");
+        return false;
+    }
+
+    RootedString flagsListString(cx, JS::ToString(cx, args.get(0)));
+    if (!flagsListString)
+        return false;
+
+#if defined(JS_CODEGEN_ARM)
+    JSAutoByteString flagsList(cx, flagsListString);
+    if (!flagsList)
+        return false;
+
+    jit::ParseARMHwCapFlags(flagsList.ptr());
+#endif
+
+    args.rval().setUndefined();
+    return true;
 }
 
 static const JSFunctionSpecWithHelp shell_functions[] = {
@@ -5218,6 +5299,15 @@ TestAssertRecoveredOnBailout,
 "  Prints the static scope chain of an interpreted function or a module."),
 #endif
 
+    JS_FN_HELP("crash", Crash, 0, 0,
+"crash([message])",
+"  Crashes the process with a MOZ_CRASH."),
+
+    JS_FN_HELP("setARMHwCapFlags", SetARMHwCapFlags, 1, 0,
+"setARMHwCapFlags(\"flag1,flag2 flag3\")",
+"  On non-ARM, no-op. On ARM, set the hardware capabilities. The list of \n"
+"  flags is available by calling this function with \"help\" as the flag's name"),
+
     JS_FS_HELP_END
 };
 
@@ -5419,7 +5509,7 @@ PrintStackTrace(JSContext* cx, HandleValue exn)
     if (!BuildStackString(cx, stackObj, &stackStr, 2))
         return false;
 
-    UniquePtr<char[], JS::FreePolicy> stack(JS_EncodeStringToUTF8(cx, stackStr));
+    UniqueChars stack(JS_EncodeStringToUTF8(cx, stackStr));
     if (!stack)
         return false;
 
@@ -6402,6 +6492,17 @@ SetRuntimeOptions(JSRuntime* rt, const OptionParser& op)
         return false;
     }
 
+#ifdef ENABLE_SHARED_ARRAY_BUFFER
+    if (const char* str = op.getStringOption("shared-memory")) {
+        if (strcmp(str, "off") == 0)
+            enableSharedMemory = false;
+        else if (strcmp(str, "on") == 0)
+            enableSharedMemory = true;
+        else
+            return OptionFailure("shared-memory", str);
+    }
+#endif
+
 #if defined(JS_CODEGEN_ARM)
     if (const char* str = op.getStringOption("arm-hwcap"))
         jit::ParseARMHwCapFlags(str);
@@ -6506,10 +6607,9 @@ Shell(JSContext* cx, OptionParser* op, char** envp)
     if (op->getBoolOption("disable-oom-functions"))
         disableOOMFunctions = true;
 
-    RootedObject glob(cx);
     JS::CompartmentOptions options;
-    options.setVersion(JSVERSION_DEFAULT);
-    glob = NewGlobalObject(cx, options, nullptr);
+    SetStandardCompartmentOptions(options);
+    RootedObject glob(cx, NewGlobalObject(cx, options, nullptr));
     if (!glob)
         return 1;
 
@@ -6632,6 +6732,16 @@ main(int argc, char** argv, char** envp)
         || !op.addBoolOption('\0', "no-native-regexp", "Disable native regexp compilation")
         || !op.addBoolOption('\0', "no-unboxed-objects", "Disable creating unboxed plain objects")
         || !op.addBoolOption('\0', "unboxed-arrays", "Allow creating unboxed arrays")
+#ifdef ENABLE_SHARED_ARRAY_BUFFER
+        || !op.addStringOption('\0', "shared-memory", "on/off",
+                               "SharedArrayBuffer and Atomics "
+#  if SHARED_MEMORY_DEFAULT
+                               "(default: on, off to disable)"
+#  else
+                               "(default: off, on to enable)"
+#  endif
+            )
+#endif
         || !op.addStringOption('\0', "ion-shared-stubs", "on/off",
                                "Use shared stubs (default: off, on to enable)")
         || !op.addStringOption('\0', "ion-scalar-replacement", "on/off",
@@ -6690,7 +6800,7 @@ main(int argc, char** argv, char** envp)
         || !op.addIntOption('\0', "baseline-warmup-threshold", "COUNT",
                             "Wait for COUNT calls or iterations before baseline-compiling "
                             "(default: 10)", -1)
-        || !op.addBoolOption('\0', "non-writable-jitcode", "Allocate JIT code as non-writable memory.")
+        || !op.addBoolOption('\0', "non-writable-jitcode", "(NOP for fuzzers) Allocate JIT code as non-writable memory.")
         || !op.addBoolOption('\0', "no-fpu", "Pretend CPU does not support floating-point operations "
                              "to test JIT codegen (no-op on platforms other than x86).")
         || !op.addBoolOption('\0', "no-sse3", "Pretend CPU does not support SSE3 instructions and above "
@@ -6769,11 +6879,6 @@ main(int argc, char** argv, char** envp)
     OOM_printAllocationCount = op.getBoolOption('O');
 #endif
 
-    if (op.getBoolOption("non-writable-jitcode")) {
-        js::jit::ExecutableAllocator::nonWritableJitCode = true;
-        PropagateFlagToNestedShells("--non-writable-jitcode");
-    }
-
 #ifdef JS_CODEGEN_X86
     if (op.getBoolOption("no-fpu"))
         js::jit::CPUInfo::SetFloatingPointDisabled();
@@ -6818,11 +6923,13 @@ main(int argc, char** argv, char** envp)
     if (!rt)
         return 1;
 
-    mozilla::UniquePtr<ShellRuntime> sr = MakeUnique<ShellRuntime>();
+    UniquePtr<ShellRuntime> sr = MakeUnique<ShellRuntime>();
     if (!sr)
         return 1;
 
     JS_SetRuntimePrivate(rt, sr.get());
+    // Waiting is allowed on the shell's main thread, for now.
+    JS_SetFutexCanWait(rt);
     JS_SetErrorReporter(rt, my_ErrorReporter);
     JS::SetOutOfMemoryCallback(rt, my_OOMCallback, nullptr);
     if (!SetRuntimeOptions(rt, op))
@@ -6859,7 +6966,6 @@ main(int argc, char** argv, char** envp)
         return 1;
 
     JS_SetGCParameter(rt, JSGC_MODE, JSGC_MODE_INCREMENTAL);
-    JS_SetGCParameterForThread(cx, JSGC_MAX_CODE_CACHE_BYTES, 16 * 1024 * 1024);
 
     JS::SetLargeAllocationFailureCallback(rt, my_LargeAllocFailCallback, (void*)cx);
 

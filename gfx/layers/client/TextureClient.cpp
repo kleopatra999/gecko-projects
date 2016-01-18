@@ -183,7 +183,6 @@ private:
 static void DestroyTextureData(TextureData* aTextureData, ISurfaceAllocator* aAllocator,
                                bool aDeallocate, bool aMainThreadOnly)
 {
-  MOZ_ASSERT(aTextureData);
   if (!aTextureData) {
     return;
   }
@@ -231,6 +230,11 @@ void DeallocateTextureClientSyncProxy(TextureDeallocParams params,
 void
 DeallocateTextureClient(TextureDeallocParams params)
 {
+  if (!params.actor && !params.data) {
+    // Nothing to do
+    return;
+  }
+
   TextureChild* actor = params.actor;
   MessageLoop* ipdlMsgLoop = nullptr;
 
@@ -300,13 +304,13 @@ DeallocateTextureClient(TextureDeallocParams params)
   if (params.syncDeallocation) {
     MOZ_PERFORMANCE_WARNING("gfx",
       "TextureClient/Host pair requires synchronous deallocation");
-    actor->DestroySynchronously();
+    actor->DestroySynchronously(actor->GetForwarder());
     DestroyTextureData(params.data, params.allocator, params.clientDeallocation,
                        actor->mMainThreadOnly);
   } else {
     actor->mTextureData = params.data;
     actor->mOwnsTextureData = params.clientDeallocation;
-    actor->Destroy();
+    actor->Destroy(actor->GetForwarder());
     // DestroyTextureData will be called by TextureChild::ActorDestroy
   }
 }
@@ -347,6 +351,14 @@ void TextureClient::Destroy(bool aForceSync)
 }
 
 bool
+TextureClient::DestroyFallback(PTextureChild* aActor)
+{
+  // should not end up here so crash debug builds.
+  MOZ_ASSERT(false);
+  return aActor->SendDestroySync();
+}
+
+bool
 TextureClient::Lock(OpenMode aMode)
 {
   MOZ_ASSERT(IsValid());
@@ -362,6 +374,24 @@ TextureClient::Lock(OpenMode aMode)
 
   mIsLocked = mData->Lock(aMode, mReleaseFenceHandle.IsValid() ? &mReleaseFenceHandle : nullptr);
   mOpenMode = aMode;
+
+  auto format = GetFormat();
+  if (mIsLocked && CanExposeDrawTarget() &&
+      aMode == OpenMode::OPEN_READ_WRITE &&
+      NS_IsMainThread() &&
+      // the formats that we apparently expect, in the cairo backend. Any other
+      // format will trigger an assertion in GfxFormatToCairoFormat.
+      (format == SurfaceFormat::A8R8G8B8_UINT32 ||
+      format == SurfaceFormat::X8R8G8B8_UINT32 ||
+      format == SurfaceFormat::A8 ||
+      format == SurfaceFormat::R5G6B5_UINT16)) {
+    if (!BorrowDrawTarget()) {
+      // Failed to get a DrawTarget, means we won't be able to write into the
+      // texture, might as well fail now.
+      Unlock();
+      return false;
+    }
+  }
 
   return mIsLocked;
 }
@@ -427,6 +457,9 @@ TextureClient::UpdateFromSurface(gfx::SourceSurface* aSurface)
   MOZ_ASSERT(IsValid());
   MOZ_ASSERT(mIsLocked);
   MOZ_ASSERT(aSurface);
+  // If you run into this assertion, make sure the texture was locked write-only
+  // rather than read-write.
+  MOZ_ASSERT(!mBorrowedDrawTarget);
 
   // XXX - It would be better to first try the DrawTarget approach and fallback
   // to the backend-specific implementation because the latter will usually do
@@ -631,7 +664,7 @@ TextureClient::TextureClientRecycleCallback(TextureClient* aClient, void* aClosu
 }
 
 void
-TextureClient::SetRecycleAllocator(TextureClientRecycleAllocator* aAllocator)
+TextureClient::SetRecycleAllocator(ITextureClientRecycleAllocator* aAllocator)
 {
   mRecycleAllocator = aAllocator;
   if (aAllocator) {

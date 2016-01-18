@@ -2162,6 +2162,16 @@ MBinaryBitwiseInstruction::foldUnnecessaryBitop()
     if (lhs == rhs)
         return foldIfEqual();
 
+    if (maskMatchesRightRange) {
+        MOZ_ASSERT(lhs->isConstantValue() && lhs->type() == MIRType_Int32);
+        return foldIfAllBitsSet(0);
+    }
+
+    if (maskMatchesLeftRange) {
+        MOZ_ASSERT(rhs->isConstantValue() && rhs->type() == MIRType_Int32);
+        return foldIfAllBitsSet(1);
+    }
+
     return this;
 }
 
@@ -2226,6 +2236,7 @@ CanProduceNegativeZero(MDefinition* def) {
         case MDefinition::Op_Constant:
             if (def->type() == MIRType_Double && def->constantValue().toDouble() == -0.0)
                 return true;
+            MOZ_FALLTHROUGH;
         case MDefinition::Op_BitAnd:
         case MDefinition::Op_BitOr:
         case MDefinition::Op_BitXor:
@@ -2304,7 +2315,7 @@ NeedNegativeZeroCheck(MDefinition* def)
             if (rhs->id() < lhs->id() && CanProduceNegativeZero(lhs))
                 return true;
 
-            /* Fall through...  */
+            MOZ_FALLTHROUGH;
           }
           case MDefinition::Op_StoreElement:
           case MDefinition::Op_StoreElementHole:
@@ -3083,7 +3094,7 @@ MTypeOf::foldsTo(TempAllocator& alloc)
             type = JSTYPE_OBJECT;
             break;
         }
-        // FALL THROUGH
+        MOZ_FALLTHROUGH;
       default:
         return this;
     }
@@ -3368,9 +3379,10 @@ MToInt32::foldsTo(TempAllocator& alloc)
           case MIRType_Float32:
           case MIRType_Double:
             int32_t ival;
-            // Only the value within the range of Int32 can be substitued as constant.
+            // Only the value within the range of Int32 can be substituted as constant.
             if (mozilla::NumberEqualsInt32(val.toNumber(), &ival))
                 return MConstant::New(alloc, Int32Value(ival));
+            break;
           default:
             break;
         }
@@ -4672,13 +4684,13 @@ InlinePropertyTable::buildTypeSetForFunction(JSFunction* func) const
 SharedMem<void*>
 MLoadTypedArrayElementStatic::base() const
 {
-    return AnyTypedArrayViewData(someTypedArray_);
+    return someTypedArray_->as<TypedArrayObject>().viewDataEither();
 }
 
 size_t
 MLoadTypedArrayElementStatic::length() const
 {
-    return AnyTypedArrayByteLength(someTypedArray_);
+    return someTypedArray_->as<TypedArrayObject>().byteLength();
 }
 
 bool
@@ -4701,7 +4713,7 @@ MLoadTypedArrayElementStatic::congruentTo(const MDefinition* ins) const
 SharedMem<void*>
 MStoreTypedArrayElementStatic::base() const
 {
-    return AnyTypedArrayViewData(someTypedArray_);
+    return someTypedArray_->as<TypedArrayObject>().viewDataEither();
 }
 
 bool
@@ -4716,7 +4728,7 @@ MGetPropertyCache::allowDoubleResult() const
 size_t
 MStoreTypedArrayElementStatic::length() const
 {
-    return AnyTypedArrayByteLength(someTypedArray_);
+    return someTypedArray_->as<TypedArrayObject>().byteLength();
 }
 
 bool
@@ -4872,6 +4884,20 @@ MTableSwitch::foldsTo(TempAllocator& alloc)
     if (numSuccessors() == 1 || (op->type() != MIRType_Value && !IsNumberType(op->type())))
         return MGoto::New(alloc, getDefault());
 
+    if (op->isConstantValue()) {
+        Value v = op->constantValue();
+        if (v.isInt32()) {
+            int32_t i = v.toInt32() - low_;
+            MBasicBlock* target;
+            if (size_t(i) < numCases())
+                target = getCase(size_t(i));
+            else
+                target = getDefault();
+            MOZ_ASSERT(target);
+            return MGoto::New(alloc, target);
+        }
+    }
+
     return this;
 }
 
@@ -4951,7 +4977,7 @@ jit::ElementAccessIsDenseNative(CompilerConstraintList* constraints,
 
     // Typed arrays are native classes but do not have dense elements.
     const Class* clasp = types->getKnownClass(constraints);
-    return clasp && clasp->isNative() && !IsAnyTypedArrayClass(clasp);
+    return clasp && clasp->isNative() && !IsTypedArrayClass(clasp);
 }
 
 JSValueType
@@ -4997,9 +5023,9 @@ jit::UnboxedArrayElementType(CompilerConstraintList* constraints, MDefinition* o
 }
 
 bool
-jit::ElementAccessIsAnyTypedArray(CompilerConstraintList* constraints,
-                                  MDefinition* obj, MDefinition* id,
-                                  Scalar::Type* arrayType)
+jit::ElementAccessIsTypedArray(CompilerConstraintList* constraints,
+                               MDefinition* obj, MDefinition* id,
+                               Scalar::Type* arrayType)
 {
     if (obj->mightBeType(MIRType_String))
         return false;
@@ -5400,7 +5426,7 @@ jit::TypeCanHaveExtraIndexedProperties(IonBuilder* builder, TemporaryTypeSet* ty
     // Note: typed arrays have indexed properties not accounted for by type
     // information, though these are all in bounds and will be accounted for
     // by JIT paths.
-    if (!clasp || (ClassCanHaveExtraProperties(clasp) && !IsAnyTypedArrayClass(clasp)))
+    if (!clasp || (ClassCanHaveExtraProperties(clasp) && !IsTypedArrayClass(clasp)))
         return true;
 
     if (types->hasObjectFlags(builder->constraints(), OBJECT_FLAG_SPARSE_INDEXES))
@@ -5585,7 +5611,7 @@ jit::PropertyWriteNeedsTypeBarrier(TempAllocator& alloc, CompilerConstraintList*
 
         // TI doesn't track TypedArray indexes and should never insert a type
         // barrier for them.
-        if (!name && IsAnyTypedArrayClass(key->clasp()))
+        if (!name && IsTypedArrayClass(key->clasp()))
             continue;
 
         jsid id = name ? NameToId(name) : JSID_VOID;
@@ -5635,7 +5661,7 @@ jit::PropertyWriteNeedsTypeBarrier(TempAllocator& alloc, CompilerConstraintList*
         TypeSet::ObjectKey* key = types->getObject(i);
         if (!key || key->unknownProperties())
             continue;
-        if (!name && IsAnyTypedArrayClass(key->clasp()))
+        if (!name && IsTypedArrayClass(key->clasp()))
             continue;
 
         jsid id = name ? NameToId(name) : JSID_VOID;

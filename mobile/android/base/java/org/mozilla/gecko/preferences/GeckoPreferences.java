@@ -25,19 +25,22 @@ import org.mozilla.gecko.Locales;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Restrictions;
+import org.mozilla.gecko.SnackbarHelper;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.TelemetryContract.Method;
 import org.mozilla.gecko.background.common.GlobalConstants;
-import org.mozilla.gecko.background.healthreport.HealthReportConstants;
 import org.mozilla.gecko.db.BrowserContract.SuggestedSites;
 import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
+import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
+import org.mozilla.gecko.util.NativeEventListener;
+import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.FloatingHintEditText;
 
@@ -93,6 +96,7 @@ extends PreferenceActivity
 implements
 GeckoActivityStatus,
 GeckoEventListener,
+NativeEventListener,
 OnPreferenceChangeListener,
 OnSharedPreferenceChangeListener
 {
@@ -133,18 +137,15 @@ OnSharedPreferenceChangeListener
     private static final String PREFS_TRACKING_PROTECTION_PB = "privacy.trackingprotection.pbmode.enabled";
     public static final String PREFS_VOICE_INPUT_ENABLED = NON_PREF_PREFIX + "voice_input_enabled";
     public static final String PREFS_QRCODE_ENABLED = NON_PREF_PREFIX + "qrcode_enabled";
-    private static final String PREFS_ADVANCED = NON_PREF_PREFIX + "advanced.enabled";
-    private static final String PREFS_ACCESSIBILITY = NON_PREF_PREFIX + "accessibility.enabled";
-    private static final String PREFS_CUSTOMIZE_HOME = NON_PREF_PREFIX + "customize_home";
     private static final String PREFS_TRACKING_PROTECTION_PRIVATE_BROWSING = "privacy.trackingprotection.pbmode.enabled";
     private static final String PREFS_TRACKING_PROTECTION_LEARN_MORE = NON_PREF_PREFIX + "trackingprotection.learn_more";
     private static final String PREFS_CLEAR_PRIVATE_DATA = NON_PREF_PREFIX + "privacy.clear";
     private static final String PREFS_CLEAR_PRIVATE_DATA_EXIT = NON_PREF_PREFIX + "history.clear_on_exit";
     private static final String PREFS_SCREEN_ADVANCED = NON_PREF_PREFIX + "advanced_screen";
-    private static final String PREFS_CATEGORY_HOMEPAGE = NON_PREF_PREFIX + "category_homepage";
     public static final String PREFS_HOMEPAGE = NON_PREF_PREFIX + "homepage";
     public static final String PREFS_HISTORY_SAVED_SEARCH = NON_PREF_PREFIX + "search.search_history.enabled";
     private static final String PREFS_FAQ_LINK = NON_PREF_PREFIX + "faq.link";
+    private static final String PREFS_FEEDBACK_LINK = NON_PREF_PREFIX + "feedback.link";
 
     private static final String ACTION_STUMBLER_UPLOAD_PREF = AppConstants.ANDROID_PACKAGE_NAME + ".STUMBLER_PREF";
 
@@ -365,8 +366,11 @@ OnSharedPreferenceChangeListener
             addPreferencesFromResource(res);
         }
 
-        EventDispatcher.getInstance().registerGeckoThreadListener(this,
+        EventDispatcher.getInstance().registerGeckoThreadListener((GeckoEventListener) this,
             "Sanitize:Finished");
+
+        EventDispatcher.getInstance().registerGeckoThreadListener((NativeEventListener) this,
+            "Snackbar:Show");
 
         // Add handling for long-press click.
         // This is only for Android 3.0 and below (which use the long-press-context-menu paradigm).
@@ -516,8 +520,12 @@ OnSharedPreferenceChangeListener
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        EventDispatcher.getInstance().unregisterGeckoThreadListener(this,
+        EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener) this,
             "Sanitize:Finished");
+
+        EventDispatcher.getInstance().unregisterGeckoThreadListener((NativeEventListener) this,
+            "Snackbar:Show");
+
         if (mPrefsRequestId > 0) {
             PrefsHelper.removeObserver(mPrefsRequestId);
         }
@@ -621,16 +629,20 @@ OnSharedPreferenceChangeListener
             if (event.equals("Sanitize:Finished")) {
                 boolean success = message.getBoolean("success");
                 final int stringRes = success ? R.string.private_data_success : R.string.private_data_fail;
-                final Context context = this;
-                ThreadUtils.postToUiThread(new Runnable () {
-                    @Override
-                    public void run() {
-                        Snackbar.make(findViewById(android.R.id.content), stringRes, Snackbar.LENGTH_SHORT).show();
-                    }
-                });
+
+                SnackbarHelper.showSnackbar(GeckoPreferences.this,
+                        getString(stringRes),
+                        Snackbar.LENGTH_SHORT);
             }
         } catch (Exception e) {
             Log.e(LOGTAG, "Exception handling message \"" + event + "\":", e);
+        }
+    }
+
+    @Override
+    public void handleMessage(final String event, final NativeJSObject message, final EventCallback callback) {
+        if ("Snackbar:Show".equals(event)) {
+            SnackbarHelper.showSnackbar(this, message, callback);
         }
     }
 
@@ -852,6 +864,18 @@ OnSharedPreferenceChangeListener
 
                     final String url = getResources().getString(R.string.faq_link, VERSION, OS, LOCALE);
                     ((LinkPreference) pref).setUrl(url);
+                } else if (PREFS_FEEDBACK_LINK.equals(key)) {
+                    PrefsHelper.getPref("app.feedbackURL", new PrefsHelper.PrefHandlerBase() {
+                        @Override
+                        public void prefValue(String prefName, final String value) {
+                            ThreadUtils.postToUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    ((LinkPreference) pref).setUrl(value);
+                                }
+                            });
+                        }
+                    });
                 }
 
                 // Some Preference UI elements are not actually preferences,
@@ -972,10 +996,10 @@ OnSharedPreferenceChangeListener
      * <code>PREFS_HEALTHREPORT_UPLOAD_ENABLED</code> pref.
      */
     public static void broadcastHealthReportUploadPref(final Context context, final boolean value) {
-        broadcastPrefAction(context,
-                            HealthReportConstants.ACTION_HEALTHREPORT_UPLOAD_PREF,
-                            PREFS_HEALTHREPORT_UPLOAD_ENABLED,
-                            value);
+        //broadcastPrefAction(context,
+        //                    HealthReportConstants.ACTION_HEALTHREPORT_UPLOAD_PREF,
+        //                    PREFS_HEALTHREPORT_UPLOAD_ENABLED,
+        //                    value);
     }
 
     /**
@@ -983,13 +1007,13 @@ OnSharedPreferenceChangeListener
      * <code>PREFS_HEALTHREPORT_UPLOAD_ENABLED</code> pref.
      */
     public static void broadcastHealthReportUploadPref(final Context context) {
-        final boolean value = getBooleanPref(context, PREFS_HEALTHREPORT_UPLOAD_ENABLED, true);
-        broadcastHealthReportUploadPref(context, value);
+        //final boolean value = getBooleanPref(context, PREFS_HEALTHREPORT_UPLOAD_ENABLED, true);
+        //broadcastHealthReportUploadPref(context, value);
     }
 
     public static void broadcastHealthReportPrune(final Context context) {
-        final Intent intent = new Intent(HealthReportConstants.ACTION_HEALTHREPORT_PRUNE);
-        broadcastAction(context, intent);
+        //final Intent intent = new Intent(HealthReportConstants.ACTION_HEALTHREPORT_PRUNE);
+        //broadcastAction(context, intent);
     }
 
     /**

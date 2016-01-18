@@ -24,6 +24,7 @@ WEBIDL_FILES = [
     'Animatable.webidl',
     'Animation.webidl',
     'AnimationEffectReadOnly.webidl',
+    'AnimationEffectTimingReadOnly.webidl',
     'AnimationEvent.webidl',
     'AnimationTimeline.webidl',
     'AnonymousContent.webidl',
@@ -836,6 +837,7 @@ if CONFIG['MOZ_WEBRTC']:
         'MediaStreamTrackEvent.webidl',
         'RTCDataChannelEvent.webidl',
         'RTCPeerConnectionIceEvent.webidl',
+        'RTCTrackEvent.webidl',
     ]
 
 if CONFIG['MOZ_WEBSPEECH']:

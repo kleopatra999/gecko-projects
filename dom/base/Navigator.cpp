@@ -106,7 +106,7 @@
 #include "mozilla/dom/Promise.h"
 
 #include "nsIUploadChannel2.h"
-#include "nsFormData.h"
+#include "mozilla/dom/FormData.h"
 #include "nsIDocShell.h"
 
 #include "WorkerPrivate.h"
@@ -1292,7 +1292,7 @@ Navigator::SendBeacon(const nsAString& aUrl,
       mimeType = NS_ConvertUTF16toUTF8(type);
 
     } else if (aData.Value().IsFormData()) {
-      nsFormData& form = aData.Value().GetAsFormData();
+      FormData& form = aData.Value().GetAsFormData();
       uint64_t len;
       nsAutoCString charset;
       form.GetSendInfo(getter_AddRefs(in),
@@ -1394,6 +1394,7 @@ Navigator::MozGetUserMediaDevices(const MediaStreamConstraints& aConstraints,
                                   MozGetUserMediaDevicesSuccessCallback& aOnSuccess,
                                   NavigatorUserMediaErrorCallback& aOnError,
                                   uint64_t aInnerWindowID,
+                                  const nsAString& aCallID,
                                   ErrorResult& aRv)
 {
   CallbackObjectHolder<MozGetUserMediaDevicesSuccessCallback,
@@ -1413,7 +1414,7 @@ Navigator::MozGetUserMediaDevices(const MediaStreamConstraints& aConstraints,
 
   MediaManager* manager = MediaManager::Get();
   aRv = manager->GetUserMediaDevices(mWindow, aConstraints, onsuccess, onerror,
-                                     aInnerWindowID);
+                                     aInnerWindowID, aCallID);
 }
 #endif
 

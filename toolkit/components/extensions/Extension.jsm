@@ -21,6 +21,8 @@ const Cc = Components.classes;
 const Cu = Components.utils;
 const Cr = Components.results;
 
+Cu.importGlobalProperties(["TextEncoder"]);
+
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
@@ -46,6 +48,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
                                   "resource://gre/modules/Schemas.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                  "resource://gre/modules/AppConstants.jsm");
 
 Cu.import("resource://gre/modules/ExtensionManagement.jsm");
 
@@ -79,6 +83,7 @@ var {
   MessageBroker,
   Messenger,
   injectAPI,
+  instanceOf,
   extend,
   flushJarCache,
 } = ExtensionUtils;
@@ -424,6 +429,8 @@ this.ExtensionData = function(rootURI) {
 };
 
 ExtensionData.prototype = {
+  builtinMessages: null,
+
   get logger() {
     let id = this.id || "<unknown>";
     return Log.repository.getLogger(LOGGER_ID_BASE + id);
@@ -518,7 +525,8 @@ ExtensionData.prototype = {
           return;
         }
         try {
-          let text = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+          let text = NetUtil.readInputStreamToString(inputStream, inputStream.available(),
+                                                     { charset: "utf-8" });
           resolve(JSON.parse(text));
         } catch (e) {
           reject(e);
@@ -607,6 +615,12 @@ ExtensionData.prototype = {
           }
         }
 
+        this.localeData = new LocaleData({
+          defaultLocale: this.defaultLocale,
+          locales,
+          builtinMessages: this.builtinMessages,
+        });
+
         return locales;
       }.bind(this));
     }
@@ -620,7 +634,6 @@ ExtensionData.prototype = {
   // as returned by |readLocaleFile|.
   initAllLocales: Task.async(function* () {
     let locales = yield this.promiseLocales();
-    this.localeData = new LocaleData({ defaultLocale: this.defaultLocale, locales });
 
     yield Promise.all(Array.from(locales.keys(),
                                  locale => this.readLocaleFile(locale)));
@@ -649,8 +662,6 @@ ExtensionData.prototype = {
   //
   // If no locales are unavailable, resolves to |null|.
   initLocale: Task.async(function* (locale = this.defaultLocale) {
-    this.localeData = new LocaleData({ defaultLocale: this.defaultLocale });
-
     if (locale == null) {
       return null;
     }
@@ -825,12 +836,16 @@ this.Extension.generateXPI = function(id, data) {
     let script = files[filename];
     if (typeof(script) == "function") {
       script = "(" + script.toString() + ")()";
-    } else if (typeof(script) == "object") {
+    } else if (instanceOf(script, "Object")) {
       script = JSON.stringify(script);
     }
 
-    let stream = Cc["@mozilla.org/io/string-input-stream;1"].createInstance(Ci.nsIStringInputStream);
-    stream.data = script;
+    if (!instanceOf(script, "ArrayBuffer")) {
+      script = new TextEncoder("utf-8").encode(script).buffer;
+    }
+
+    let stream = Cc["@mozilla.org/io/arraybuffer-input-stream;1"].createInstance(Ci.nsIArrayBufferInputStream);
+    stream.setData(script, 0, script.byteLength);
 
     generateFile(filename);
     zipW.addEntryStream(filename, time, 0, stream, false);
@@ -911,6 +926,10 @@ Extension.prototype = extend(Object.create(ExtensionData.prototype), {
   broadcast(msg, data) {
     return new Promise(resolve => {
       let count = Services.ppmm.childCount;
+      if (AppConstants.MOZ_NUWA_PROCESS) {
+        // The nuwa process is frozen, so don't expect it to answer.
+        count--;
+      }
       Services.ppmm.addMessageListener(msg + "Complete", function listener() {
         count--;
         if (count == 0) {
@@ -962,6 +981,12 @@ Extension.prototype = extend(Object.create(ExtensionData.prototype), {
 
   forgetOnClose(obj) {
     this.onShutdown.delete(obj);
+  },
+
+  get builtinMessages() {
+    return new Map([
+      ["@@extension_id", this.uuid],
+    ]);
   },
 
   // Reads the locale file for the given Gecko-compatible locale code, or if

@@ -10,6 +10,8 @@ var Cc = Components.classes;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/NotificationDB.jsm");
 Cu.import("resource:///modules/RecentWindow.jsm");
+Cu.import("resource:///modules/UserContextUI.jsm");
+
 
 XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
                                   "resource://gre/modules/Preferences.jsm");
@@ -53,7 +55,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
                                    "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
-
+XPCOMUtils.defineLazyServiceGetter(this, "gAboutNewTabService",
+                                   "@mozilla.org/browser/aboutnewtab-service;1",
+                                   "nsIAboutNewTabService");
 XPCOMUtils.defineLazyGetter(this, "gBrowserBundle", function() {
   return Services.strings.createBundle('chrome://browser/locale/browser.properties');
 });
@@ -237,10 +241,6 @@ var gInitialPages = [
 
 XPCOMUtils.defineLazyGetter(this, "Win7Features", function () {
   if (AppConstants.platform != "win")
-    return null;
-
-  // Bug 666808 - AeroPeek support for e10s
-  if (gMultiProcessBrowser)
     return null;
 
   const WINTASKBAR_CONTRACTID = "@mozilla.org/windows-taskbar;1";
@@ -1188,6 +1188,7 @@ var gBrowserInit = {
     gBrowser.tabContainer.updateVisibility();
 
     BookmarkingUI.init();
+    AutoShowBookmarksToolbar.init();
 
     gPrefService.addObserver(gHomeButton.prefDomain, gHomeButton, false);
 
@@ -1434,6 +1435,8 @@ var gBrowserInit = {
 
     BrowserOnClick.uninit();
 
+    FeedHandler.uninit();
+
     DevEdition.uninit();
 
     TrackingProtection.uninit();
@@ -1484,6 +1487,7 @@ var gBrowserInit = {
       IndexedDBPromptHelper.uninit();
       LightweightThemeListener.uninit();
       PanelUI.uninit();
+      AutoShowBookmarksToolbar.uninit();
     }
 
     // Final window teardown, do this last.
@@ -2312,8 +2316,11 @@ function URLBarSetURI(aURI) {
     } catch (e) {}
 
     // Replace initial page URIs with an empty string
-    // only if there's no opener (bug 370555).
-    if (gInitialPages.indexOf(uri.spec) != -1)
+    // 1. only if there's no opener (bug 370555).
+    // 2. if remote newtab is enabled and it's the default remote newtab page
+    let defaultRemoteURL = gAboutNewTabService.remoteEnabled &&
+                           uri.spec === gAboutNewTabService.newTabURL;
+    if (gInitialPages.includes(uri.spec) || defaultRemoteURL)
       value = gBrowser.selectedBrowser.hasContentOpener ? uri.spec : "";
     else
       value = losslessDecodeURI(uri);
@@ -3117,8 +3124,7 @@ function getDetailedCertErrorInfo(location, securityInfoAsString) {
   if (!securityInfoAsString)
     return "";
 
-  let details = [];
-  details.push(location);
+  let certErrorDetails = location;
 
   const serhelper = Cc["@mozilla.org/network/serialization-helper;1"]
                        .getService(Ci.nsISerializationHelper);
@@ -3128,7 +3134,7 @@ function getDetailedCertErrorInfo(location, securityInfoAsString) {
   let errors = Cc["@mozilla.org/nss_errors_service;1"]
                   .getService(Ci.nsINSSErrorsService);
   let code = securityInfo.errorCode;
-  details.push(errors.getErrorMessage(errors.getXPCOMFromNSSError(code)));
+  certErrorDetails += "\r\n\r\n" + errors.getErrorMessage(errors.getXPCOMFromNSSError(code));
 
   const sss = Cc["@mozilla.org/ssservice;1"]
                  .getService(Ci.nsISiteSecurityService);
@@ -3139,8 +3145,15 @@ function getDetailedCertErrorInfo(location, securityInfoAsString) {
               Ci.nsISocketProvider.NO_PERMANENT_STORAGE : 0;
 
   let uri = Services.io.newURI(location, null, null);
-  details.push(sss.isSecureHost(sss.HEADER_HSTS, uri.host, flags));
-  details.push(sss.isSecureHost(sss.HEADER_HPKP, uri.host, flags));
+
+  let hasHSTS = sss.isSecureHost(sss.HEADER_HSTS, uri.host, flags);
+  let hasHPKP = sss.isSecureHost(sss.HEADER_HPKP, uri.host, flags);
+  certErrorDetails += "\r\n\r\n" +
+                      gNavigatorBundle.getFormattedString("certErrorDetailsHSTS.label",
+                                                          [hasHSTS]);
+  certErrorDetails += "\r\n" +
+                      gNavigatorBundle.getFormattedString("certErrorDetailsKeyPinning.label",
+                                                          [hasHPKP]);
 
   let certChain = "";
   if (securityInfo.failedCertChain) {
@@ -3151,8 +3164,12 @@ function getDetailedCertErrorInfo(location, securityInfoAsString) {
       certChain += getPEMString(cert);
     }
   }
-  details.push(certChain);
-  return gNavigatorBundle.getFormattedString("certErrorDetails.label", details, 5);
+
+  certErrorDetails += "\r\n\r\n" +
+                      gNavigatorBundle.getString("certErrorDetailsCertChain.label") +
+                      "\r\n\r\n" + certChain;
+
+  return certErrorDetails;
 }
 
 // TODO: can we pull getDERString and getPEMString in from pippki.js instead of
@@ -3510,8 +3527,9 @@ const BrowserSearch = {
       if (!aSearchBar || document.activeElement != aSearchBar.textbox.inputField) {
         let url = gBrowser.currentURI.spec.toLowerCase();
         let mm = gBrowser.selectedBrowser.messageManager;
-        if (url === "about:home" ||
-            (url === "about:newtab" && NewTabUtils.allPages.enabled)) {
+        let newTabRemoted = Services.prefs.getBoolPref("browser.newtabpage.remote");
+        let localNewTabEnabled = url === "about:newtab" && !newTabRemoted && NewTabUtils.allPages.enabled;
+        if (url === "about:home" || localNewTabEnabled) {
           ContentSearch.focusInput(mm);
         } else {
           openUILinkIn("about:home", "current");
@@ -3619,7 +3637,7 @@ const BrowserSearch = {
   loadSearchFromContext: function (terms) {
     let engine = BrowserSearch._loadSearch(terms, true, "contextmenu");
     if (engine) {
-      BrowserSearch.recordSearchInHealthReport(engine, "contextmenu");
+      BrowserSearch.recordSearchInTelemetry(engine, "contextmenu");
     }
   },
 
@@ -3643,10 +3661,26 @@ const BrowserSearch = {
     openUILinkIn(searchEnginesURL, where);
   },
 
+  _getSearchEngineId: function (engine) {
+    if (!engine) {
+      return "other";
+    }
+
+    if (engine.identifier) {
+      return engine.identifier;
+    }
+
+    if (!("name" in engine) || engine.name === undefined) {
+      return "other";
+    }
+
+    return "other-" + engine.name;
+  },
+
   /**
-   * Helper to record a search with Firefox Health Report.
+   * Helper to record a search with Telemetry.
    *
-   * FHR records only search counts and nothing pertaining to the search itself.
+   * Telemetry records only search counts and nothing pertaining to the search itself.
    *
    * @param engine
    *        (nsISearchEngine) The engine handling the search.
@@ -3658,45 +3692,7 @@ const BrowserSearch = {
    *        the search was a suggested search, this indicates where the
    *        item was in the suggestion list and how the user selected it.
    */
-  recordSearchInHealthReport: function (engine, source, selection) {
-    BrowserUITelemetry.countSearchEvent(source, null, selection);
-    this.recordSearchInTelemetry(engine, source);
-
-    let reporter = AppConstants.MOZ_SERVICES_HEALTHREPORT
-                   ? Cc["@mozilla.org/datareporting/service;1"]
-                     .getService()
-                     .wrappedJSObject
-                     .healthReporter
-                   : null;
-
-    // This can happen if the FHR component of the data reporting service is
-    // disabled. This is controlled by a pref that most will never use.
-    if (!reporter) {
-      return;
-    }
-
-    reporter.onInit().then(function record() {
-      try {
-        reporter.getProvider("org.mozilla.searches").recordSearch(engine, source);
-      } catch (ex) {
-        Cu.reportError(ex);
-      }
-    });
-  },
-
-  _getSearchEngineId: function (engine) {
-    if (!engine) {
-      return "other";
-    }
-
-    if (engine.identifier) {
-      return engine.identifier;
-    }
-
-    return "other-" + engine.name;
-  },
-
-  recordSearchInTelemetry: function (engine, source) {
+  recordSearchInTelemetry: function (engine, source, selection) {
     const SOURCES = [
       "abouthome",
       "contextmenu",
@@ -3704,6 +3700,8 @@ const BrowserSearch = {
       "searchbar",
       "urlbar",
     ];
+
+    BrowserUITelemetry.countSearchEvent(source, null, selection);
 
     if (SOURCES.indexOf(source) == -1) {
       Cu.reportError("Unknown source for search: " + source);
@@ -4062,24 +4060,7 @@ function updateUserContextUIIndicator(browser)
   let label = document.getElementById("userContext-label");
   let userContextId = browser.getAttribute("usercontextid");
   hbox.setAttribute("usercontextid", userContextId);
-  switch (userContextId) {
-    case "1":
-      label.value = gBrowserBundle.GetStringFromName("usercontext.personal.label");
-      break;
-    case "2":
-      label.value = gBrowserBundle.GetStringFromName("usercontext.work.label");
-      break;
-    case "3":
-      label.value = gBrowserBundle.GetStringFromName("usercontext.banking.label");
-      break;
-    case "4":
-      label.value = gBrowserBundle.GetStringFromName("usercontext.shopping.label");
-      break;
-    // Display the context IDs for values outside the pre-defined range.
-    // Used for debugging, no localization necessary.
-    default:
-      label.value = "Context " + userContextId;
-  }
+  label.value = UserContextUI.getUserContextLabel(userContextId);
 }
 
 /**
@@ -6404,11 +6385,6 @@ function BrowserOpenAddonsMgr(aView) {
   }
 }
 
-function BrowserOpenApps() {
-  let appsURL = Services.urlFormatter.formatURLPref("browser.apps.URL");
-  switchToTabHavingURI(appsURL, true)
-}
-
 function AddKeywordForSearchField() {
   let mm = gBrowser.selectedBrowser.messageManager;
 
@@ -7903,7 +7879,8 @@ function TabModalPromptBox(browser) {
 
 TabModalPromptBox.prototype = {
   _promptCloseCallback(onCloseCallback, principalToAllowFocusFor, allowFocusCheckbox, ...args) {
-    if (principalToAllowFocusFor && allowFocusCheckbox.checked) {
+    if (principalToAllowFocusFor && allowFocusCheckbox &&
+        allowFocusCheckbox.checked) {
       Services.perms.addFromPrincipal(principalToAllowFocusFor, "focus-tab-by-prompt",
                                       Services.perms.ALLOW_ACTION);
     }
@@ -7923,13 +7900,17 @@ TabModalPromptBox.prototype = {
     delete this._allowTabFocusByPromptPrincipal;
 
     let allowFocusCheckbox; // Define outside the if block so we can bind it into the callback.
-    if (principalToAllowFocusFor) {
+    let hostForAllowFocusCheckbox = "";
+    try {
+      hostForAllowFocusCheckbox = principalToAllowFocusFor.URI.host;
+    } catch (ex) { /* Ignore exceptions for host-less URIs */ }
+    if (hostForAllowFocusCheckbox) {
       let allowFocusRow = document.createElementNS(XUL_NS, "row");
       allowFocusCheckbox = document.createElementNS(XUL_NS, "checkbox");
       let spacer = document.createElementNS(XUL_NS, "spacer");
       allowFocusRow.appendChild(spacer);
       let label = gBrowser.mStringBundle.getFormattedString("tabs.allowTabFocusByPromptForSite",
-                                                            [principalToAllowFocusFor.URI.host]);
+                                                            [hostForAllowFocusCheckbox]);
       allowFocusCheckbox.setAttribute("label", label);
       allowFocusRow.appendChild(allowFocusCheckbox);
       newPrompt.appendChild(allowFocusRow);

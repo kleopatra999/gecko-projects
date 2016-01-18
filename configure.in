@@ -75,7 +75,7 @@ GNOMEUI_VERSION=2.2.0
 GCONF_VERSION=1.2.1
 STARTUP_NOTIFICATION_VERSION=0.8
 DBUS_VERSION=0.60
-SQLITE_VERSION=3.9.1
+SQLITE_VERSION=3.10.1
 
 MSMANIFEST_TOOL=
 
@@ -149,6 +149,18 @@ MOZ_ARG_DISABLE_BOOL(compile-environment,
                           Disable compiler/library checks.],
     COMPILE_ENVIRONMENT= )
 AC_SUBST(COMPILE_ENVIRONMENT)
+
+MOZ_ARG_ENABLE_BOOL(artifact-builds,
+[  --enable-artifact-builds
+                          Download and use prebuilt binary artifacts.],
+    MOZ_ARTIFACT_BUILDS=1,
+    MOZ_ARTIFACT_BUILDS= )
+AC_SUBST(MOZ_ARTIFACT_BUILDS)
+
+if test -n "$MOZ_ARTIFACT_BUILDS"; then
+    dnl Artifact builds imply --disable-compile-environment.
+    COMPILE_ENVIRONMENT=
+fi
 
 MOZ_ARG_WITH_STRING(l10n-base,
 [  --with-l10n-base=DIR    path to l10n repositories],
@@ -1432,65 +1444,40 @@ if test "$GNU_CC"; then
     fi
 
     # Turn on gcc/clang warnings:
-    # https://gcc.gnu.org/onlinedocs/gcc-4.4.0/gcc/Warning-Options.html
-    #
-    # -Wall - turn on a lot of warnings
-    # -Wchar-subscripts - catches array index using signed char
-    # -Wcomment - catches nested comments
+    # https://gcc.gnu.org/onlinedocs/gcc-4.7.2/gcc/Warning-Options.html
+
+    # -Wall - lots of useful warnings
     # -Wempty-body - catches bugs, e.g. "if (c); foo();", few false positives
-    # -Wendif-labels - catches `#else FOO` and `#endif FOO` not in comment
-    # -Wenum-compare - catches comparison of different enum types
-    # -Wignored-qualifiers - catches returns types with qualifiers like const
-    # -Wint-to-pointer-cast - catches cast to pointer from integer of different size
-    # -Wmultichar - catches multicharacter integer constants like 'THIS'
-    # -Wnon-literal-null-conversion - catches expressions used as a null pointer constant
-    # -Wnonnull - catches NULL used with functions arguments marked as non-null
+    # -Wignored-qualifiers - catches return types with qualifiers like const
     # -Wpointer-arith - catches pointer arithmetic using NULL or sizeof(void)
-    # -Wpointer-sign - catches mixing pointers to signed and unsigned types
-    # -Wpointer-to-int-cast - catches casts from pointer to different sized int
-    # -Wreturn-type - catches missing returns, zero false positives
-    # -Wsequence-point - catches undefined order behavior like `a = a++`
-    # -Wsign-compare - catches comparison of signed and unsigned types
-    # -Wtrigraphs - catches unlikely use of trigraphs
     # -Wtype-limits - catches overflow bugs, few false positives
-    # -Wunknown-pragmas - catches unexpected #pragma directives
-    #
     _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wall"
     _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wempty-body"
-    _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wpointer-to-int-cast"
-    _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wsign-compare"
+    _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wignored-qualifiers"
+    _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wpointer-arith"
     _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wtype-limits"
 
-    # Treat some warnings as errors if --enable-warnings-as-errors:
-    if test "$MOZ_ENABLE_WARNINGS_AS_ERRORS"; then
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=char-subscripts"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=comment"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=endif-labels"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=enum-compare"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=ignored-qualifiers"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=int-to-pointer-cast"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=multichar"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=nonnull"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=pointer-arith"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=pointer-sign"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=return-type"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=sequence-point"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=trigraphs"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=uninitialized"
-        _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Werror=unknown-pragmas"
-
-        MOZ_C_SUPPORTS_WARNING(-Werror=, non-literal-null-conversion, ac_c_has_werror_non_literal_null_conversion)
-        MOZ_C_SUPPORTS_WARNING(-Werror=, sometimes-uninitialized, ac_c_has_sometimes_uninitialized)
-    fi
-
-    # Turn off the following warnings that -Wall turns on:
-    # -Wno-unused - lots of violations in third-party code
-    # -Wno-unused-local-typedef - catches unused typedefs, which are commonly used in assertion macros
+    # -Wclass-varargs - catches objects passed by value to variadic functions.
+    # -Wnon-literal-null-conversion - catches expressions used as a null pointer constant
+    # -Wsometimes-initialized - catches some uninitialized values
+    # -Wunreachable-code-aggressive - catches lots of dead code
     #
-    _WARNINGS_CFLAGS="${_WARNINGS_CFLAGS} -Wno-unused"
+    # XXX: at the time of writing, the version of clang used on the OS X test
+    # machines has a bug that causes it to reject some valid files if both
+    # -Wnon-literal-null-conversion and -Wsometimes-uninitialized are
+    # specified. We work around this by instead using
+    # -Werror=non-literal-null-conversion, but we only do that when
+    # --enable-warnings-as-errors is specified so that no unexpected fatal
+    # warnings are produced.
+    MOZ_C_SUPPORTS_WARNING(-W, class-varargs, ac_c_has_wclass_varargs)
 
-    MOZ_CXX_SUPPORTS_WARNING(-Wno-, unused-local-typedef, ac_cxx_has_wno_unused_local_typedef)
+    if test "$MOZ_ENABLE_WARNINGS_AS_ERRORS"; then
+        MOZ_C_SUPPORTS_WARNING(-Werror=, non-literal-null-conversion, ac_c_has_non_literal_null_conversion)
+    fi
+    MOZ_C_SUPPORTS_WARNING(-W, sometimes-uninitialized, ac_c_has_sometimes_uninitialized)
+    MOZ_C_SUPPORTS_WARNING(-W, unreachable-code-aggressive, ac_c_has_wunreachable_code_aggressive)
 
+    # -Wcast-align - catches problems with cast alignment
     if test -z "$INTEL_CC" -a -z "$CLANG_CC"; then
        # Don't use -Wcast-align with ICC or clang
        case "$CPU_ARCH" in
@@ -1503,8 +1490,14 @@ if test "$GNU_CC"; then
        esac
     fi
 
-    _DEFINES_CFLAGS='-include $(DEPTH)/mozilla-config.h -DMOZILLA_CLIENT'
+    # Turn off some non-useful warnings that -Wall turns on.
+
+    # -Wno-unused-local-typedef - catches unused typedefs, which are commonly used in assertion macros
+    MOZ_C_SUPPORTS_WARNING(-Wno-, unused-local-typedef, ac_c_has_wno_unused_local_typedef)
+
+    _DEFINES_CFLAGS='-include $(topobjdir)/mozilla-config.h -DMOZILLA_CLIENT'
     _USE_CPP_INCLUDE_FLAG=1
+
     ASFLAGS="$ASFLAGS $_DEFINES_CFLAGS"
 
 elif test "$SOLARIS_SUNPRO_CC"; then
@@ -1536,65 +1529,46 @@ if test "$GNU_CXX"; then
     CXXFLAGS="$CXXFLAGS -fno-exceptions -fno-strict-aliasing"
 
     # Turn on gcc/clang warnings:
-    # https://gcc.gnu.org/onlinedocs/gcc-4.4.0/gcc/Warning-Options.html
-    #
-    # -Wall - turn on a lot of warnings
+    # https://gcc.gnu.org/onlinedocs/gcc-4.7.2/gcc/Warning-Options.html
+
+    # -Wall - lots of useful warnings
     # -Wempty-body - catches bugs, e.g. "if (c); foo();", few false positives
-    # -Wendif-labels - catches `#else FOO` and `#endif FOO` not in comment
-    # -Wint-to-pointer-cast - catches cast to pointer from integer of different size
-    # -Wmissing-braces - catches aggregate initializers missing nested braces
-    # -Wnon-literal-null-conversion - catches expressions used as a null pointer constant
+    # -Wignored-qualifiers - catches return types with qualifiers like const
     # -Woverloaded-virtual - function declaration hides virtual function from base class
-    # -Wparentheses - catches `if (a=b)` and operator precedence bugs
     # -Wpointer-arith - catches pointer arithmetic using NULL or sizeof(void)
-    # -Wrange-loop-analysis - catches copies during range-based for loops.
-    # -Wreturn-type - catches missing returns, zero false positives
-    # -Wsequence-point - catches undefined order behavior like `a = a++`
-    # -Wsign-compare - catches comparison of signed and unsigned types
-    # -Wswitch - catches switches without all enum cases or default case
-    # -Wtrigraphs - catches unlikely use of trigraphs
     # -Wtype-limits - catches overflow bugs, few false positives
-    # -Wunused-label - catches unused goto labels
-    # -Wwrite-strings - catches non-const char* pointers to string literals
-    #
     _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wall"
     _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wempty-body"
+    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wignored-qualifiers"
     _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Woverloaded-virtual"
-    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wsign-compare"
-    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wwrite-strings"
+    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wpointer-arith"
+    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wtype-limits"
 
-    # Treat some warnings as errors if --enable-warnings-as-errors:
-    if test "$MOZ_ENABLE_WARNINGS_AS_ERRORS"; then
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=endif-labels"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=int-to-pointer-cast"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=missing-braces"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=parentheses"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=pointer-arith"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=return-type"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=sequence-point"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=switch"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=trigraphs"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=type-limits"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=uninitialized"
-        _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Werror=unused-label"
-
-        MOZ_CXX_SUPPORTS_WARNING(-Werror=, non-literal-null-conversion, ac_cxx_has_werror_non_literal_null_conversion)
-        MOZ_CXX_SUPPORTS_WARNING(-Werror=, range-loop-analysis, ac_cxx_has_range_loop_analysis)
-        MOZ_CXX_SUPPORTS_WARNING(-Werror=, sometimes-uninitialized, ac_cxx_has_sometimes_uninitialized)
-    fi
-
-    # Turn off the following warnings that -Wall turns on:
-    # -Wno-invalid-offsetof - we use offsetof on non-POD types frequently
-    # -Wno-inline-new-delete - we inline 'new' and 'delete' in mozalloc
-    # -Wno-unused-local-typedef - catches unused typedefs, which are commonly used in assertion macros
-    #   for performance reasons, and because GCC and clang accept it (though
-    #   clang warns about it).
+    # -Wclass-varargs - catches objects passed by value to variadic functions.
+    # -Wnon-literal-null-conversion - catches expressions used as a null pointer constant
+    # -Wrange-loop-analysis - catches copies during range-based for loops.
+    # -Wsometimes-initialized - catches some uninitialized values
+    # -Wunreachable-code - catches some dead code
+    # -Wunreachable-code-return - catches dead code after return call
     #
-    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wno-invalid-offsetof"
+    # XXX: at the time of writing, the version of clang used on the OS X test
+    # machines has a bug that causes it to reject some valid files if both
+    # -Wnon-literal-null-conversion and -Wsometimes-uninitialized are
+    # specified. We work around this by instead using
+    # -Werror=non-literal-null-conversion, but we only do that when
+    # --enable-warnings-as-errors is specified so that no unexpected fatal
+    # warnings are produced.
+    MOZ_CXX_SUPPORTS_WARNING(-W, class-varargs, ac_cxx_has_wclass_varargs)
 
-    MOZ_CXX_SUPPORTS_WARNING(-Wno-, inline-new-delete, ac_cxx_has_wno_inline_new_delete)
-    MOZ_CXX_SUPPORTS_WARNING(-Wno-, unused-local-typedef, ac_cxx_has_wno_unused_local_typedef)
+    if test "$MOZ_ENABLE_WARNINGS_AS_ERRORS"; then
+        MOZ_CXX_SUPPORTS_WARNING(-Werror=, non-literal-null-conversion, ac_cxx_has_non_literal_null_conversion)
+    fi
+    MOZ_CXX_SUPPORTS_WARNING(-W, range-loop-analysis, ac_cxx_has_range_loop_analysis)
+    MOZ_CXX_SUPPORTS_WARNING(-W, sometimes-uninitialized, ac_cxx_has_sometimes_uninitialized)
+    MOZ_CXX_SUPPORTS_WARNING(-W, unreachable-code, ac_cxx_has_wunreachable_code)
+    MOZ_CXX_SUPPORTS_WARNING(-W, unreachable-code-return, ac_cxx_has_wunreachable_code_return)
 
+    # -Wcast-align - catches problems with cast alignment
     if test -z "$INTEL_CXX" -a -z "$CLANG_CXX"; then
        # Don't use -Wcast-align with ICC or clang
        case "$CPU_ARCH" in
@@ -1607,8 +1581,15 @@ if test "$GNU_CXX"; then
        esac
     fi
 
-    _DEFINES_CXXFLAGS='-DMOZILLA_CLIENT -include $(DEPTH)/mozilla-config.h'
-    _USE_CPP_INCLUDE_FLAG=1
+    # Turn off some non-useful warnings that -Wall turns on.
+
+    # -Wno-invalid-offsetof - we use offsetof on non-POD types frequently
+    _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wno-invalid-offsetof"
+
+    # -Wno-inline-new-delete - we inline 'new' and 'delete' in mozalloc
+    # -Wno-unused-local-typedef - catches unused typedefs, which are commonly used in assertion macros
+    MOZ_CXX_SUPPORTS_WARNING(-Wno-, inline-new-delete, ac_cxx_has_wno_inline_new_delete)
+    MOZ_CXX_SUPPORTS_WARNING(-Wno-, unused-local-typedef, ac_cxx_has_wno_unused_local_typedef)
 
     # Recent clang and gcc support C++11 deleted functions without warnings if
     # compiling with -std=c++0x or -std=gnu++0x (or c++11 or gnu++11 in very new
@@ -1620,6 +1601,9 @@ if test "$GNU_CXX"; then
         _WARNINGS_CXXFLAGS="${_WARNINGS_CXXFLAGS} -Wno-c++0x-extensions"
         MOZ_CXX_SUPPORTS_WARNING(-Wno-, extended-offsetof, ac_cxx_has_wno_extended_offsetof)
     fi
+
+    _DEFINES_CXXFLAGS='-DMOZILLA_CLIENT -include $(topobjdir)/mozilla-config.h'
+    _USE_CPP_INCLUDE_FLAG=1
 
 else
     _DEFINES_CXXFLAGS='-DMOZILLA_CLIENT -D_MOZILLA_CONFIG_H_ $(ACDEFINES)'
@@ -2215,8 +2199,8 @@ ia64*-hpux*)
         WIN32_GUI_EXE_LDFLAGS=-SUBSYSTEM:WINDOWS,$WIN32_SUBSYSTEM_VERSION
         DSO_LDOPTS=-SUBSYSTEM:WINDOWS,$WIN32_SUBSYSTEM_VERSION
         _USE_CPP_INCLUDE_FLAG=1
-        _DEFINES_CFLAGS='-FI $(DEPTH)/dist/include/mozilla-config.h -DMOZILLA_CLIENT'
-        _DEFINES_CXXFLAGS='-FI $(DEPTH)/dist/include/mozilla-config.h -DMOZILLA_CLIENT'
+        _DEFINES_CFLAGS='-FI $(topobjdir)/mozilla-config.h -DMOZILLA_CLIENT'
+        _DEFINES_CXXFLAGS='-FI $(topobjdir)/mozilla-config.h -DMOZILLA_CLIENT'
         CFLAGS="$CFLAGS -W3 -Gy"
         CXXFLAGS="$CXXFLAGS -W3 -Gy"
         if test "$CPU_ARCH" = "x86" -a -z "$CLANG_CL"; then
@@ -2994,7 +2978,7 @@ dnl Checks for library functions.
 dnl ========================================================
 AC_PROG_GCC_TRADITIONAL
 AC_FUNC_MEMCMP
-AC_CHECK_FUNCS(stat64 lstat64 truncate64 statvfs64 statvfs statfs64 statfs getpagesize gmtime_r localtime_r arc4random arc4random_buf)
+AC_CHECK_FUNCS(stat64 lstat64 truncate64 statvfs64 statvfs statfs64 statfs getpagesize gmtime_r localtime_r arc4random arc4random_buf mallinfo)
 
 dnl check for clock_gettime(), the CLOCK_MONOTONIC clock
 AC_CACHE_CHECK(for clock_gettime(CLOCK_MONOTONIC),
@@ -3522,12 +3506,14 @@ AC_MSG_CHECKING([for YASM assembler])
 AC_CHECK_PROGS(YASM, yasm, "")
 
 if test -n "$YASM"; then
+  AC_MSG_CHECKING([yasm version])
   dnl Pull out yasm's version string
   YASM_VERSION=`yasm --version | $AWK '/^yasm/ { print $2 }'`
   _YASM_MAJOR_VERSION=`echo ${YASM_VERSION} | $AWK -F\. '{ print $1 }'`
   _YASM_MINOR_VERSION=`echo ${YASM_VERSION} | $AWK -F\. '{ print $2 }'`
   _YASM_RELEASE=`      echo ${YASM_VERSION} | $AWK -F\. '{ print $3 }'`
   _YASM_BUILD=`        echo ${YASM_VERSION} | $AWK -F\. '{ print $4 }'`
+  AC_MSG_RESULT([$_YASM_MAJOR_VERSION.$_YASM_MINOR_VERSION.$_YASM_RELEASE ($YASM_VERSION)])
 fi
 
 if test -z "$SKIP_LIBRARY_CHECKS"; then
@@ -3755,7 +3741,7 @@ if test -n "$MOZ_FMP4"; then
 else
   MOZ_FMP4=
 fi
-MOZ_FFMPEG=
+MOZ_FFMPEG=1
 MOZ_WEBRTC=1
 MOZ_PEERCONNECTION=
 MOZ_SRTP=
@@ -5243,14 +5229,6 @@ fi;
 dnl ========================================================
 dnl FFmpeg H264/AAC Decoding Support
 dnl ========================================================
-case "$OS_TARGET" in
-WINNT|Darwin|Android)
-    ;;
-*)
-    MOZ_FFMPEG=1
-    ;;
-esac
-
 MOZ_ARG_DISABLE_BOOL(ffmpeg,
 [  --disable-ffmpeg         Disable FFmpeg for fragmented H264/AAC decoding],
     MOZ_FFMPEG=,
@@ -5755,6 +5733,7 @@ MOZ_DIRECTX_SDK_PATH=
 MOZ_D3DCOMPILER_XP_DLL=
 MOZ_D3DCOMPILER_XP_CAB=
 
+if test "$COMPILE_ENVIRONMENT" ; then
 case "$target_os" in
 *mingw*)
     MOZ_ANGLE_RENDERER=1
@@ -5917,7 +5896,9 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
       AC_MSG_ERROR([  Install Windows SDK 8.0+, as well as DirectX SDK (June 2010 version or newer), or reconfigure without this flag.])
     fi
   fi
-fi
+fi # MOZ_ANGLE_RENDERER
+
+fi # COMPILE_ENVIRONMENT
 
 
 dnl ========================================================
@@ -6208,6 +6189,29 @@ elif test -n "$MOZ_LIBAV_FFT" -a "${CPU_ARCH}" != "arm"; then
 fi
 
 dnl ========================================================
+dnl = FFmpeg's ffvpx configuration
+dnl ========================================================
+
+MOZ_FFVPX=
+case "$CPU_ARCH" in
+  x86)
+      MOZ_FFVPX=1
+  ;;
+  x86_64)
+      MOZ_FFVPX=1
+  ;;
+esac
+
+dnl Use same conditional as MOZ_LIBAV_FFT to enable FFmpeg's ffvpx assembly decoder.
+if test -n "$MOZ_LIBAV_FFT"; then
+  FFVPX_ASFLAGS=$LIBAV_FFT_ASFLAGS
+  FFVPX_AS=$LIBAV_FFT_AS
+fi
+if test -n "$MOZ_FFVPX"; then
+  AC_DEFINE(MOZ_FFVPX)
+fi
+
+dnl ========================================================
 dnl = Enable compilation of specific extension modules
 dnl ========================================================
 
@@ -6287,41 +6291,49 @@ dnl minimum minor version of Unicode NSIS isn't in the path
 dnl (unless in case of cross compiling, for which Unicode
 dnl is not yet sufficient).
 if test "$OS_ARCH" = "WINNT"; then
-    MIN_NSIS_MAJOR_VER=2
-    MIN_NSIS_MINOR_VER=46
-    MOZ_PATH_PROGS(MAKENSISU, $MAKENSISU makensis-3.0b1.exe makensisu-3.0a2.exe makensisu-2.46.exe makensis)
+    MIN_NSIS_MAJOR_VER=3
+    MIN_NSIS_MINOR_VER=0
+    MIN_NSIS_PRERELEASE_TYPE=b
+    MIN_NSIS_PRERELEASE_VER=1
+    MOZ_PATH_PROGS(MAKENSISU, $MAKENSISU makensis-3.0b3.exe makensis-3.0b1.exe makensis)
     if test -n "$MAKENSISU" -a "$MAKENSISU" != ":"; then
       AC_MSG_RESULT([yes])
       MAKENSISU_VER=`"$MAKENSISU" -version 2>/dev/null`
       changequote(,)
-      MAKENSISU_PARSED_VER=`echo "$MAKENSISU_VER" | sed -e '/-Unicode/!s/.*//g' -e 's/^v\([0-9]\+\.[0-9]\+\).*\-Unicode$/\1/g'`
+      MAKENSISU_PARSED_VER=`echo "$MAKENSISU_VER" | sed -e 's/^v\([0-9]\+\.[0-9]\+\).*$/\1/g'`
       changequote([,])
-      if test "$MAKENSISU_PARSED_VER" = ""; then
-          changequote(,)
-          MAKENSISU_PARSED_VER=`echo "$MAKENSISU_VER" | sed -e 's/^v\([0-9]\+\.[0-9]\+\).*$/\1/g'`
-          changequote([,])
-      fi
       MAKENSISU_MAJOR_VER=0
       MAKENSISU_MINOR_VER=0
+      MAKENSISU_PRERELEASE_TYPE=$MIN_NSIS_PRERELEASE_TYPE
+      MAKENSISU_PRERELEASE_VER=$MIN_NSIS_PRERELEASE_VER
       if test ! "$MAKENSISU_PARSED_VER" = ""; then
           MAKENSISU_MAJOR_VER=`echo $MAKENSISU_PARSED_VER | $AWK -F\. '{ print $1 }'`
           MAKENSISU_MINOR_VER=`echo $MAKENSISU_PARSED_VER | $AWK -F\. '{ print $2 }'`
+          changequote(,)
+          MAKENSISU_PARSED_PRERELEASE=`echo "$MAKENSISU_VER" | sed -e 's/^v[0-9]\+\.[0-9]\+\([^0-9]\+\)\([0-9]\+\).*$/\1.\2/g'`
+          changequote([,])
+          if test ! "$MAKENSISU_PARSED_PRERELEASE" = "$MAKENSISU_VER"; then
+              MAKENSISU_PRERELEASE_TYPE=`echo $MAKENSISU_PARSED_PRERELEASE | $AWK -F\. '{ print $1 }'`
+              MAKENSISU_PRERELEASE_VER=`echo $MAKENSISU_PARSED_PRERELEASE | $AWK -F\. '{ print $2 }'`
+          fi
       fi
-      AC_MSG_CHECKING([for Unicode NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER or greater])
+      AC_MSG_CHECKING([for NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER$MIN_NSIS_PRERELEASE_TYPE$MIN_NSIS_PRERELEASE_VER or greater])
       if test "$MAKENSISU_MAJOR_VER" -eq $MIN_NSIS_MAJOR_VER -a \
-              "$MAKENSISU_MINOR_VER" -ge $MIN_NSIS_MINOR_VER ||
-         test "$MAKENSISU_MAJOR_VER" -gt $MIN_NSIS_MAJOR_VER; then
+              "$MAKENSISU_MINOR_VER" -ge $MIN_NSIS_MINOR_VER -a \
+              "$MAKENSISU_PRERELEASE_TYPE" = "$MIN_NSIS_PRERELEASE_TYPE" -a \
+              "$MAKENSISU_PRERELEASE_VER" -ge $MIN_NSIS_PRERELEASE_VER; then
           AC_MSG_RESULT([yes])
+          AC_MSG_RESULT([Found NSIS Version: $MAKENSISU_VER])
       else
           AC_MSG_RESULT([no])
           if test -z "$CROSS_COMPILE"; then
-            AC_MSG_ERROR([To build the installer you must have the latest MozillaBuild or Unicode NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER or greater in your path.])
+            AC_MSG_ERROR([To build the installer you must have the latest MozillaBuild or NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER$MIN_NSIS_PRERELEASE_TYPE$MIN_NSIS_PRERELEASE_VER or greater in your path.])
           else
             MAKENSISU=
           fi
       fi
     elif test -z "$CROSS_COMPILE"; then
-      AC_MSG_ERROR([To build the installer you must have the latest MozillaBuild or Unicode NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER or greater in your path.])
+      AC_MSG_ERROR([To build the installer you must have the latest MozillaBuild or NSIS version $MIN_NSIS_MAJOR_VER.$MIN_NSIS_MINOR_VER$MIN_NSIS_PRERELEASE_TYPE$MIN_NSIS_PRERELEASE_VER or greater in your path.])
     else
       MAKENSISU=
     fi
@@ -6411,7 +6423,12 @@ MOZ_ARG_ENABLE_BOOL(signmar,
     MOZ_ENABLE_SIGNMAR= )
 
 if test -n "$MOZ_ENABLE_SIGNMAR"; then
-  AC_DEFINE(MOZ_ENABLE_SIGNMAR)
+  if test -z "$COMPILE_ENVIRONMENT" ; then
+    AC_MSG_WARN([Cannot --enable-signmar with --disable-compile-environment])
+    MOZ_ENABLE_SIGNMAR=
+  else
+    AC_DEFINE(MOZ_ENABLE_SIGNMAR)
+  fi
 fi
 
 dnl ========================================================
@@ -7262,7 +7279,6 @@ fi
 dnl We need to wrap dlopen and related functions on Android because we use
 dnl our own linker.
 if test "$OS_TARGET" = Android; then
-    MOZ_GLUE_WRAP_LDFLAGS="${MOZ_GLUE_WRAP_LDFLAGS} -Wl,--wrap=PR_GetEnv,--wrap=PR_SetEnv"
     if test "$MOZ_WIDGET_TOOLKIT" = gonk -a -n "$MOZ_NUWA_PROCESS"; then
         MOZ_GLUE_WRAP_LDFLAGS="${MOZ_GLUE_WRAP_LDFLAGS} -Wl,--wrap=pthread_create,--wrap=epoll_wait,--wrap=poll,--wrap=pthread_cond_timedwait,--wrap=pthread_cond_wait,--wrap=epoll_create,--wrap=epoll_ctl,--wrap=close,--wrap=pthread_key_create,--wrap=pthread_key_delete,--wrap=socketpair,--wrap=pthread_self,--wrap=pthread_mutex_lock,--wrap=pthread_mutex_trylock,--wrap=pthread_join,--wrap=pipe,--wrap=pipe2"
     fi
@@ -7408,7 +7424,7 @@ MOZ_ARG_ENABLE_BOOL(tasktracer,
 [  --enable-tasktracer       Set compile flags necessary for using TaskTracer],
     MOZ_TASK_TRACER=1,
     MOZ_TASK_TRACER= )
-if test "$MOZ_WIDGET_TOOLKIT" = "gonk" -a -n "$MOZ_TASK_TRACER"; then
+if test -n "$MOZ_TASK_TRACER"; then
     AC_DEFINE(MOZ_TASK_TRACER)
     AC_SUBST(MOZ_TASK_TRACER)
 fi
@@ -7991,6 +8007,15 @@ MOZ_ARG_ENABLE_BOOL(skia,
 MOZ_ENABLE_SKIA=1,
 MOZ_ENABLE_SKIA=)
 
+dnl Skia GPU support may not reliably build on certain *BSDs (see bug 1234494).
+if test "${OS_TARGET}" = "OpenBSD" -o \
+        "${OS_TARGET}" = "NetBSD" -o \
+        "${OS_ARCH}" = "SunOS"; then
+    MOZ_DISABLE_SKIA_GPU=1
+else
+    MOZ_DISABLE_SKIA_GPU=
+fi
+
 MOZ_ARG_DISABLE_BOOL(skia-gpu,
 [  --disable-skia-gpu  Disable use of Skia-GPU],
 MOZ_DISABLE_SKIA_GPU=1,
@@ -8139,11 +8164,14 @@ if test "$MOZ_TREE_CAIRO"; then
         MOZ_ENABLE_D2D_SURFACE=1
         MOZ_ENABLE_DWRITE_FONT=1
 
-        MOZ_CHECK_HEADER(d3d9.h, MOZ_ENABLE_D3D9_LAYER=1)
+        if test "$COMPILE_ENVIRONMENT"; then
 
-        dnl D3D10 Layers depend on D2D Surfaces.
-        if test -n "$WIN32_D2D_SURFACE_FEATURE"; then
-          MOZ_CHECK_HEADER(d3d10.h, MOZ_ENABLE_D3D10_LAYER=1)
+          MOZ_CHECK_HEADER(d3d9.h, MOZ_ENABLE_D3D9_LAYER=1)
+
+          dnl D3D10 Layers depend on D2D Surfaces.
+          if test -n "$WIN32_D2D_SURFACE_FEATURE"; then
+            MOZ_CHECK_HEADER(d3d10.h, MOZ_ENABLE_D3D10_LAYER=1)
+          fi
         fi
         ;;
     esac
@@ -8759,22 +8787,19 @@ CXXFLAGS=`echo \
 
 COMPILE_CFLAGS=`echo \
     $_DEFINES_CFLAGS \
-    $_DEPEND_CFLAGS \
     $COMPILE_CFLAGS`
 
 COMPILE_CXXFLAGS=`echo \
     $_DEFINES_CXXFLAGS \
-    $_DEPEND_CFLAGS \
     $COMPILE_CXXFLAGS`
 
 HOST_CFLAGS=`echo \
-    $HOST_CFLAGS \
-    $_DEPEND_CFLAGS`
+    $HOST_CFLAGS`
 
 HOST_CXXFLAGS=`echo \
-    $HOST_CXXFLAGS \
-    $_DEPEND_CFLAGS`
+    $HOST_CXXFLAGS`
 
+AC_SUBST(_DEPEND_CFLAGS)
 AC_SUBST(MOZ_NATIVE_JPEG)
 AC_SUBST(MOZ_NATIVE_PNG)
 AC_SUBST(MOZ_NATIVE_BZ2)
@@ -8882,6 +8907,9 @@ AC_SUBST(MOZ_VORBIS)
 AC_SUBST(MOZ_TREMOR)
 AC_SUBST(MOZ_WMF)
 AC_SUBST(MOZ_FFMPEG)
+AC_SUBST(MOZ_FFVPX)
+AC_SUBST(FFVPX_AS)
+AC_SUBST_LIST(FFVPX_ASFLAGS)
 AC_SUBST(MOZ_FMP4)
 AC_SUBST(MOZ_EME)
 AC_SUBST(MOZ_DIRECTSHOW)

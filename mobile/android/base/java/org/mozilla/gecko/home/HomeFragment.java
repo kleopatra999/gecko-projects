@@ -7,6 +7,7 @@ package org.mozilla.gecko.home;
 
 import java.util.EnumSet;
 
+import android.os.AsyncTask;
 import org.mozilla.gecko.EditBookmarkDialog;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
@@ -14,6 +15,7 @@ import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.ReaderModeUtils;
 import org.mozilla.gecko.Restrictions;
+import org.mozilla.gecko.SnackbarHelper;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.db.BrowserDB;
@@ -218,7 +220,14 @@ public abstract class HomeFragment extends Fragment {
             }
 
             // Fetch an icon big enough for use as a home screen icon.
-            Favicons.getPreferredSizeFaviconForPage(context, info.url, new GeckoAppShell.CreateShortcutFaviconLoadedListener(info.url, info.getDisplayTitle()));
+            final String displayTitle = info.getDisplayTitle();
+            new AsyncTask<Void, Void, Void>() {
+                @Override
+                protected Void doInBackground(Void... voids) {
+                    GeckoAppShell.createShortcut(displayTitle, info.url);
+                    return null;
+                }
+            }.execute();
             return true;
         }
 
@@ -405,8 +414,9 @@ public abstract class HomeFragment extends Fragment {
 
         @Override
         public void onPostExecute(Void result) {
-            View rootView = ((Activity)mContext).findViewById(android.R.id.content);
-            Snackbar.make(rootView, R.string.page_removed, Snackbar.LENGTH_SHORT).show();
+            SnackbarHelper.showSnackbar((Activity) mContext,
+                    mContext.getString(R.string.page_removed),
+                    Snackbar.LENGTH_SHORT);
         }
     }
 }

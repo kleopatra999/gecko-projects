@@ -130,7 +130,7 @@ public:
 
   bool IsStylePaused() const { return mIsStylePaused; }
 
-  bool HasLowerCompositeOrderThan(const Animation& aOther) const override;
+  bool HasLowerCompositeOrderThan(const CSSAnimation& aOther) const;
 
   void SetAnimationIndex(uint64_t aIndex)
   {
@@ -155,13 +155,6 @@ public:
   // reflect changes to that markup.
   bool IsTiedToMarkup() const { return mOwningElement.IsSet(); }
 
-  // Is this animation currently in effect for the purposes of computing
-  // mWinsInCascade.  (In general, this can be computed from the timing
-  // function.  This boolean remembers the state as of the last time we
-  // called UpdateCascadeResults so we know if it changes and we need to
-  // call UpdateCascadeResults again.)
-  bool mInEffectForCascadeResults;
-
 protected:
   virtual ~CSSAnimation()
   {
@@ -170,18 +163,17 @@ protected:
   }
 
   // Animation overrides
-  CommonAnimationManager* GetAnimationManager() const override;
   void UpdateTiming(SeekFlag aSeekFlag,
                     SyncNotifyFlag aSyncNotifyFlag) override;
 
   // Returns the duration from the start of the animation's source effect's
   // active interval to the point where the animation actually begins playback.
   // This is zero unless the animation's source effect has a negative delay in
-  // which // case it is the absolute value of that delay.
+  // which case it is the absolute value of that delay.
   // This is used for setting the elapsedTime member of CSS AnimationEvents.
   TimeDuration InitialAdvance() const {
     return mEffect ?
-           std::max(TimeDuration(), mEffect->Timing().mDelay * -1) :
+           std::max(TimeDuration(), mEffect->SpecifiedTiming().mDelay * -1) :
            TimeDuration();
   }
   // Converts an AnimationEvent's elapsedTime value to an equivalent TimeStamp
@@ -288,16 +280,8 @@ public:
   {
   }
 
-  NS_DECL_CYCLE_COLLECTION_CLASS(nsAnimationManager)
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-
-  void MaybeUpdateCascadeResults(mozilla::AnimationCollection* aCollection);
-
-  // nsIStyleRuleProcessor (parts)
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf)
-    const MOZ_MUST_OVERRIDE override;
-  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
-    const MOZ_MUST_OVERRIDE override;
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(nsAnimationManager)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(nsAnimationManager)
 
   /**
    * Return the style rule that RulesMatching should add for
@@ -370,13 +354,6 @@ private:
                     float aFromKey, nsStyleContext* aFromContext,
                     mozilla::css::Declaration* aFromDeclaration,
                     float aToKey, nsStyleContext* aToContext);
-
-  static void UpdateCascadeResults(nsStyleContext* aStyleContext,
-                                   mozilla::AnimationCollection*
-                                     aElementAnimations);
-  static void CopyIsRunningOnCompositor(
-    mozilla::dom::KeyframeEffectReadOnly& aSourceEffect,
-    mozilla::dom::KeyframeEffectReadOnly& aDestEffect);
 };
 
 #endif /* !defined(nsAnimationManager_h_) */

@@ -16,6 +16,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/unused.h"
 
 #include "base/histogram.h"
 #include "base/pickle.h"
@@ -3544,7 +3545,6 @@ static MOZ_CONSTEXPR_VAR TrackedDBEntry kTrackedDBs[] = {
   TRACKEDDB_ENTRY("downloads.sqlite"),
   TRACKEDDB_ENTRY("extensions.sqlite"),
   TRACKEDDB_ENTRY("formhistory.sqlite"),
-  TRACKEDDB_ENTRY("healthreport.sqlite"),
   TRACKEDDB_ENTRY("index.sqlite"),
   TRACKEDDB_ENTRY("netpredictions.sqlite"),
   TRACKEDDB_ENTRY("permissions.sqlite"),
@@ -3670,7 +3670,8 @@ TelemetryImpl::RecordThreadHangStats(Telemetry::ThreadHangStats& aStats)
 
   MutexAutoLock autoLock(sTelemetry->mThreadHangStatsMutex);
 
-  sTelemetry->mThreadHangStats.append(Move(aStats));
+  // Ignore OOM.
+  mozilla::Unused << sTelemetry->mThreadHangStats.append(Move(aStats));
 }
 
 NS_IMPL_ISUPPORTS(TelemetryImpl, nsITelemetry, nsIMemoryReporter)

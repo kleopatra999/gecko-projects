@@ -202,17 +202,15 @@ class AbstractFramePtr
     inline JSCompartment* compartment() const;
 
     inline bool hasCallObj() const;
-    inline bool isFunctionFrame() const;
-    inline bool isModuleFrame() const;
+    inline bool isGlobalOrModuleFrame() const;
     inline bool isGlobalFrame() const;
+    inline bool isModuleFrame() const;
     inline bool isEvalFrame() const;
     inline bool isDebuggerEvalFrame() const;
     inline bool hasCachedSavedFrame() const;
     inline void setHasCachedSavedFrame();
 
     inline JSScript* script() const;
-    inline JSFunction* fun() const;
-    inline JSFunction* maybeFun() const;
     inline JSFunction* callee() const;
     inline Value calleev() const;
     inline Value& thisArgument() const;
@@ -280,8 +278,7 @@ enum InitialFrameFlags {
 };
 
 enum ExecuteType {
-    EXECUTE_GLOBAL         =        0x1, /* == InterpreterFrame::GLOBAL */
-    EXECUTE_MODULE         =        0x4, /* == InterpreterFrame::GLOBAL */
+    EXECUTE_GLOBAL_OR_MODULE =      0x1, /* == InterpreterFrame::GLOBAL_OR_MODULE */
     EXECUTE_DIRECT_EVAL    =        0x8, /* == InterpreterFrame::EVAL */
     EXECUTE_INDIRECT_EVAL  =        0x9, /* == InterpreterFrame::GLOBAL | EVAL */
     EXECUTE_DEBUG          =       0x18, /* == InterpreterFrame::EVAL | DEBUGGER_EVAL */
@@ -294,9 +291,8 @@ class InterpreterFrame
   public:
     enum Flags : uint32_t {
         /* Primary frame type */
-        GLOBAL                 =        0x1,  /* frame pushed for a global script */
+        GLOBAL_OR_MODULE       =        0x1,  /* frame pushed for a global script */
         FUNCTION               =        0x2,  /* frame pushed for a scripted call */
-        MODULE                 =        0x4,  /* frame pushed for a module */
 
         /* Frame subtypes */
         EVAL                   =        0x8,  /* frame pushed for eval() or debugger eval */
@@ -362,18 +358,11 @@ class InterpreterFrame
 
   private:
     mutable uint32_t    flags_;         /* bits described by Flags */
-    union {                             /* describes what code is executing in a */
-        JSScript*       script;        /*   global frame */
-        JSFunction*     fun;           /*   function frame, pre GetScopeChain */
-        ModuleObject*   module;        /*   module frame */
-    } exec;
-    union {                             /* describes the arguments of a function */
-        unsigned        nactual;        /*   for non-eval frames */
-        JSScript*       evalScript;    /*   the script of an eval-in-function */
-    } u;
-    mutable JSObject*   scopeChain_;   /* if HAS_SCOPECHAIN, current scope chain */
+    JSScript*           script_;        /* the script we're executing */
+    unsigned            nactual_;       /* number of actual arguments, for function frames */
+    mutable JSObject*   scopeChain_;    /* if HAS_SCOPECHAIN, current scope chain */
     Value               rval_;          /* if HAS_RVAL, return value of the frame */
-    ArgumentsObject*    argsObj_;      /* if HAS_ARGS_OBJ, the call's arguments object */
+    ArgumentsObject*    argsObj_;       /* if HAS_ARGS_OBJ, the call's arguments object */
 
     /*
      * Previous frame and its pc and sp. Always nullptr for
@@ -473,16 +462,17 @@ class InterpreterFrame
      *  module frame: execution of a module
      */
 
-    bool isFunctionFrame() const {
-        return !!(flags_ & FUNCTION);
+    bool isGlobalOrModuleFrame() const {
+        MOZ_ASSERT(!isEvalFrame());
+        return !!(flags_ & GLOBAL_OR_MODULE);
     }
 
     bool isGlobalFrame() const {
-        return !!(flags_ & GLOBAL);
+        return isGlobalOrModuleFrame() && !script()->module();
     }
 
     bool isModuleFrame() const {
-        return !!(flags_ & MODULE);
+        return isGlobalOrModuleFrame() && script()->module();
     }
 
     /*
@@ -499,10 +489,6 @@ class InterpreterFrame
 
     bool isEvalFrame() const {
         return flags_ & EVAL;
-    }
-
-    bool isEvalInFunction() const {
-        return (flags_ & (EVAL | FUNCTION)) == (EVAL | FUNCTION);
     }
 
     bool isNonEvalFunctionFrame() const {
@@ -572,8 +558,8 @@ class InterpreterFrame
 
     bool copyRawFrameSlots(AutoValueVector* v);
 
-    unsigned numFormalArgs() const { MOZ_ASSERT(hasArgs()); return fun()->nargs(); }
-    unsigned numActualArgs() const { MOZ_ASSERT(hasArgs()); return u.nactual; }
+    unsigned numFormalArgs() const { MOZ_ASSERT(hasArgs()); return callee().nargs(); }
+    unsigned numActualArgs() const { MOZ_ASSERT(hasArgs()); return nactual_; }
 
     /* Watch out, this exposes a pointer to the unaliased formal arg array. */
     Value* argv() const { MOZ_ASSERT(hasArgs()); return argv_; }
@@ -648,23 +634,12 @@ class InterpreterFrame
     /*
      * Script
      *
-     * All function and global frames have an associated JSScript which holds
-     * the bytecode being executed for the frame. This script/bytecode does
-     * not reflect any inlining that has been performed by the method JIT.
-     * If other frames were inlined into this one, the script/pc reflect the
-     * point of the outermost call. Inlined frame invariants:
-     *
-     * - Inlined frames have the same scope chain as the outer frame.
-     * - Inlined frames have the same strictness as the outer frame.
-     * - Inlined frames can only make calls to other JIT frames associated with
-     *   the same VMFrame. Other calls force expansion of the inlined frames.
+     * All frames have an associated JSScript which holds the bytecode being
+     * executed for the frame.
      */
 
     JSScript* script() const {
-        if (isFunctionFrame())
-            return isEvalFrame() ? u.evalScript : fun()->nonLazyScript();
-        MOZ_ASSERT(isGlobalFrame() || isModuleFrame());
-        return exec.script;
+        return script_;
     }
 
     /* Return the previous frame's pc. */
@@ -677,35 +652,6 @@ class InterpreterFrame
     Value* prevsp() {
         MOZ_ASSERT(prev_);
         return prevsp_;
-    }
-
-    /*
-     * Function
-     *
-     * All function frames have an associated interpreted JSFunction. The
-     * function returned by fun() and maybeFun() is not necessarily the
-     * original canonical function which the frame's script was compiled
-     * against.
-     */
-
-    JSFunction* fun() const {
-        MOZ_ASSERT(isFunctionFrame());
-        return exec.fun;
-    }
-
-    JSFunction* maybeFun() const {
-        return isFunctionFrame() ? fun() : nullptr;
-    }
-
-    /* Module */
-
-    ModuleObject* module() const {
-        MOZ_ASSERT(isModuleFrame());
-        return exec.module;
-    }
-
-    ModuleObject* maybeModule() const {
-        return isModuleFrame() ? module() : nullptr;
     }
 
     /*
@@ -723,33 +669,16 @@ class InterpreterFrame
      * Callee
      *
      * Only function frames have a callee. An eval frame in a function has the
-     * same callee as its containing function frame. maybeCalleev can be used
-     * to return a value that is either the callee object (for function frames) or
-     * null (for global frames).
+     * same callee as its containing function frame.
      */
 
     JSFunction& callee() const {
-        MOZ_ASSERT(isFunctionFrame());
+        MOZ_ASSERT(isNonEvalFunctionFrame());
         return calleev().toObject().as<JSFunction>();
     }
 
     const Value& calleev() const {
-        MOZ_ASSERT(isFunctionFrame());
-        return mutableCalleev();
-    }
-
-    const Value& maybeCalleev() const {
-        Value& calleev = flags_ & (EVAL | GLOBAL)
-                         ? ((Value*)this)[-1]
-                         : argv()[-2];
-        MOZ_ASSERT(calleev.isObjectOrNull());
-        return calleev;
-    }
-
-    Value& mutableCalleev() const {
-        MOZ_ASSERT(isFunctionFrame());
-        if (isEvalFrame())
-            return ((Value*)this)[-1];
+        MOZ_ASSERT(isNonEvalFunctionFrame());
         return argv()[-2];
     }
 
@@ -761,9 +690,10 @@ class InterpreterFrame
      * frame.
      */
     Value newTarget() const {
-        MOZ_ASSERT(isFunctionFrame());
         if (isEvalFrame())
             return ((Value*)this)[-2];
+
+        MOZ_ASSERT(isNonEvalFunctionFrame());
 
         if (callee().isArrow())
             return callee().getExtendedSlot(FunctionExtended::ARROW_NEWTARGET_SLOT);
@@ -774,15 +704,6 @@ class InterpreterFrame
         }
         return UndefinedValue();
     }
-
-    /*
-     * Frame compartment
-     *
-     * A stack frame's compartment is the frame's containing context's
-     * compartment when the frame was pushed.
-     */
-
-    inline JSCompartment* compartment() const;
 
     /* Profiler flags */
 
@@ -1920,8 +1841,7 @@ class FrameIter
     inline bool isBaseline() const;
     inline bool isPhysicalIonFrame() const;
 
-    bool isFunctionFrame() const;
-    bool isGlobalFrame() const;
+    bool isGlobalOrModuleFrame() const;
     bool isEvalFrame() const;
     bool isNonEvalFunctionFrame() const;
     bool hasArgs() const { return isNonEvalFunctionFrame(); }
@@ -1958,7 +1878,7 @@ class FrameIter
     JSFunction* callee(JSContext* cx) const;
 
     JSFunction* maybeCallee(JSContext* cx) const {
-        return isFunctionFrame() ? callee(cx) : nullptr;
+        return isNonEvalFunctionFrame() ? callee(cx) : nullptr;
     }
 
     bool        matchCallee(JSContext* cx, HandleFunction fun) const;

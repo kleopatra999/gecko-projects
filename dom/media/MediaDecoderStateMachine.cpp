@@ -96,13 +96,6 @@ const int64_t AMPLE_AUDIO_USECS = 1000000;
 
 } // namespace detail
 
-// When we're only playing audio and we don't have a video stream, we divide
-// AMPLE_AUDIO_USECS and LOW_AUDIO_USECS by the following value. This reduces
-// the amount of decoded audio we buffer, reducing our memory usage. We only
-// need to decode far ahead when we're decoding video using software decoding,
-// as otherwise a long video decode could cause an audio underrun.
-const int64_t NO_VIDEO_AMPLE_AUDIO_DIVISOR = 8;
-
 // If we have fewer than LOW_VIDEO_FRAMES decoded frames, and
 // we're not "prerolling video", we'll skip the video up to the next keyframe
 // which is at or after the current playback position.
@@ -223,7 +216,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mQuickBufferingLowDataThresholdUsecs(detail::QUICK_BUFFERING_LOW_DATA_USECS),
   mIsAudioPrerolling(false),
   mIsVideoPrerolling(false),
-  mAudioCaptured(false, "MediaDecoderStateMachine::mAudioCaptured"),
+  mAudioCaptured(false),
   mAudioCompleted(false, "MediaDecoderStateMachine::mAudioCompleted"),
   mVideoCompleted(false, "MediaDecoderStateMachine::mVideoCompleted"),
   mNotifyMetadataBeforeFirstFrame(false),
@@ -238,11 +231,9 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mCorruptFrames(60),
   mDecodingFirstFrame(true),
   mSentLoadedMetadataEvent(false),
-  mSentFirstFrameLoadedEvent(false, "MediaDecoderStateMachine::mSentFirstFrameLoadedEvent"),
+  mSentFirstFrameLoadedEvent(false),
   mSentPlaybackEndedEvent(false),
   mOutputStreamManager(new OutputStreamManager()),
-  mStreamSink(new DecodedStream(
-    mTaskQueue, mAudioQueue, mVideoQueue, mOutputStreamManager)),
   mResource(aDecoder->GetResource()),
   mAudioOffloading(false),
   mBuffered(mTaskQueue, TimeIntervals(),
@@ -368,12 +359,6 @@ MediaDecoderStateMachine::InitializationTask(MediaDecoder* aDecoder)
   mWatchManager.Watch(mObservedDuration, &MediaDecoderStateMachine::RecomputeDuration);
   mWatchManager.Watch(mPlayState, &MediaDecoderStateMachine::PlayStateChanged);
   mWatchManager.Watch(mLogicallySeeking, &MediaDecoderStateMachine::LogicallySeekingChanged);
-  mWatchManager.Watch(mSameOriginMedia, &MediaDecoderStateMachine::SameOriginMediaChanged);
-  mWatchManager.Watch(mSentFirstFrameLoadedEvent, &MediaDecoderStateMachine::AdjustAudioThresholds);
-  mWatchManager.Watch(mAudioCaptured, &MediaDecoderStateMachine::AdjustAudioThresholds);
-
-  // Propagate mSameOriginMedia to mDecodedStream.
-  SameOriginMediaChanged();
 }
 
 media::MediaSink*
@@ -392,11 +377,10 @@ MediaDecoderStateMachine::CreateAudioSink()
 already_AddRefed<media::MediaSink>
 MediaDecoderStateMachine::CreateMediaSink(bool aAudioCaptured)
 {
-  // TODO: We can't really create a new DecodedStream until OutputStreamManager
-  //       is extracted. It is tricky that the implementation of DecodedStream
-  //       happens to allow reuse after shutdown without creating a new one.
-  RefPtr<media::MediaSink> audioSink = aAudioCaptured ?
-    mStreamSink : CreateAudioSink();
+  RefPtr<media::MediaSink> audioSink = aAudioCaptured
+    ? new DecodedStream(mTaskQueue, mAudioQueue, mVideoQueue,
+                        mOutputStreamManager, mSameOriginMedia.Ref())
+    : CreateAudioSink();
 
   RefPtr<media::MediaSink> mediaSink =
     new VideoSink(mTaskQueue, audioSink, mVideoQueue,
@@ -1399,8 +1383,8 @@ void MediaDecoderStateMachine::StartDecoding()
   }
 
   // Reset other state to pristine values before starting decode.
-  mIsAudioPrerolling = !DonePrerollingAudio();
-  mIsVideoPrerolling = !DonePrerollingVideo();
+  mIsAudioPrerolling = !DonePrerollingAudio() && !mAudioWaitRequest.Exists();
+  mIsVideoPrerolling = !DonePrerollingVideo() && !mVideoWaitRequest.Exists();
 
   // Ensure that we've got tasks enqueued to decode data if we need to.
   DispatchDecodeTasksIfNeeded();
@@ -1455,12 +1439,6 @@ void MediaDecoderStateMachine::LogicallySeekingChanged()
 {
   MOZ_ASSERT(OnTaskQueue());
   ScheduleStateMachine();
-}
-
-void MediaDecoderStateMachine::SameOriginMediaChanged()
-{
-  MOZ_ASSERT(OnTaskQueue());
-  mStreamSink->SetSameOrigin(mSameOriginMedia);
 }
 
 void MediaDecoderStateMachine::BufferedRangeUpdated()
@@ -2031,32 +2009,6 @@ MediaDecoderStateMachine::IsDecodingFirstFrame()
 }
 
 void
-MediaDecoderStateMachine::AdjustAudioThresholds()
-{
-  MOZ_ASSERT(OnTaskQueue());
-
-  // Experiments show that we need to buffer more if audio is captured to avoid
-  // audio glitch. See bug 1188643 comment 16 for the details.
-  int64_t divisor = mAudioCaptured ? NO_VIDEO_AMPLE_AUDIO_DIVISOR / 2
-                                   : NO_VIDEO_AMPLE_AUDIO_DIVISOR;
-
-  // We're playing audio only. We don't need to worry about slow video
-  // decodes causing audio underruns, so don't buffer so much audio in
-  // order to reduce memory usage.
-  if (HasAudio() && !HasVideo() && mSentFirstFrameLoadedEvent) {
-    mAmpleAudioThresholdUsecs = detail::AMPLE_AUDIO_USECS / divisor;
-    mLowAudioThresholdUsecs = detail::LOW_AUDIO_USECS / divisor;
-    mQuickBufferingLowDataThresholdUsecs =
-      detail::QUICK_BUFFERING_LOW_DATA_USECS / divisor;
-
-    // Check if we need to stop audio prerolling for thresholds changed.
-    if (mIsAudioPrerolling && DonePrerollingAudio()) {
-      StopPrerollingAudio();
-    }
-  }
-}
-
-void
 MediaDecoderStateMachine::FinishDecodeFirstFrame()
 {
   MOZ_ASSERT(OnTaskQueue());
@@ -2360,13 +2312,6 @@ nsresult MediaDecoderStateMachine::RunStateMachine()
       // StopPlayback in order to reset the IsPlaying() state so audio
       // is restarted correctly.
       StopPlayback();
-
-      if (mState != DECODER_STATE_COMPLETED) {
-        // While we're presenting a frame we can change state. Whatever changed
-        // our state should have scheduled another state machine run.
-        NS_ASSERTION(IsStateMachineScheduled(), "Must have timer scheduled");
-        return NS_OK;
-      }
 
       if (mPlayState == MediaDecoder::PLAY_STATE_PLAYING &&
           !mSentPlaybackEndedEvent)
@@ -2699,6 +2644,10 @@ void MediaDecoderStateMachine::StartBuffering()
     return;
   }
 
+  // Update playback position again before entering BUFFERING so the currentTime
+  // of the media element is more accurate during buffering.
+  UpdatePlaybackPositionPeriodically();
+
   if (IsPlaying()) {
     StopPlayback();
   }
@@ -2787,6 +2736,13 @@ MediaDecoderStateMachine::LogicalPlaybackRateChanged()
 
   mPlaybackRate = mLogicalPlaybackRate;
   mMediaSink->SetPlaybackRate(mPlaybackRate);
+
+  if (mIsAudioPrerolling && DonePrerollingAudio()) {
+    StopPrerollingAudio();
+  }
+  if (mIsVideoPrerolling && DonePrerollingVideo()) {
+    StopPrerollingVideo();
+  }
 
   ScheduleStateMachine();
 }
@@ -2911,6 +2867,12 @@ MediaDecoderStateMachine::SetAudioCaptured(bool aCaptured)
   if (aCaptured == mAudioCaptured) {
     return;
   }
+
+  // Rest these flags so they are consistent with the status of the sink.
+  // TODO: Move these flags into MediaSink to improve cohesion so we don't need
+  // to reset these flags when switching MediaSinks.
+  mAudioCompleted = false;
+  mVideoCompleted = false;
 
   // Backup current playback parameters.
   MediaSink::PlaybackParams params = mMediaSink->GetPlaybackParams();

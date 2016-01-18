@@ -8,12 +8,16 @@
 #include "AndroidBridge.h"
 #include "GeneratedJNIWrappers.h"
 
+#ifdef MOZ_CRASHREPORTER
+#include "nsExceptionHandler.h"
+#endif
+
 namespace mozilla {
 namespace jni {
 
 namespace detail {
 
-#define DEFINE_PRIMITIVE_TYPE_ADAPTER(NativeType, JNIType, JNIName, ABIName)	\
+#define DEFINE_PRIMITIVE_TYPE_ADAPTER(NativeType, JNIType, JNIName, ABIName) \
     \
     constexpr JNIType (JNIEnv::*TypeAdapter<NativeType>::Call) \
             (jobject, jmethodID, jvalue*) MOZ_JNICALL_ABI; \
@@ -26,7 +30,9 @@ namespace detail {
     constexpr void (JNIEnv::*TypeAdapter<NativeType>::Set) \
             (jobject, jfieldID, JNIType) ABIName; \
     constexpr void (JNIEnv::*TypeAdapter<NativeType>::StaticSet) \
-            (jclass, jfieldID, JNIType) ABIName
+            (jclass, jfieldID, JNIType) ABIName; \
+    constexpr void (JNIEnv::*TypeAdapter<NativeType>::GetArray) \
+            (JNIType ## Array, jsize, jsize, JNIType*)
 
 DEFINE_PRIMITIVE_TYPE_ADAPTER(bool,     jboolean, Boolean, /*nothing*/);
 DEFINE_PRIMITIVE_TYPE_ADAPTER(int8_t,   jbyte,    Byte,    /*nothing*/);
@@ -129,23 +135,34 @@ bool ThrowException(JNIEnv *aEnv, const char *aClass,
     return !aEnv->ThrowNew(cls.Get(), aMessage);
 }
 
-void HandleUncaughtException(JNIEnv *aEnv)
+bool HandleUncaughtException(JNIEnv* aEnv)
 {
     MOZ_ASSERT(aEnv, "Invalid thread JNI env");
 
     if (!aEnv->ExceptionCheck()) {
-        return;
+        return false;
     }
+
+#ifdef DEBUG
+    aEnv->ExceptionDescribe();
+#endif
 
     Throwable::LocalRef e =
             Throwable::LocalRef::Adopt(aEnv->ExceptionOccurred());
     MOZ_ASSERT(e);
 
     aEnv->ExceptionClear();
-    widget::GeckoAppShell::HandleUncaughtException(nullptr, e);
+    String::LocalRef stack = widget::GeckoAppShell::HandleUncaughtException(e);
 
-    // Should be dead by now...
-    MOZ_CRASH("Failed to handle uncaught exception");
+#ifdef MOZ_CRASHREPORTER
+    if (stack) {
+        // GeckoAppShell wants us to annotate and trigger the crash reporter.
+        CrashReporter::AnnotateCrashReport(
+                NS_LITERAL_CSTRING("AuxiliaryJavaStack"), nsCString(stack));
+    }
+#endif // MOZ_CRASHREPORTER
+
+    return true;
 }
 
 namespace {

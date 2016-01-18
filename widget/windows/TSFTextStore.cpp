@@ -3544,44 +3544,44 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
     // no developers who want to disable this hack for tests.
     const bool kIsMSOfficeJapaneseIME2010 =
       kSink->IsMSOfficeJapaneseIME2010Active();
+    // MS IME for Japanese doesn't support asynchronous handling at deciding
+    // its suggest list window position.  The feature was implemented
+    // starting from Windows 8.  And also we may meet same trouble in e10s
+    // mode on Win7.  So, we should never return TS_E_NOLAYOUT to MS IME for
+    // Japanese.
     if (kIsMSOfficeJapaneseIME2010 ||
         ((sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar ||
           sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret) &&
          kSink->IsMSJapaneseIMEActive())) {
-      // MS IME for Japanese doesn't support asynchronous handling at deciding
-      // its suggest list window position.  The feature was implemented
-      // starting from Windows 8.
-      if (IsWin8OrLater() || kIsMSOfficeJapaneseIME2010) {
-        // Basically, MS-IME tries to retrieve whole composition string rect
-        // at deciding suggest window immediately after unlocking the document.
-        // However, in e10s mode, the content hasn't updated yet in most cases.
-        // Therefore, if the first character at the retrieving range rect is
-        // available, we should use it as the result.
-        if ((kIsMSOfficeJapaneseIME2010 ||
-             sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar) &&
-            !mLockedContent.IsLayoutChangedAfter(acpStart) &&
-            acpStart < acpEnd) {
-          acpEnd = acpStart;
-          MOZ_LOG(sTextStoreLog, LogLevel::Debug,
-                 ("TSF: 0x%p   TSFTextStore::GetTextExt() hacked the offsets "
-                  "of the first character of changing range of the composition "
-                  "string for TIP acpStart=%d, acpEnd=%d",
-                  this, acpStart, acpEnd));
-        }
-        // Although, the condition is not clear, MS-IME sometimes retrieves the
-        // caret rect immediately after modifying the composition string but
-        // before unlocking the document.  In such case, we should return the
-        // nearest character rect.
-        else if ((kIsMSOfficeJapaneseIME2010 ||
-                  sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret) &&
-                 acpStart == acpEnd &&
-                 currentSel.IsCollapsed() && currentSel.EndOffset() == acpEnd) {
-          acpEnd = acpStart = mLockedContent.MinOffsetOfLayoutChanged();
-          MOZ_LOG(sTextStoreLog, LogLevel::Debug,
-                 ("TSF: 0x%p   TSFTextStore::GetTextExt() hacked the offsets "
-                  "of the caret of the composition string for TIP acpStart=%d, "
-                  "acpEnd=%d", this, acpStart, acpEnd));
-        }
+      // Basically, MS-IME tries to retrieve whole composition string rect
+      // at deciding suggest window immediately after unlocking the document.
+      // However, in e10s mode, the content hasn't updated yet in most cases.
+      // Therefore, if the first character at the retrieving range rect is
+      // available, we should use it as the result.
+      if ((kIsMSOfficeJapaneseIME2010 ||
+           sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar) &&
+          !mLockedContent.IsLayoutChangedAfter(acpStart) &&
+          acpStart < acpEnd) {
+        acpEnd = acpStart;
+        MOZ_LOG(sTextStoreLog, LogLevel::Debug,
+               ("TSF: 0x%p   TSFTextStore::GetTextExt() hacked the offsets "
+                "of the first character of changing range of the composition "
+                "string for TIP acpStart=%d, acpEnd=%d",
+                this, acpStart, acpEnd));
+      }
+      // Although, the condition is not clear, MS-IME sometimes retrieves the
+      // caret rect immediately after modifying the composition string but
+      // before unlocking the document.  In such case, we should return the
+      // nearest character rect.
+      else if ((kIsMSOfficeJapaneseIME2010 ||
+                sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret) &&
+               acpStart == acpEnd &&
+               currentSel.IsCollapsed() && currentSel.EndOffset() == acpEnd) {
+        acpEnd = acpStart = mLockedContent.MinOffsetOfLayoutChanged();
+        MOZ_LOG(sTextStoreLog, LogLevel::Debug,
+               ("TSF: 0x%p   TSFTextStore::GetTextExt() hacked the offsets "
+                "of the caret of the composition string for TIP acpStart=%d, "
+                "acpEnd=%d", this, acpStart, acpEnd));
       }
     }
     // Free ChangJie 2010 and Easy Changjei 1.0.12.0 doesn't handle
@@ -4099,6 +4099,7 @@ TSFTextStore::RecordCompositionStartAction(ITfCompositionView* aComposition,
   }
 
   lockedContent.StartComposition(aComposition, *action, aPreserveSelection);
+  action->mData = mComposition.mString;
 
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
          ("TSF: 0x%p   TSFTextStore::RecordCompositionStartAction() succeeded: "
@@ -4136,6 +4137,33 @@ TSFTextStore::RecordCompositionEndAction()
     return E_FAIL;
   }
   lockedContent.EndComposition(*action);
+
+  // If this composition was restart but the composition doesn't modify
+  // anything, we should remove the pending composition for preventing to
+  // dispatch redundant composition events.
+  for (size_t i = mPendingActions.Length(), j = 1; i > 0; --i, ++j) {
+    PendingAction& pendingAction = mPendingActions[i - 1];
+    if (pendingAction.mType == PendingAction::COMPOSITION_START) {
+      if (pendingAction.mData != action->mData) {
+        break;
+      }
+      // When only setting selection is necessary, we should append it.
+      if (pendingAction.mAdjustSelection) {
+        PendingAction* setSelection = mPendingActions.AppendElement();
+        setSelection->mType = PendingAction::SET_SELECTION;
+        setSelection->mSelectionStart = pendingAction.mSelectionStart;
+        setSelection->mSelectionLength = pendingAction.mSelectionLength;
+        setSelection->mSelectionReversed = false;
+      }
+      // Remove the redundant pending composition.
+      mPendingActions.RemoveElementsAt(i - 1, j);
+      MOZ_LOG(sTextStoreLog, LogLevel::Info,
+             ("TSF: 0x%p   TSFTextStore::RecordCompositionEndAction(), "
+              "succeeded, but the composition was canceled due to redundant",
+              this));
+      return S_OK;
+    }
+  }
 
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
          ("TSF: 0x%p   TSFTextStore::RecordCompositionEndAction(), succeeded",
@@ -4789,7 +4817,10 @@ TSFTextStore::OnLayoutChangeInternal()
 bool
 TSFTextStore::NotifyTSFOfLayoutChange()
 {
-  bool returnedNoLayoutError = mHasReturnedNoLayoutError;
+  // If we're waiting a query of layout information from TIP, it means that
+  // we've returned TS_E_NOLAYOUT error.
+  bool returnedNoLayoutError =
+    mHasReturnedNoLayoutError || mWaitingQueryLayout;
 
   // If we returned TS_E_NOLAYOUT, TIP should query the computed layout again.
   mWaitingQueryLayout = returnedNoLayoutError;
@@ -4861,6 +4892,12 @@ TSFTextStore::NotifyTSFOfLayoutChange()
     return ret;
   }
 
+  // If we returned TS_E_NOLAYOUT again, we need another call of
+  // OnLayoutChange() later.  So, let's wait a query from TIP.
+  if (mHasReturnedNoLayoutError) {
+    mWaitingQueryLayout = true;
+  }
+
   if (!mWaitingQueryLayout) {
     MOZ_LOG(sTextStoreLog, LogLevel::Info,
            ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChange(), "
@@ -4869,10 +4906,12 @@ TSFTextStore::NotifyTSFOfLayoutChange()
     return ret;
   }
 
-  // If TIP hasn't accessed our new layout information yet, TSF and/or TIP may
-  // have met some trouble during calls of OnLayoutChange().  It should be
-  // tried again later.
-  mHasReturnedNoLayoutError = returnedNoLayoutError;
+  // If we believe that TIP needs to retry to retrieve our layout information
+  // later, we should call it with ::PostMessage() hack.
+  MOZ_LOG(sTextStoreLog, LogLevel::Debug,
+          ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChange(), "
+           "posing  MOZ_WM_NOTIY_TSF_OF_LAYOUT_CHANGE for calling "
+           "OnLayoutChange() again...", this));
   ::PostMessage(mWidget->GetWindowHandle(),
                 MOZ_WM_NOTIY_TSF_OF_LAYOUT_CHANGE,
                 reinterpret_cast<WPARAM>(this), 0);
@@ -4883,8 +4922,8 @@ TSFTextStore::NotifyTSFOfLayoutChange()
 void
 TSFTextStore::NotifyTSFOfLayoutChangeAgain()
 {
-  // Before preforming this method, TIP has accessed our layout information,
-  // we don't need to notify TIP of layout change anymore.
+  // Before preforming this method, TIP has accessed our layout information by
+  // itself.  In such case, we don't need to call OnLayoutChange() anymore.
   if (!mWaitingQueryLayout) {
     return;
   }
@@ -4893,9 +4932,23 @@ TSFTextStore::NotifyTSFOfLayoutChangeAgain()
          ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChangeAgain(), "
           "calling NotifyTSFOfLayoutChange()...", this));
   NotifyTSFOfLayoutChange();
-  MOZ_LOG(sTextStoreLog, LogLevel::Info,
-         ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChangeAgain(), "
-          "called NotifyTSFOfLayoutChange()", this));
+
+  // If TIP didn't retrieved our layout information during a call of
+  // NotifyTSFOfLayoutChange(), it means that the TIP already gave up to
+  // retry to retrieve layout information or doesn't necessary it anymore.
+  // But don't forget that the call may have caused returning TS_E_NOLAYOUT
+  // error again.  In such case we still need to call OnLayoutChange() later.
+  if (!mHasReturnedNoLayoutError && mWaitingQueryLayout) {
+    mWaitingQueryLayout = false;
+    MOZ_LOG(sTextStoreLog, LogLevel::Warning,
+            ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChangeAgain(), "
+             "called NotifyTSFOfLayoutChange() but TIP didn't retry to "
+             "retrieve the layout information", this));
+  } else {
+    MOZ_LOG(sTextStoreLog, LogLevel::Info,
+            ("TSF: 0x%p   TSFTextStore::NotifyTSFOfLayoutChangeAgain(), "
+             "called NotifyTSFOfLayoutChange()", this));
+  }
 }
 
 nsresult

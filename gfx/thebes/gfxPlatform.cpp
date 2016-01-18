@@ -10,6 +10,7 @@
 #include "mozilla/layers/SharedBufferManagerChild.h"
 #include "mozilla/layers/ISurfaceAllocator.h"     // for GfxMemoryImageReporter
 #include "mozilla/Telemetry.h"
+#include "mozilla/TimeStamp.h"
 
 #include "mozilla/Logging.h"
 #include "mozilla/Services.h"
@@ -42,6 +43,10 @@
 #include "gfxQtPlatform.h"
 #elif defined(ANDROID)
 #include "gfxAndroidPlatform.h"
+#endif
+
+#ifdef XP_WIN
+#include "mozilla/WindowsVersion.h"
 #endif
 
 #include "nsGkAtoms.h"
@@ -191,7 +196,7 @@ public:
   virtual void Log(const std::string& aString) override;
   virtual void CrashAction(LogReason aReason) override;
 
-  virtual std::vector<std::pair<int32_t,std::string> > StringsVectorCopy() override;
+  virtual LoggingRecord LoggingRecordCopy() override;
 
   void SetCircularBufferSize(uint32_t aCapacity);
 
@@ -201,7 +206,7 @@ private:
   void UpdateCrashReport();
 
 private:
-  std::vector<std::pair<int32_t,std::string> > mBuffer;
+  LoggingRecord mBuffer;
   nsCString mCrashCriticalKey;
   uint32_t mMaxCapacity;
   int32_t mIndex;
@@ -225,8 +230,8 @@ void CrashStatsLogForwarder::SetCircularBufferSize(uint32_t aCapacity)
   mBuffer.reserve(static_cast<size_t>(aCapacity));
 }
 
-std::vector<std::pair<int32_t,std::string> >
-CrashStatsLogForwarder::StringsVectorCopy()
+LoggingRecord
+CrashStatsLogForwarder::LoggingRecordCopy()
 {
   MutexAutoLock lock(mMutex);
   return mBuffer;
@@ -248,9 +253,12 @@ CrashStatsLogForwarder::UpdateStringsVector(const std::string& aString)
   MOZ_ASSERT(index >= 0 && index < (int32_t)mMaxCapacity);
   MOZ_ASSERT(index <= mIndex && index <= (int32_t)mBuffer.size());
 
+  bool ignored;
+  double tStamp = (TimeStamp::NowLoRes()-TimeStamp::ProcessCreation(ignored)).ToSecondsSigDigits();
+
   // Checking for index >= mBuffer.size(), rather than index == mBuffer.size()
   // just out of paranoia, but we know index <= mBuffer.size().
-  std::pair<int32_t,std::string> newEntry(mIndex,aString);
+  LoggingRecordEntry newEntry(mIndex,aString,tStamp);
   if (index >= static_cast<int32_t>(mBuffer.size())) {
     mBuffer.push_back(newEntry);
   } else {
@@ -262,8 +270,8 @@ CrashStatsLogForwarder::UpdateStringsVector(const std::string& aString)
 void CrashStatsLogForwarder::UpdateCrashReport()
 {
   std::stringstream message;
-  for(std::vector<std::pair<int32_t, std::string> >::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
-    message << "|[" << (*it).first << "]" << (*it).second;
+  for(LoggingRecord::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
+    message << "|[" << Get<0>(*it) << "]" << Get<1>(*it) << " (t=" << Get<2>(*it) << ")";
   }
 
 #ifdef MOZ_CRASHREPORTER
@@ -545,6 +553,10 @@ gfxPlatform::Init()
     #error "No gfxPlatform implementation available"
 #endif
 
+#ifdef USE_SKIA
+    SkGraphics::Init();
+#endif
+
 #ifdef MOZ_GL_DEBUG
     GLContext::StaticInit();
 #endif
@@ -573,7 +585,7 @@ gfxPlatform::Init()
 
     gPlatform->mScreenReferenceSurface =
         gPlatform->CreateOffscreenSurface(IntSize(1, 1),
-                                          gfxImageFormat::ARGB32);
+                                          SurfaceFormat::A8R8G8B8_UINT32);
     if (!gPlatform->mScreenReferenceSurface) {
         NS_RUNTIMEABORT("Could not initialize mScreenReferenceSurface");
     }
@@ -896,7 +908,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     // slowdown).
     NativeSurface surf;
     surf.mFormat = format;
-    surf.mType = NativeSurfaceType::CAIRO_SURFACE;
+    surf.mType = NativeSurfaceType::CAIRO_CONTEXT;
     surf.mSurface = aSurface->CairoSurface();
     surf.mSize = aSurface->GetSize();
     // We return here regardless of whether CreateSourceSurfaceFromNativeSurface
@@ -954,7 +966,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     // very slow.
     NativeSurface surf;
     surf.mFormat = format;
-    surf.mType = NativeSurfaceType::CAIRO_SURFACE;
+    surf.mType = NativeSurfaceType::CAIRO_CONTEXT;
     surf.mSurface = aSurface->CairoSurface();
     surf.mSize = aSurface->GetSize();
     RefPtr<DrawTarget> drawTarget =
@@ -1860,11 +1872,11 @@ gfxPlatform::Optimal2DFormatForContent(gfxContentType aContent)
   switch (aContent) {
   case gfxContentType::COLOR:
     switch (GetOffscreenFormat()) {
-    case gfxImageFormat::ARGB32:
+    case SurfaceFormat::A8R8G8B8_UINT32:
       return mozilla::gfx::SurfaceFormat::B8G8R8A8;
-    case gfxImageFormat::RGB24:
+    case SurfaceFormat::X8R8G8B8_UINT32:
       return mozilla::gfx::SurfaceFormat::B8G8R8X8;
-    case gfxImageFormat::RGB16_565:
+    case SurfaceFormat::R5G6B5_UINT16:
       return mozilla::gfx::SurfaceFormat::R5G6B5_UINT16;
     default:
       NS_NOTREACHED("unknown gfxImageFormat for gfxContentType::COLOR");
@@ -1887,12 +1899,12 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
   case gfxContentType::COLOR:
     return GetOffscreenFormat();
   case gfxContentType::ALPHA:
-    return gfxImageFormat::A8;
+    return SurfaceFormat::A8;
   case gfxContentType::COLOR_ALPHA:
-    return gfxImageFormat::ARGB32;
+    return SurfaceFormat::A8R8G8B8_UINT32;
   default:
     NS_NOTREACHED("unknown gfxContentType");
-    return gfxImageFormat::ARGB32;
+    return SurfaceFormat::A8R8G8B8_UINT32;
   }
 }
 
@@ -1936,7 +1948,11 @@ InitLayersAccelerationPrefs()
     } else if (gfxInfo) {
       if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS, &status))) {
         if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
-          sLayersSupportsD3D9 = true;
+          if (sPrefBrowserTabsRemoteAutostart && !IsVistaOrLater()) {
+            gfxWarning() << "Disallowing D3D9 on Windows XP with E10S - see bug 1237770";
+          } else {
+            sLayersSupportsD3D9 = true;
+          }
         }
       }
       if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, &status))) {

@@ -158,12 +158,6 @@ class BaselineFrame
             return evalScript();
         return ScriptFromCalleeToken(calleeToken());
     }
-    JSFunction* fun() const {
-        return CalleeTokenToFunction(calleeToken());
-    }
-    JSFunction* maybeFun() const {
-        return isFunctionFrame() ? fun() : nullptr;
-    }
     JSFunction* callee() const {
         return CalleeTokenToFunction(calleeToken());
     }
@@ -226,7 +220,7 @@ class BaselineFrame
   private:
     Value* evalNewTargetAddress() const {
         MOZ_ASSERT(isEvalFrame());
-        MOZ_ASSERT(isFunctionFrame());
+        MOZ_ASSERT(script()->isDirectEvalInFunction());
         return (Value*)(reinterpret_cast<const uint8_t*>(this) +
                         BaselineFrame::Size() +
                         offsetOfEvalNewTarget());
@@ -234,15 +228,16 @@ class BaselineFrame
 
   public:
     Value newTarget() const {
-        MOZ_ASSERT(isFunctionFrame());
         if (isEvalFrame())
             return *evalNewTargetAddress();
-        if (fun()->isArrow())
-            return fun()->getExtendedSlot(FunctionExtended::ARROW_NEWTARGET_SLOT);
-        if (isConstructing())
+        MOZ_ASSERT(isNonEvalFunctionFrame());
+        if (callee()->isArrow())
+            return callee()->getExtendedSlot(FunctionExtended::ARROW_NEWTARGET_SLOT);
+        if (isConstructing()) {
             return *(Value*)(reinterpret_cast<const uint8_t*>(this) +
                              BaselineFrame::Size() +
                              offsetOfArg(Max(numFormalArgs(), numActualArgs())));
+        }
         return UndefinedValue();
     }
 
@@ -394,16 +389,11 @@ class BaselineFrame
 
     void trace(JSTracer* trc, JitFrameIterator& frame);
 
-    bool isFunctionFrame() const {
-        return CalleeTokenIsFunction(calleeToken());
+    bool isGlobalOrModuleFrame() const {
+        MOZ_ASSERT(!isEvalFrame());
+        return !CalleeTokenIsFunction(calleeToken());
     }
-    bool isModuleFrame() const {
-        return CalleeTokenIsModuleScript(calleeToken());
-    }
-    bool isGlobalFrame() const {
-        return !isFunctionFrame() && !isModuleFrame();
-    }
-     bool isEvalFrame() const {
+    bool isEvalFrame() const {
         return flags_ & EVAL;
     }
     bool isStrictEvalFrame() const {
@@ -417,7 +407,7 @@ class BaselineFrame
         return isNonStrictEvalFrame() && isNonGlobalEvalFrame();
     }
     bool isNonEvalFunctionFrame() const {
-        return isFunctionFrame() && !isEvalFrame();
+        return CalleeTokenIsFunction(calleeToken()) && !isEvalFrame();
     }
     bool isDebuggerEvalFrame() const {
         return false;

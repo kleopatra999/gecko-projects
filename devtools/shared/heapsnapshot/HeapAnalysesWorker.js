@@ -91,8 +91,10 @@ workerHelper.createTask(self, "takeCensusDiff", request => {
  * @see HeapAnalysesClient.prototype.getCreationTime
  */
 workerHelper.createTask(self, "getCreationTime", snapshotFilePath => {
-  let snapshot = snapshots[snapshotFilePath];
-  return snapshot ? snapshot.creationTime : null;
+  if (!snapshots[snapshotFilePath]) {
+    throw new Error(`No known heap snapshot for '${snapshotFilePath}'`);
+  }
+  return snapshots[snapshotFilePath].creationTime;
 });
 
 /**
@@ -194,7 +196,15 @@ workerHelper.createTask(self, "getImmediatelyDominated", request => {
       return node;
     });
 
+  const path = [];
+  let id = nodeId;
+  do {
+    path.push(id);
+    id = dominatorTree.getImmediateDominator(id);
+  } while (id !== null);
+  path.reverse();
+
   const moreChildrenAvailable = childIds.length > end;
 
-  return { nodes, moreChildrenAvailable };
+  return { nodes, moreChildrenAvailable, path };
 });

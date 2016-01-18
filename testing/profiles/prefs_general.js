@@ -83,9 +83,9 @@ user_pref("geo.wifi.logging.enabled", true);
 // Make url-classifier updates so rare that they won't affect tests
 user_pref("urlclassifier.updateinterval", 172800);
 // Point the url-classifier to the local testing server for fast failures
+user_pref("browser.safebrowsing.appRepURL", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("browser.safebrowsing.provider.google.gethashURL", "http://%(server)s/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.provider.google.updateURL", "http://%(server)s/safebrowsing-dummy/update");
-user_pref("browser.safebrowsing.provider.google.appRepURL", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("browser.safebrowsing.provider.mozilla.gethashURL", "http://%(server)s/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.provider.mozilla.updateURL", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("privacy.trackingprotection.introURL", "http://%(server)s/trackingprotection/tour");
@@ -161,6 +161,9 @@ user_pref("layout.css.object-fit-and-position.enabled", true);
 
 // Enable webkit prefixed CSS features for testing
 user_pref("layout.css.prefixes.webkit", true);
+
+// Enable -webkit-{min|max}-device-pixel-ratio media queries for testing
+user_pref("layout.css.prefixes.device-pixel-ratio-webkit", true);
 
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
@@ -281,7 +284,7 @@ user_pref("browser.newtabpage.directory.ping", "");
 user_pref("loop.debug.loglevel", "All");
 user_pref("loop.enabled", true);
 user_pref("loop.throttled", false);
-user_pref("loop.server", "http://%(server)s/browser/browser/extensions/loop/test/mochitest/loop_fxa.sjs?");
+user_pref("loop.server", "http://%(server)s/browser/browser/extensions/loop/chrome/test/mochitest/loop_fxa.sjs?");
 user_pref("loop.CSP","default-src 'self' about: file: chrome: data: wss://* http://* https://*");
 
 // Ensure UITour won't hit the network
@@ -307,7 +310,6 @@ user_pref("media.decoder.heuristic.dormant.timeout", 0);
 #endif
 
 // Don't prompt about e10s
-user_pref("browser.displayedE10SNotice", 5);
 user_pref("browser.displayedE10SPrompt.1", 5);
 // Don't use auto-enabled e10s
 user_pref("browser.tabs.remote.autostart.1", false);
@@ -338,3 +340,5 @@ user_pref("browser.urlbar.suggest.searches", false);
 user_pref("browser.urlbar.userMadeSearchSuggestionsChoice", true);
 
 user_pref("dom.audiochannel.mutedByDefault", false);
+
+user_pref("webextensions.tests", true);

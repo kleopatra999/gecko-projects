@@ -7,6 +7,8 @@
 #include "nsTransitionManager.h"
 #include "mozilla/dom/CSSAnimationBinding.h"
 
+#include "mozilla/EffectCompositor.h"
+#include "mozilla/EffectSet.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/dom/DocumentTimeline.h"
@@ -122,43 +124,24 @@ CSSAnimation::Tick()
 }
 
 bool
-CSSAnimation::HasLowerCompositeOrderThan(const Animation& aOther) const
+CSSAnimation::HasLowerCompositeOrderThan(const CSSAnimation& aOther) const
 {
+  MOZ_ASSERT(IsTiedToMarkup() && aOther.IsTiedToMarkup(),
+             "Should only be called for CSS animations that are sorted "
+             "as CSS animations (i.e. tied to CSS markup)");
+
   // 0. Object-equality case
   if (&aOther == this) {
     return false;
   }
 
-  // 1. Transitions sort lower
-  //
-  // FIXME: We need to differentiate between transitions and generic Animations.
-  // Generic animations don't exist yet (that's bug 1096773) so for now we're
-  // ok.
-  const CSSAnimation* otherAnimation = aOther.AsCSSAnimation();
-  if (!otherAnimation) {
-    MOZ_ASSERT(aOther.AsCSSTransition(),
-               "Animation being compared is a CSS transition");
-    return false;
+  // 1. Sort by document order
+  if (!mOwningElement.Equals(aOther.mOwningElement)) {
+    return mOwningElement.LessThan(aOther.mOwningElement);
   }
 
-  // 2. CSS animations that correspond to an animation-name property sort lower
-  //    than other CSS animations (e.g. those created or kept-alive by script).
-  if (!IsTiedToMarkup()) {
-    return !otherAnimation->IsTiedToMarkup() ?
-           Animation::HasLowerCompositeOrderThan(aOther) :
-           false;
-  }
-  if (!otherAnimation->IsTiedToMarkup()) {
-    return true;
-  }
-
-  // 3. Sort by document order
-  if (!mOwningElement.Equals(otherAnimation->mOwningElement)) {
-    return mOwningElement.LessThan(otherAnimation->mOwningElement);
-  }
-
-  // 4. (Same element and pseudo): Sort by position in animation-name
-  return mAnimationIndex < otherAnimation->mAnimationIndex;
+  // 2. (Same element and pseudo): Sort by position in animation-name
+  return mAnimationIndex < aOther.mAnimationIndex;
 }
 
 void
@@ -260,10 +243,9 @@ CSSAnimation::QueueEvents()
   StickyTimeDuration elapsedTime;
 
   if (message == eAnimationStart || message == eAnimationIteration) {
-    TimeDuration iterationStart = mEffect->Timing().mIterationDuration *
-                                    computedTiming.mCurrentIteration;
-    elapsedTime = StickyTimeDuration(std::max(iterationStart,
-                                              InitialAdvance()));
+    StickyTimeDuration iterationStart = computedTiming.mDuration *
+                                          computedTiming.mCurrentIteration;
+    elapsedTime = std::max(iterationStart, StickyTimeDuration(InitialAdvance()));
   } else {
     MOZ_ASSERT(message == eAnimationEnd);
     elapsedTime = computedTiming.mActiveDuration;
@@ -273,17 +255,6 @@ CSSAnimation::QueueEvents()
                                          message, mAnimationName, elapsedTime,
                                          ElapsedTimeToTimeStamp(elapsedTime),
                                          this));
-}
-
-CommonAnimationManager*
-CSSAnimation::GetAnimationManager() const
-{
-  nsPresContext* context = GetPresContext();
-  if (!context) {
-    return nullptr;
-  }
-
-  return context->AnimationManager();
 }
 
 void
@@ -318,7 +289,8 @@ CSSAnimation::ElapsedTimeToTimeStamp(const StickyTimeDuration&
     return result;
   }
 
-  result = AnimationTimeToTimeStamp(aElapsedTime + mEffect->Timing().mDelay);
+  result = AnimationTimeToTimeStamp(aElapsedTime +
+                                    mEffect->SpecifiedTiming().mDelay);
   return result;
 }
 
@@ -326,85 +298,8 @@ CSSAnimation::ElapsedTimeToTimeStamp(const StickyTimeDuration&
 
 NS_IMPL_CYCLE_COLLECTION(nsAnimationManager, mEventDispatcher)
 
-NS_IMPL_CYCLE_COLLECTING_ADDREF(nsAnimationManager)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(nsAnimationManager)
-
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsAnimationManager)
-  NS_INTERFACE_MAP_ENTRY(nsIStyleRuleProcessor)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIStyleRuleProcessor)
-NS_INTERFACE_MAP_END
-
-void
-nsAnimationManager::MaybeUpdateCascadeResults(AnimationCollection* aCollection)
-{
-  for (size_t animIdx = aCollection->mAnimations.Length(); animIdx-- != 0; ) {
-    CSSAnimation* anim = aCollection->mAnimations[animIdx]->AsCSSAnimation();
-    if (anim->IsInEffect() != anim->mInEffectForCascadeResults) {
-      // Update our own cascade results.
-      mozilla::dom::Element* element = aCollection->GetElementToRestyle();
-      bool updatedCascadeResults = false;
-      if (element) {
-        nsIFrame* frame = element->GetPrimaryFrame();
-        if (frame) {
-          UpdateCascadeResults(frame->StyleContext(), aCollection);
-          updatedCascadeResults = true;
-        }
-      }
-
-      if (!updatedCascadeResults) {
-        // If we don't have a style context we can't do the work of updating
-        // cascading results but we need to make sure to update
-        // mInEffectForCascadeResults or else we'll keep running this
-        // code every time (potentially leading to infinite recursion due
-        // to the fact that this method both calls and is (indirectly) called
-        // by nsTransitionManager).
-        anim->mInEffectForCascadeResults = anim->IsInEffect();
-      }
-
-      // Notify the transition manager, whose results might depend on ours.
-      mPresContext->TransitionManager()->
-        UpdateCascadeResultsWithAnimations(aCollection);
-
-      return;
-    }
-  }
-}
-
-/* virtual */ size_t
-nsAnimationManager::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
-{
-  return CommonAnimationManager::SizeOfExcludingThis(aMallocSizeOf);
-
-  // Measurement of the following members may be added later if DMD finds it is
-  // worthwhile:
-  // - mEventDispatcher
-}
-
-/* virtual */ size_t
-nsAnimationManager::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
-{
-  return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
-}
-
-void
-nsAnimationManager::CopyIsRunningOnCompositor(
-  KeyframeEffectReadOnly& aSourceEffect,
-  KeyframeEffectReadOnly& aDestEffect)
-{
-  nsCSSPropertySet sourceProperties;
-
-  for (AnimationProperty& property : aSourceEffect.Properties()) {
-    if (property.mIsRunningOnCompositor) {
-      sourceProperties.AddProperty(property.mProperty);
-    }
-  }
-
-  for (AnimationProperty& property : aDestEffect.Properties()) {
-    if (sourceProperties.HasProperty(property.mProperty)) {
-      property.mIsRunningOnCompositor = true;
-    }
-  }
-}
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(nsAnimationManager, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(nsAnimationManager, Release)
 
 nsIStyleRule*
 nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
@@ -443,20 +338,17 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
 
   if (newAnimations.IsEmpty()) {
     if (collection) {
-      // There might be transitions that run now that animations don't
-      // override them.
-      mPresContext->TransitionManager()->
-        UpdateCascadeResultsWithAnimationsToBeDestroyed(collection);
-
       collection->Destroy();
     }
     return nullptr;
   }
 
   if (collection) {
-    collection->mStyleRule = nullptr;
-    collection->mStyleRuleRefreshTime = TimeStamp();
-    collection->UpdateAnimationGeneration(mPresContext);
+    EffectSet* effectSet =
+      EffectSet::GetEffectSet(aElement, aStyleContext->GetPseudoType());
+    if (effectSet) {
+      effectSet->UpdateAnimationGeneration(mPresContext);
+    }
 
     // Copy over the start times and (if still paused) pause starts
     // for each animation (matching on name only) that was also in the
@@ -510,16 +402,10 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
           KeyframeEffectReadOnly* oldEffect = oldAnim->GetEffect();
           KeyframeEffectReadOnly* newEffect = newAnim->GetEffect();
           animationChanged =
-            oldEffect->Timing() != newEffect->Timing() ||
+            oldEffect->SpecifiedTiming() != newEffect->SpecifiedTiming() ||
             oldEffect->Properties() != newEffect->Properties();
-          oldEffect->SetTiming(newEffect->Timing());
-
-          // To preserve the mIsRunningOnCompositor value on each property,
-          // we copy it from the old effect to the new effect since, in the
-          // following step, we will completely clobber the properties on the
-          // old effect with the values on the new effect.
-          CopyIsRunningOnCompositor(*oldEffect, *newEffect);
-          oldEffect->Properties() = newEffect->Properties();
+          oldEffect->SetSpecifiedTiming(newEffect->SpecifiedTiming());
+          oldEffect->CopyPropertiesFrom(*newEffect);
         }
 
         // Handle changes in play state. If the animation is idle, however,
@@ -575,17 +461,23 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
     }
   }
   collection->mAnimations.SwapElements(newAnimations);
-  collection->mStyleChanging = true;
 
   // Cancel removed animations
   for (size_t newAnimIdx = newAnimations.Length(); newAnimIdx-- != 0; ) {
     newAnimations[newAnimIdx]->CancelFromStyle();
   }
 
-  UpdateCascadeResults(aStyleContext, collection);
+  EffectCompositor::UpdateCascadeResults(aElement,
+                                         aStyleContext->GetPseudoType(),
+                                         aStyleContext);
 
-  TimeStamp refreshTime = mPresContext->RefreshDriver()->MostRecentRefresh();
-  collection->EnsureStyleRuleFor(refreshTime);
+  EffectCompositor::CascadeLevel cascadeLevel =
+    EffectCompositor::CascadeLevel::Animations;
+  mPresContext->EffectCompositor()
+              ->MaybeUpdateAnimationRule(aElement,
+                                         aStyleContext->GetPseudoType(),
+                                         cascadeLevel);
+
   // We don't actually dispatch the pending events now.  We'll either
   // dispatch them the next time we get a refresh driver notification
   // or the next time somebody calls
@@ -594,7 +486,10 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
     mPresContext->Document()->SetNeedStyleFlush();
   }
 
-  return GetAnimationRule(aElement, aStyleContext->GetPseudoType());
+  return mPresContext->EffectCompositor()
+                     ->GetAnimationRule(aElement,
+                                        aStyleContext->GetPseudoType(),
+                                        cascadeLevel);
 }
 
 void
@@ -709,13 +604,12 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
     dest->SetAnimationIndex(static_cast<uint64_t>(animIdx));
     aAnimations.AppendElement(dest);
 
-    AnimationTiming timing;
-    timing.mIterationDuration =
-      TimeDuration::FromMilliseconds(src.GetDuration());
+    TimingParams timing;
+    timing.mDuration.SetAsUnrestrictedDouble() = src.GetDuration();
     timing.mDelay = TimeDuration::FromMilliseconds(src.GetDelay());
-    timing.mIterationCount = src.GetIterationCount();
+    timing.mIterations = src.GetIterationCount();
     timing.mDirection = src.GetDirection();
-    timing.mFillMode = src.GetFillMode();
+    timing.mFill = src.GetFillMode();
 
     RefPtr<KeyframeEffectReadOnly> destEffect =
       new KeyframeEffectReadOnly(mPresContext->Document(), aTarget,
@@ -919,111 +813,4 @@ nsAnimationManager::BuildSegment(InfallibleTArray<AnimationPropertySegment>&
   segment.mTimingFunction.Init(*tf);
 
   return true;
-}
-
-/* static */ void
-nsAnimationManager::UpdateCascadeResults(
-                      nsStyleContext* aStyleContext,
-                      AnimationCollection* aElementAnimations)
-{
-  /*
-   * Figure out which properties we need to examine.
-   */
-
-  // size of 2 since we only currently have 2 properties we animate on
-  // the compositor
-  nsAutoTArray<nsCSSProperty, 2> propertiesToTrack;
-
-  {
-    nsCSSPropertySet propertiesToTrackAsSet;
-
-    for (size_t animIdx = aElementAnimations->mAnimations.Length();
-         animIdx-- != 0; ) {
-      const Animation* anim = aElementAnimations->mAnimations[animIdx];
-      const KeyframeEffectReadOnly* effect = anim->GetEffect();
-      if (!effect) {
-        continue;
-      }
-
-      for (size_t propIdx = 0, propEnd = effect->Properties().Length();
-           propIdx != propEnd; ++propIdx) {
-        const AnimationProperty& prop = effect->Properties()[propIdx];
-        // We only bother setting mWinsInCascade for properties that we
-        // can animate on the compositor.
-        if (nsCSSProps::PropHasFlags(prop.mProperty,
-                                     CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR)) {
-          if (!propertiesToTrackAsSet.HasProperty(prop.mProperty)) {
-            propertiesToTrack.AppendElement(prop.mProperty);
-            propertiesToTrackAsSet.AddProperty(prop.mProperty);
-          }
-        }
-      }
-    }
-  }
-
-  /*
-   * Determine whether those properties are set in things that
-   * override animations.
-   */
-
-  nsCSSPropertySet propertiesOverridden;
-  nsRuleNode::ComputePropertiesOverridingAnimation(propertiesToTrack,
-                                                   aStyleContext,
-                                                   propertiesOverridden);
-
-  /*
-   * Set mWinsInCascade based both on what is overridden at levels
-   * higher than animations and based on one animation overriding
-   * another.
-   *
-   * We iterate from the last animation to the first, just like we do
-   * when calling ComposeStyle from AnimationCollection::EnsureStyleRuleFor.
-   * Later animations override earlier ones, so we add properties to the set
-   * of overridden properties as we encounter them, if the animation is
-   * currently in effect.
-   */
-
-  bool changed = false;
-  for (size_t animIdx = aElementAnimations->mAnimations.Length();
-       animIdx-- != 0; ) {
-    CSSAnimation* anim =
-      aElementAnimations->mAnimations[animIdx]->AsCSSAnimation();
-    KeyframeEffectReadOnly* effect = anim->GetEffect();
-
-    anim->mInEffectForCascadeResults = anim->IsInEffect();
-
-    if (!effect) {
-      continue;
-    }
-
-    for (size_t propIdx = 0, propEnd = effect->Properties().Length();
-         propIdx != propEnd; ++propIdx) {
-      AnimationProperty& prop = effect->Properties()[propIdx];
-      // We only bother setting mWinsInCascade for properties that we
-      // can animate on the compositor.
-      if (nsCSSProps::PropHasFlags(prop.mProperty,
-                                   CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR)) {
-        bool newWinsInCascade =
-          !propertiesOverridden.HasProperty(prop.mProperty);
-        if (newWinsInCascade != prop.mWinsInCascade) {
-          changed = true;
-        }
-        prop.mWinsInCascade = newWinsInCascade;
-
-        if (prop.mWinsInCascade && anim->mInEffectForCascadeResults) {
-          // This animation is in effect right now, so it overrides
-          // earlier animations.  (For animations that aren't in effect,
-          // we set mWinsInCascade as though they were, but they don't
-          // suppress animations lower in the cascade.)
-          propertiesOverridden.AddProperty(prop.mProperty);
-        }
-      }
-    }
-  }
-
-  // If there is any change in the cascade result, update animations on layers
-  // with the winning animations.
-  if (changed) {
-    aElementAnimations->RequestRestyle(AnimationCollection::RestyleType::Layer);
-  }
 }

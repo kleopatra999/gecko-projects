@@ -26,7 +26,7 @@
 #include "jit/SharedICHelpers.h"
 #include "jit/VMFunctions.h"
 #include "js/Conversions.h"
-#include "js/TraceableVector.h"
+#include "js/GCVector.h"
 #include "vm/Opcodes.h"
 #include "vm/TypedArrayCommon.h"
 
@@ -64,7 +64,7 @@ EnsureCanEnterIon(JSContext* cx, ICWarmUpCounter_Fallback* stub, BaselineFrame* 
         MOZ_ASSERT(LoopEntryCanIonOsr(pc));
         JitSpew(JitSpew_BaselineOSR, "  Compile at loop entry!");
         stat = CanEnterAtBranch(cx, script, frame, pc);
-    } else if (frame->isFunctionFrame()) {
+    } else if (frame->isNonEvalFunctionFrame()) {
         JitSpew(JitSpew_BaselineOSR, "  Compile function from top for later entry!");
         stat = CompileFunctionForBaseline(cx, script, frame);
     } else {
@@ -1173,6 +1173,7 @@ RemoveExistingGetElemNativeStubs(JSContext* cx, ICGetElem_Fallback* stub, Handle
           case ICStub::GetElem_NativeSlotSymbol:
             if (indirect)
                 continue;
+            MOZ_FALLTHROUGH;
           case ICStub::GetElem_NativePrototypeSlotName:
           case ICStub::GetElem_NativePrototypeSlotSymbol:
           case ICStub::GetElem_NativePrototypeCallNativeName:
@@ -1555,8 +1556,8 @@ PrimitiveArrayTypedObjectType(JSObject* obj)
 static Scalar::Type
 TypedThingElementType(JSObject* obj)
 {
-    return IsAnyTypedArray(obj)
-           ? AnyTypedArrayType(obj)
+    return obj->is<TypedArrayObject>()
+           ? obj->as<TypedArrayObject>().type()
            : PrimitiveArrayTypedObjectType(obj);
 }
 
@@ -1572,7 +1573,7 @@ TypedThingRequiresFloatingPoint(JSObject* obj)
 static bool
 IsNativeDenseElementAccess(HandleObject obj, HandleValue key)
 {
-    if (obj->isNative() && key.isInt32() && key.toInt32() >= 0 && !IsAnyTypedArray(obj.get()))
+    if (obj->isNative() && key.isInt32() && key.toInt32() >= 0 && !obj->is<TypedArrayObject>())
         return true;
     return false;
 }
@@ -1582,7 +1583,7 @@ IsNativeOrUnboxedDenseElementAccess(HandleObject obj, HandleValue key)
 {
     if (!obj->isNative() && !obj->is<UnboxedArrayObject>())
         return false;
-    if (key.isInt32() && key.toInt32() >= 0 && !IsAnyTypedArray(obj.get()))
+    if (key.isInt32() && key.toInt32() >= 0 && !obj->is<TypedArrayObject>())
         return true;
     return false;
 }
@@ -1697,7 +1698,7 @@ TryAttachGetElemStub(JSContext* cx, JSScript* script, jsbytecode* pc, ICGetElem_
     }
 
     // Check for TypedArray[int] => Number and TypedObject[int] => Number accesses.
-    if ((IsAnyTypedArray(obj.get()) || IsPrimitiveArrayTypedObject(obj)) &&
+    if ((obj->is<TypedArrayObject>() || IsPrimitiveArrayTypedObject(obj)) &&
         rhs.isNumber() &&
         res.isNumber() &&
         !TypedArrayGetElemStubExists(stub, obj))
@@ -2846,7 +2847,7 @@ DoSetElemFallback(JSContext* cx, BaselineFrame* frame, ICSetElem_Fallback* stub_
         return true;
     }
 
-    if ((IsAnyTypedArray(obj.get()) || IsPrimitiveArrayTypedObject(obj)) &&
+    if ((obj->is<TypedArrayObject>() || IsPrimitiveArrayTypedObject(obj)) &&
         index.isNumber() &&
         rhs.isNumber())
     {
@@ -2858,8 +2859,8 @@ DoSetElemFallback(JSContext* cx, BaselineFrame* frame, ICSetElem_Fallback* stub_
 
         bool expectOutOfBounds;
         double idx = index.toNumber();
-        if (IsAnyTypedArray(obj)) {
-            expectOutOfBounds = (idx < 0 || idx >= double(AnyTypedArrayLength(obj)));
+        if (obj->is<TypedArrayObject>()) {
+            expectOutOfBounds = (idx < 0 || idx >= double(obj->as<TypedArrayObject>().length()));
         } else {
             // Typed objects throw on out of bounds accesses. Don't attach
             // a stub in this case.
@@ -5699,6 +5700,7 @@ GetTemplateObjectForNative(JSContext* cx, Native native, const CallArgs& args,
     }
 
     if (JitSupportsSimd()) {
+        RootedGlobalObject global(cx, cx->global());
 #define ADD_INT32X4_SIMD_OP_NAME_(OP) || native == js::simd_int32x4_##OP
 #define ADD_BOOL32X4_SIMD_OP_NAME_(OP) || native == js::simd_bool32x4_##OP
 #define ADD_FLOAT32X4_SIMD_OP_NAME_(OP) || native == js::simd_float32x4_##OP
@@ -5711,7 +5713,7 @@ GetTemplateObjectForNative(JSContext* cx, Native native, const CallArgs& args,
             ADD_INT32X4_SIMD_OP_NAME_(fromFloat32x4)
             ADD_INT32X4_SIMD_OP_NAME_(fromFloat32x4Bits))
         {
-            Rooted<SimdTypeDescr*> descr(cx, cx->global()->getOrCreateSimdTypeDescr<Int32x4>(cx));
+            Rooted<SimdTypeDescr*> descr(cx, GlobalObject::getOrCreateSimdTypeDescr<Int32x4>(cx, global));
             res.set(cx->compartment()->jitCompartment()->getSimdTemplateObjectFor(cx, descr));
             return !!res;
         }
@@ -5722,7 +5724,7 @@ GetTemplateObjectForNative(JSContext* cx, Native native, const CallArgs& args,
             FOREACH_COMP_SIMD_OP(ADD_INT32X4_SIMD_OP_NAME_)
             FOREACH_COMP_SIMD_OP(ADD_FLOAT32X4_SIMD_OP_NAME_))
         {
-            Rooted<SimdTypeDescr*> descr(cx, cx->global()->getOrCreateSimdTypeDescr<Bool32x4>(cx));
+            Rooted<SimdTypeDescr*> descr(cx, GlobalObject::getOrCreateSimdTypeDescr<Bool32x4>(cx, global));
             res.set(cx->compartment()->jitCompartment()->getSimdTemplateObjectFor(cx, descr));
             return !!res;
         }
@@ -5734,7 +5736,7 @@ GetTemplateObjectForNative(JSContext* cx, Native native, const CallArgs& args,
             ADD_FLOAT32X4_SIMD_OP_NAME_(fromInt32x4Bits)
             ION_COMMONX4_SIMD_OP(ADD_FLOAT32X4_SIMD_OP_NAME_))
         {
-            Rooted<SimdTypeDescr*> descr(cx, cx->global()->getOrCreateSimdTypeDescr<Float32x4>(cx));
+            Rooted<SimdTypeDescr*> descr(cx, GlobalObject::getOrCreateSimdTypeDescr<Float32x4>(cx, global));
             res.set(cx->compartment()->jitCompartment()->getSimdTemplateObjectFor(cx, descr));
             return !!res;
         }

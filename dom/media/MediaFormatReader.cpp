@@ -270,6 +270,8 @@ MediaFormatReader::OnDemuxerInitDone(nsresult)
 
   mDemuxerInitDone = true;
 
+  UniquePtr<MetadataTags> tags(MakeUnique<MetadataTags>());
+
   // To decode, we need valid video and a place to put it.
   bool videoActive = !!mDemuxer->GetNumberTracks(TrackInfo::kVideoTrack) &&
     GetImageContainer();
@@ -282,6 +284,10 @@ MediaFormatReader::OnDemuxerInitDone(nsresult)
       return;
     }
     mInfo.mVideo = *mVideo.mTrackDemuxer->GetInfo()->GetAsVideoInfo();
+    UniquePtr<TrackInfo> info(mVideo.mTrackDemuxer->GetInfo());
+    for (const MetadataTag& tag : info->mTags) {
+      tags->Put(tag.mKey, tag.mValue);
+    }
     mVideo.mCallback = new DecoderCallback(this, TrackInfo::kVideoTrack);
     mVideo.mTimeRanges = mVideo.mTrackDemuxer->GetBuffered();
     mTrackDemuxersMayBlock |= mVideo.mTrackDemuxer->GetSamplesMayBlock();
@@ -295,6 +301,10 @@ MediaFormatReader::OnDemuxerInitDone(nsresult)
       return;
     }
     mInfo.mAudio = *mAudio.mTrackDemuxer->GetInfo()->GetAsAudioInfo();
+    UniquePtr<TrackInfo> info(mAudio.mTrackDemuxer->GetInfo());
+    for (const MetadataTag& tag : info->mTags) {
+      tags->Put(tag.mKey, tag.mValue);
+    }
     mAudio.mCallback = new DecoderCallback(this, TrackInfo::kAudioTrack);
     mAudio.mTimeRanges = mAudio.mTrackDemuxer->GetBuffered();
     mTrackDemuxersMayBlock |= mAudio.mTrackDemuxer->GetSamplesMayBlock();
@@ -1171,6 +1181,16 @@ MediaFormatReader::ReturnOutput(MediaData* aData, TrackType aTrack)
     }
     mAudio.mPromise.Resolve(aData, __func__);
   } else if (aTrack == TrackInfo::kVideoTrack) {
+    if (aData->mType != MediaData::RAW_DATA) {
+      VideoData* videoData = static_cast<VideoData*>(aData);
+
+      if (videoData->mDisplay != mInfo.mVideo.mDisplay) {
+        LOG("change of video display size (%dx%d->%dx%d)",
+            mInfo.mVideo.mDisplay.width, mInfo.mVideo.mDisplay.height,
+            videoData->mDisplay.width, videoData->mDisplay.height);
+        mInfo.mVideo.mDisplay = videoData->mDisplay;
+      }
+    }
     mVideo.mPromise.Resolve(aData, __func__);
   }
   LOG("Resolved data promise for %s", TrackTypeToStr(aTrack));

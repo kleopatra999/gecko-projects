@@ -805,6 +805,7 @@ nsDocShell::nsDocShell()
   , mBlankTiming(false)
   , mFrameType(eFrameTypeRegular)
   , mOwnOrContainingAppId(nsIScriptSecurityManager::UNKNOWN_APP_ID)
+  , mUserContextId(nsIScriptSecurityManager::DEFAULT_USER_CONTEXT_ID)
   , mParentCharsetSource(0)
   , mJSRunToCompletionDepth(0)
 {
@@ -5783,6 +5784,23 @@ nsDocShell::GetUnscaledDevicePixelsPerCSSPixel(double* aScale)
 }
 
 NS_IMETHODIMP
+nsDocShell::GetDevicePixelsPerDesktopPixel(double* aScale)
+{
+  if (mParentWidget) {
+    *aScale = mParentWidget->GetDesktopToDeviceScale().scale;
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIBaseWindow> ownerWindow(do_QueryInterface(mTreeOwner));
+  if (ownerWindow) {
+    return ownerWindow->GetDevicePixelsPerDesktopPixel(aScale);
+  }
+
+  *aScale = 1.0;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDocShell::SetPosition(int32_t aX, int32_t aY)
 {
   mBounds.x = aX;
@@ -10072,6 +10090,11 @@ nsDocShell::InternalLoad(nsIURI* aURI,
         }
       }
 
+      // If we're doing a history load, use its scroll restoration state.
+      if (aSHEntry) {
+        aSHEntry->GetScrollRestorationIsManual(&scrollRestorationIsManual);
+      }
+
       /* Assign mOSHE to mLSHE. This will either be a new entry created
        * by OnNewURI() for normal loads or aSHEntry for history loads.
        */
@@ -14051,7 +14074,7 @@ nsDocShell::NotifyJSRunToCompletionStart(const char* aReason,
     RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
     if (timelines && timelines->HasConsumer(this)) {
       timelines->AddMarkerForDocShell(this, Move(
-        MakeUnique<JavascriptTimelineMarker>(
+        mozilla::MakeUnique<JavascriptTimelineMarker>(
           aReason, aFunctionName, aFilename, aLineNumber, MarkerTracingType::START,
           aAsyncStack, aAsyncCause)));
     }
@@ -14181,55 +14204,8 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNonSubresourceReques
   return NS_OK;
 }
 
-namespace {
-
-class FetchEventDispatcher final : public nsIFetchEventDispatcher
-{
-public:
-  FetchEventDispatcher(nsIInterceptedChannel* aChannel,
-                       nsIRunnable* aContinueRunnable)
-    : mChannel(aChannel)
-    , mContinueRunnable(aContinueRunnable)
-  {
-  }
-
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIFETCHEVENTDISPATCHER
-
-private:
-  ~FetchEventDispatcher()
-  {
-  }
-
-  nsCOMPtr<nsIInterceptedChannel> mChannel;
-  nsCOMPtr<nsIRunnable> mContinueRunnable;
-};
-
-NS_IMPL_ISUPPORTS(FetchEventDispatcher, nsIFetchEventDispatcher)
-
 NS_IMETHODIMP
-FetchEventDispatcher::Dispatch()
-{
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  if (!swm) {
-    mChannel->Cancel(NS_ERROR_INTERCEPTION_FAILED);
-    return NS_OK;
-  }
-
-  ErrorResult error;
-  swm->DispatchPreparedFetchEvent(mChannel, mContinueRunnable, error);
-  if (NS_WARN_IF(error.Failed())) {
-    return error.StealNSResult();
-  }
-
-  return NS_OK;
-}
-
-}
-
-NS_IMETHODIMP
-nsDocShell::ChannelIntercepted(nsIInterceptedChannel* aChannel,
-                               nsIFetchEventDispatcher** aFetchDispatcher)
+nsDocShell::ChannelIntercepted(nsIInterceptedChannel* aChannel)
 {
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   if (!swm) {
@@ -14266,17 +14242,11 @@ nsDocShell::ChannelIntercepted(nsIInterceptedChannel* aChannel,
   attrs.InheritFromDocShellToDoc(GetOriginAttributes(), uri);
 
   ErrorResult error;
-  nsCOMPtr<nsIRunnable> runnable =
-    swm->PrepareFetchEvent(attrs, doc, mInterceptedDocumentId, aChannel,
-                           isReload, isSubresourceLoad, error);
+  swm->DispatchFetchEvent(attrs, doc, mInterceptedDocumentId, aChannel,
+                          isReload, isSubresourceLoad, error);
   if (NS_WARN_IF(error.Failed())) {
     return error.StealNSResult();
   }
-
-  MOZ_ASSERT(runnable);
-  RefPtr<FetchEventDispatcher> dispatcher =
-    new FetchEventDispatcher(aChannel, runnable);
-  dispatcher.forget(aFetchDispatcher);
 
   return NS_OK;
 }

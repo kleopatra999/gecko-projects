@@ -14,6 +14,12 @@ loader.lazyRequireGetter(this, "FileUtils",
                          "resource://gre/modules/FileUtils.jsm", true);
 loader.lazyRequireGetter(this, "setTimeout", "Timer", true);
 
+// Re-export the thread-safe utils.
+const ThreadSafeDevToolsUtils = require("./ThreadSafeDevToolsUtils.js");
+for (let key of Object.keys(ThreadSafeDevToolsUtils)) {
+  exports[key] = ThreadSafeDevToolsUtils[key];
+}
+
 /**
  * Turn the error |aError| into a string, without fail.
  */
@@ -183,10 +189,17 @@ exports.executeSoon = function executeSoon(aFn) {
   if (isWorker) {
     setImmediate(aFn);
   } else {
-    let stack = components.stack;
-    let executor = () => {
-      Cu.callFunctionWithAsyncStack(aFn, stack, "DevToolsUtils.executeSoon");
-    };
+    let executor;
+    // Only enable async stack reporting when DEBUG_JS_MODULES is set
+    // (customized local builds) to avoid a performance penalty.
+    if (AppConstants.DEBUG_JS_MODULES || exports.testing) {
+      let stack = components.stack;
+      executor = () => {
+        Cu.callFunctionWithAsyncStack(aFn, stack, "DevToolsUtils.executeSoon");
+      };
+    } else {
+      executor = aFn;
+    }
     Services.tm.mainThread.dispatch({
       run: exports.makeInfallible(executor)
     }, Ci.nsIThread.DISPATCH_NORMAL);

@@ -103,6 +103,7 @@ class Rule;
 } // namespace css
 
 namespace dom {
+class Animation;
 class AnonymousContent;
 class Attr;
 class BoxObject;
@@ -320,17 +321,12 @@ public:
    * of the document's ancestors up to the toplevel document makes use
    * of the CSP directive 'upgrade-insecure-requests'.
    */
-  bool GetUpgradeInsecureRequests() const
+  bool GetUpgradeInsecureRequests(bool aPreload) const
   {
+    if (aPreload) {
+      return mUpgradeInsecurePreloads;
+    }
     return mUpgradeInsecureRequests;
-  }
-
-  /**
-   * Same as GetUpgradeInsecureRequests() but *only* for preloads.
-   */
-  bool GetUpgradeInsecurePreloads() const
-  {
-    return mUpgradeInsecurePreloads;
   }
 
   /**
@@ -348,17 +344,32 @@ public:
   }
 
   /**
-   * Return the base URI for relative URIs in the document (the document uri
-   * unless it's overridden by SetBaseURI, HTML <base> tags, etc.).  The
-   * returned URI could be null if there is no document URI.  If the document
-   * is a srcdoc document, return the parent document's base URL.
+   * Return the fallback base URL for this document, as defined in the HTML
+   * specification.  Note that this can return null if there is no document URI.
+   *
+   * XXXbz: This doesn't implement the bits for about:blank yet.
    */
-  nsIURI* GetDocBaseURI() const
+  nsIURI* GetFallbackBaseURI() const
   {
     if (mIsSrcdocDocument && mParentDocument) {
       return mParentDocument->GetDocBaseURI();
     }
-    return mDocumentBaseURI ? mDocumentBaseURI : mDocumentURI;
+    return mDocumentURI;
+  }
+
+  /**
+   * Return the base URI for relative URIs in the document (the document uri
+   * unless it's overridden by SetBaseURI, HTML <base> tags, etc.).  The
+   * returned URI could be null if there is no document URI.  If the document is
+   * a srcdoc document and has no explicit base URL, return the parent
+   * document's base URL.
+   */
+  nsIURI* GetDocBaseURI() const
+  {
+    if (mDocumentBaseURI) {
+      return mDocumentBaseURI;
+    }
+    return GetFallbackBaseURI();
   }
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
@@ -2155,6 +2166,9 @@ public:
   virtual already_AddRefed<mozilla::dom::UndoManager> GetUndoManager() = 0;
 
   virtual mozilla::dom::DocumentTimeline* Timeline() = 0;
+
+  virtual void GetAnimations(
+      nsTArray<RefPtr<mozilla::dom::Animation>>& aAnimations) = 0;
 
   nsresult ScheduleFrameRequestCallback(mozilla::dom::FrameRequestCallback& aCallback,
                                         int32_t *aHandle);

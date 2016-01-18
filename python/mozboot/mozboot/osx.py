@@ -334,7 +334,6 @@ class OSXBootstrapper(BaseBootstrapper):
 
         # 1. System packages.
         packages = [
-            ('ant', 'ant'),
             ('brew-cask', 'caskroom/cask/brew-cask'),  # For installing Java later.
             ('wget', 'wget'),
         ]
@@ -388,6 +387,7 @@ class OSXBootstrapper(BaseBootstrapper):
     def ensure_macports_system_packages(self):
         packages = [
             'python27',
+            'py27-readline',
             'mercurial',
             'autoconf213',
             'gnutar',

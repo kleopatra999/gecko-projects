@@ -402,12 +402,31 @@ template <typename T>
 JS_PUBLIC_API(void)
 JS::TraceEdge(JSTracer* trc, JS::Heap<T>* thingp, const char* name)
 {
-    DispatchToTracer(trc, ConvertToBase(thingp->unsafeGet()), name);
+    MOZ_ASSERT(thingp);
+    if (InternalGCMethods<T>::isMarkable(thingp->get()))
+        DispatchToTracer(trc, ConvertToBase(thingp->unsafeGet()), name);
+}
+
+JS_PUBLIC_API(void)
+JS::TraceEdge(JSTracer* trc, JS::TenuredHeap<JSObject*>* thingp, const char* name)
+{
+    MOZ_ASSERT(thingp);
+    if (JSObject* ptr = thingp->getPtr()) {
+        DispatchToTracer(trc, &ptr, name);
+        thingp->setPtr(ptr);
+    }
 }
 
 template <typename T>
 void
 js::TraceManuallyBarrieredEdge(JSTracer* trc, T* thingp, const char* name)
+{
+    DispatchToTracer(trc, ConvertToBase(thingp), name);
+}
+
+template <typename T>
+JS_PUBLIC_API(void)
+js::UnsafeTraceManuallyBarrieredEdge(JSTracer* trc, T* thingp, const char* name)
 {
     DispatchToTracer(trc, ConvertToBase(thingp), name);
 }
@@ -456,6 +475,14 @@ js::TraceNullableRoot(JSTracer* trc, ReadBarriered<T>* thingp, const char* name)
 }
 
 template <typename T>
+JS_PUBLIC_API(void)
+JS::UnsafeTraceRoot(JSTracer* trc, T* thingp, const char* name)
+{
+    MOZ_ASSERT(thingp);
+    js::TraceNullableRoot(trc, thingp, name);
+}
+
+template <typename T>
 void
 js::TraceRange(JSTracer* trc, size_t len, WriteBarrieredBase<T>* vec, const char* name)
 {
@@ -483,7 +510,6 @@ js::TraceRootRange(JSTracer* trc, size_t len, T* vec, const char* name)
 // Instantiate a copy of the Tracing templates for each derived type.
 #define INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS(type) \
     template void js::TraceEdge<type>(JSTracer*, WriteBarrieredBase<type>*, const char*); \
-    template JS_PUBLIC_API(void) JS::TraceEdge<type>(JSTracer*, JS::Heap<type>*, const char*); \
     template void js::TraceManuallyBarrieredEdge<type>(JSTracer*, type*, const char*); \
     template void js::TraceWeakEdge<type>(JSTracer*, WeakRef<type>*, const char*); \
     template void js::TraceRoot<type>(JSTracer*, type*, const char*); \
@@ -494,6 +520,14 @@ js::TraceRootRange(JSTracer* trc, size_t len, T* vec, const char* name)
     template void js::TraceRootRange<type>(JSTracer*, size_t, type*, const char*);
 FOR_EACH_GC_POINTER_TYPE(INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS)
 #undef INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS
+
+#define INSTANTIATE_PUBLIC_TRACE_FUNCTIONS(type) \
+    template JS_PUBLIC_API(void) JS::TraceEdge<type>(JSTracer*, JS::Heap<type>*, const char*); \
+    template JS_PUBLIC_API(void) JS::UnsafeTraceRoot<type>(JSTracer*, type*, const char*); \
+    template JS_PUBLIC_API(void) js::UnsafeTraceManuallyBarrieredEdge<type>(JSTracer*, type*, \
+                                                                            const char*);
+FOR_EACH_PUBLIC_GC_POINTER_TYPE(INSTANTIATE_PUBLIC_TRACE_FUNCTIONS)
+#undef INSTANTIATE_PUBLIC_TRACE_FUNCTIONS
 
 template <typename T>
 void
@@ -2215,6 +2249,8 @@ js::TenuringTracer::moveObjectToTenured(JSObject* dst, JSObject* src, AllocKind 
             tenuredSize += UnboxedArrayObject::objectMovedDuringMinorGC(this, dst, src, dstKind);
         } else if (src->is<ArgumentsObject>()) {
             tenuredSize += ArgumentsObject::objectMovedDuringMinorGC(this, dst, src);
+        } else if (JSObjectMovedOp op = dst->getClass()->ext.objectMovedOp) {
+            op(dst, src);
         } else {
             // Objects with JSCLASS_SKIP_NURSERY_FINALIZE need to be handled above
             // to ensure any additional nursery buffers they hold are moved.

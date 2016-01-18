@@ -577,7 +577,7 @@ struct BytecodeEmitter
 
     // Pops iterator from the top of the stack. Pushes the result of |.next()|
     // onto the stack.
-    bool emitIteratorNext(ParseNode* pn);
+    bool emitIteratorNext(ParseNode* pn, bool allowSelfHosted = false);
 
     // Check if the value on top of the stack is "undefined". If so, replace
     // that value on the stack with the value defined by |defaultExpr|.
@@ -609,11 +609,15 @@ struct BytecodeEmitter
 
     bool emitConditionalExpression(ConditionalExpression& conditional);
 
+    bool isRestParameter(ParseNode* pn, bool* result);
+    bool emitOptimizeSpread(ParseNode* arg0, ptrdiff_t* jmp, bool* emitted);
+
     bool emitCallOrNew(ParseNode* pn);
     bool emitDebugOnlyCheckSelfHosted();
     bool emitSelfHostedCallFunction(ParseNode* pn);
     bool emitSelfHostedResumeGenerator(ParseNode* pn);
     bool emitSelfHostedForceInterpreter(ParseNode* pn);
+    bool emitSelfHostedAllowContentSpread(ParseNode* pn);
 
     bool emitComprehensionFor(ParseNode* compFor);
     bool emitComprehensionForIn(ParseNode* pn);
@@ -637,23 +641,19 @@ struct BytecodeEmitter
     bool pushInitialConstants(JSOp op, unsigned n);
     bool initializeBlockScopedLocalsFromStack(Handle<StaticBlockObject*> blockObj);
 
+    // Emit bytecode for the spread operator.
+    //
     // emitSpread expects the current index (I) of the array, the array itself
     // and the iterator to be on the stack in that order (iterator on the bottom).
     // It will pop the iterator and I, then iterate over the iterator by calling
     // |.next()| and put the results into the I-th element of array with
     // incrementing I, then push the result I (it will be original I +
     // iteration count). The stack after iteration will look like |ARRAY INDEX|.
-    bool emitSpread();
+    bool emitSpread(bool allowSelfHosted = false);
 
-    // If type is StmtType::FOR_OF_LOOP, emit bytecode for a for-of loop.
-    // pn should be PNK_FOR, and pn->pn_left should be PNK_FOROF.
-    //
-    // If type is StmtType::SPREAD, emit bytecode for spread operator.
-    // pn should be nullptr.
-    //
-    // Please refer the comment above emitSpread for additional information about
-    // stack convention.
-    bool emitForOf(StmtType type, ParseNode* pn);
+    // Emit bytecode for a for-of loop.  pn should be PNK_FOR, and pn->pn_left
+    // should be PNK_FOROF.
+    bool emitForOf(ParseNode* pn);
 
     bool emitClass(ParseNode* pn);
     bool emitSuperPropLHS(ParseNode* superBase, bool isCall = false);

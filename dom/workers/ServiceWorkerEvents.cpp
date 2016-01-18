@@ -100,8 +100,7 @@ FetchEvent::Constructor(const GlobalObject& aGlobal,
   bool trusted = e->Init(owner);
   e->InitEvent(aType, aOptions.mBubbles, aOptions.mCancelable);
   e->SetTrusted(trusted);
-  e->mRequest = aOptions.mRequest.WasPassed() ?
-      &aOptions.mRequest.Value() : nullptr;
+  e->mRequest = aOptions.mRequest;
   e->mClientId = aOptions.mClientId;
   e->mIsReload = aOptions.mIsReload;
   return e.forget();
@@ -210,6 +209,12 @@ public:
 
     rv = mChannel->FinishSynthesizedResponse(mResponseURLSpec);
     NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to finish synthesized response");
+
+    nsCOMPtr<nsIObserverService> obsService = services::GetObserverService();
+    if (obsService) {
+      obsService->NotifyObservers(underlyingChannel, "service-worker-synthesized-response", nullptr);
+    }
+
     return rv;
   }
 

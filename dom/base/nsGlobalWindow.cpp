@@ -2325,13 +2325,11 @@ CreateNativeGlobalForInner(JSContext* aCx,
   // windows or inside a browser element. In such cases we want to tag the
   // window's compartment with the add-on ID. See bug 1092156.
   if (nsContentUtils::IsSystemPrincipal(aPrincipal)) {
-    options.setAddonId(MapURIToAddonID(aURI));
+    options.creationOptions().setAddonId(MapURIToAddonID(aURI));
   }
 
-  if (top) {
-    if (top->GetGlobalJSObject()) {
-      options.setSameZoneAs(top->GetGlobalJSObject());
-    }
+  if (top && top->GetGlobalJSObject()) {
+    options.creationOptions().setSameZoneAs(top->GetGlobalJSObject());
   }
 
   // Determine if we need the Components object.
@@ -3762,6 +3760,19 @@ nsGlobalWindow::GetSpeechSynthesis(ErrorResult& aError)
 
   return mSpeechSynthesis;
 }
+
+bool
+nsGlobalWindow::HasActiveSpeechSynthesis()
+{
+  MOZ_ASSERT(IsInnerWindow());
+
+  if (mSpeechSynthesis) {
+    return !mSpeechSynthesis->HasEmptyQueue();
+  }
+
+  return false;
+}
+
 #endif
 
 already_AddRefed<nsIDOMWindow>
@@ -5018,25 +5029,30 @@ nsGlobalWindow::SetOuterHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
                             aValue, "outerHeight", aError);
 }
 
-nsIntPoint
+DesktopIntPoint
 nsGlobalWindow::GetScreenXY(ErrorResult& aError)
 {
   MOZ_ASSERT(IsOuterWindow());
 
   // When resisting fingerprinting, always return (0,0)
   if (nsContentUtils::ShouldResistFingerprinting(mDocShell)) {
-    return nsIntPoint(0, 0);
+    return DesktopIntPoint(0, 0);
   }
 
   nsCOMPtr<nsIBaseWindow> treeOwnerAsWin = GetTreeOwnerWindow();
   if (!treeOwnerAsWin) {
     aError.Throw(NS_ERROR_FAILURE);
-    return nsIntPoint(0, 0);
+    return DesktopIntPoint(0, 0);
   }
 
   int32_t x = 0, y = 0;
   aError = treeOwnerAsWin->GetPosition(&x, &y);
-  return nsIntPoint(x, y);
+
+  nsCOMPtr<nsIWidget> widget = GetMainWidget();
+  DesktopToLayoutDeviceScale scale = widget ? widget->GetDesktopToDeviceScale()
+                                            : DesktopToLayoutDeviceScale(1.0);
+  DesktopPoint pt = LayoutDeviceIntPoint(x, y) / scale;
+  return DesktopIntPoint(NSToIntRound(pt.x), NSToIntRound(pt.y));
 }
 
 int32_t
@@ -5044,7 +5060,7 @@ nsGlobalWindow::GetScreenXOuter(ErrorResult& aError)
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
-  return DevToCSSIntPixels(GetScreenXY(aError).x);
+  return GetScreenXY(aError).x;
 }
 
 int32_t
@@ -5288,7 +5304,7 @@ nsGlobalWindow::GetScreenYOuter(ErrorResult& aError)
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
-  return DevToCSSIntPixels(GetScreenXY(aError).y);
+  return GetScreenXY(aError).y;
 }
 
 int32_t
@@ -5903,8 +5919,12 @@ FullscreenTransitionTask::Run()
       mWindow->mFullScreen = mFullscreen;
     }
     // Toggle the fullscreen state on the widget
-    mWindow->SetWidgetFullscreen(nsPIDOMWindow::eForFullscreenAPI,
-                                 mFullscreen, mWidget, mScreen);
+    if (!mWindow->SetWidgetFullscreen(nsPIDOMWindow::eForFullscreenAPI,
+                                      mFullscreen, mWidget, mScreen)) {
+      // Fail to setup the widget, call FinishFullscreenChange to
+      // complete fullscreen change directly.
+      mWindow->FinishFullscreenChange(mFullscreen);
+    }
     // Set observer for the next content paint.
     nsCOMPtr<nsIObserver> observer = new Observer(this);
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
@@ -5983,14 +6003,14 @@ MakeWidgetFullscreen(nsGlobalWindow* aWindow, gfx::VRDeviceProxy* aHMD,
   }
   nsCOMPtr<nsIScreen> screen = aHMD ? aHMD->GetScreen() : nullptr;
   if (!performTransition) {
-    aWindow->SetWidgetFullscreen(aReason, aFullscreen, widget, screen);
+    return aWindow->SetWidgetFullscreen(aReason, aFullscreen, widget, screen);
   } else {
     nsCOMPtr<nsIRunnable> task =
       new FullscreenTransitionTask(duration, aWindow, aFullscreen,
                                    widget, screen, transitionData);
     task->Run();
+    return true;
   }
-  return true;
 }
 
 nsresult
@@ -6083,11 +6103,18 @@ nsGlobalWindow::SetFullscreenInternal(FullscreenReason aReason,
     }
   }
 
+  // If we didn't setup the widget, we may need to manually set this
+  // flag, or the assertion in FinishFullscreenChange is violated.
+  if (nsCOMPtr<nsIPresShell> presShell = mDocShell->GetPresShell()) {
+    if (!presShell->IsInFullscreenChange()) {
+      presShell->SetIsInFullscreenChange(true);
+    }
+  }
   FinishFullscreenChange(aFullScreen);
   return NS_OK;
 }
 
-void
+bool
 nsGlobalWindow::SetWidgetFullscreen(FullscreenReason aReason, bool aIsFullscreen,
                                     nsIWidget* aWidget, nsIScreen* aScreen)
 {
@@ -6099,13 +6126,12 @@ nsGlobalWindow::SetWidgetFullscreen(FullscreenReason aReason, bool aIsFullscreen
   if (nsCOMPtr<nsIPresShell> presShell = mDocShell->GetPresShell()) {
     presShell->SetIsInFullscreenChange(true);
   }
-  if (aReason == nsPIDOMWindow::eForFullscreenMode) {
+  nsresult rv = aReason == nsPIDOMWindow::eForFullscreenMode ?
     // If we enter fullscreen for fullscreen mode, we want
     // the native system behavior.
-    aWidget->MakeFullScreenWithNativeTransition(aIsFullscreen, aScreen);
-  } else {
+    aWidget->MakeFullScreenWithNativeTransition(aIsFullscreen, aScreen) :
     aWidget->MakeFullScreen(aIsFullscreen, aScreen);
-  }
+  return NS_SUCCEEDED(rv);
 }
 
 /* virtual */ void
@@ -6239,6 +6265,7 @@ nsGlobalWindow::Dump(const nsAString& aStr)
 #endif
 
   if (cstr) {
+    MOZ_LOG(nsContentUtils::DOMDumpLog(), LogLevel::Debug, ("[Window.Dump] %s", cstr));
 #ifdef XP_WIN
     PrintToDebugger(cstr);
 #endif
@@ -6980,13 +7007,15 @@ nsGlobalWindow::MoveToOuter(int32_t aXPos, int32_t aYPos, ErrorResult& aError, b
     return;
   }
 
-  // Mild abuse of a "size" object so we don't need more helper functions.
-  nsIntSize cssPos(aXPos, aYPos);
-  CheckSecurityLeftAndTop(&cssPos.width, &cssPos.height, aCallerIsChrome);
+  DesktopIntPoint pt(aXPos, aYPos);
+  CheckSecurityLeftAndTop(&pt.x, &pt.y, aCallerIsChrome);
 
-  nsIntSize devPos = CSSToDevIntPixels(cssPos);
+  nsCOMPtr<nsIWidget> widget = GetMainWidget();
+  DesktopToLayoutDeviceScale scale = widget ? widget->GetDesktopToDeviceScale()
+                                            : DesktopToLayoutDeviceScale(1.0);
+  LayoutDevicePoint devPos = pt * scale;
 
-  aError = treeOwnerAsWin->SetPosition(devPos.width, devPos.height);
+  aError = treeOwnerAsWin->SetPosition(devPos.x, devPos.y);
 }
 
 void
@@ -10523,7 +10552,7 @@ nsGlobalWindow::ShowSlowScriptDialog()
   }
 
   // Check if we should offer the option to debug
-  JS::AutoFilename filename;
+  JS::UniqueChars filename;
   unsigned lineno;
   bool hasFrame = JS::DescribeScriptedCaller(cx, &filename, &lineno);
 

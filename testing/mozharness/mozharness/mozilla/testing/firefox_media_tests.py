@@ -4,20 +4,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 # ***** BEGIN LICENSE BLOCK *****
-"""firefox_media_tests.py
 
-Author: Syd Polk
-"""
 import copy
 import glob
 import os
-import platform
 import re
-import sys
 import urlparse
 
-from mozharness.base.log import ERROR, WARNING, DEBUG
-from mozharness.base.script import PreScriptAction, PostScriptAction
+from mozharness.base.log import ERROR, WARNING
+from mozharness.base.script import PreScriptAction
 from mozharness.mozilla.testing.testbase import (TestingMixin,
                                                  testing_config_options)
 from mozharness.mozilla.testing.unittest import TestSummaryOutputParserHelper
@@ -155,25 +150,35 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
         self.installer_path = c.get('installer_path')
         self.binary_path = c.get('binary_path')
         self.test_packages_url = c.get('test_packages_url')
+        self.test_url = c.get('test_url')
 
     @PreScriptAction('create-virtualenv')
     def _pre_create_virtualenv(self, action):
         dirs = self.query_abs_dirs()
-        requirements = os.path.join(dirs['abs_test_install_dir'],
+        marionette_requirements = os.path.join(dirs['abs_test_install_dir'],
                                     'config',
                                     'marionette_requirements.txt')
-        if os.access(requirements, os.F_OK):
-            self.register_virtualenv_module(requirements=[requirements],
+        if os.access(marionette_requirements, os.F_OK):
+            self.register_virtualenv_module(requirements=[marionette_requirements],
                                             two_pass=True)
 
-        requirements_file = os.path.join(dirs['firefox_media_dir'],
+        media_tests_requirements = os.path.join(dirs['firefox_media_dir'],
                                          'requirements.txt')
 
-        if os.path.isfile(requirements_file):
-            self.register_virtualenv_module(requirements=[requirements_file])
+        if os.access(media_tests_requirements, os.F_OK):
+            self.register_virtualenv_module(requirements=[media_tests_requirements],
+                                            two_pass=True)
 
-        self.register_virtualenv_module(name='firefox-media-tests',
-                                        url=dirs['firefox_media_dir'])
+    def download_and_extract(self):
+        """Overriding method from TestingMixin until firefox-media-tests are in tree.
+
+        Right now we only care about the installer and symbolds.
+
+        """
+        self._download_installer()
+
+        if self.config.get('download_symbols'):
+            self._download_and_extract_symbols()
 
     def download_and_extract(self):
         """Overriding method from TestingMixin until firefox-media-tests are in tree.
@@ -210,12 +215,11 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
             'repo': c['firefox_media_repo'],
             'dest': dirs['firefox_media_dir'],
         }
-
-        if 'firefox_media_rev' in c:
+        if 'firefox-media-rev' in c:
             self.firefox_media_vc['revision'] = c['firefox_media_rev']
 
     def checkout(self):
-        revision = self.vcs_checkout(vcs='gittool', **self.firefox_media_vc)
+        self.vcs_checkout(vcs='gittool', **self.firefox_media_vc)
 
     def _query_cmd(self):
         """ Determine how to call firefox-media-tests """
@@ -241,6 +245,9 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
             cmd.append('--e10s')
 
         test_suite = self.config.get('test_suite')
+        if test_suite not in self.config["suite_definitions"]:
+            self.fatal("%s is not defined in the config!" % test_suite)
+
         test_manifest = None if test_suite != 'media-youtube-tests' else \
             os.path.join(dirs['firefox_media_dir'],
                          'firefox_media_tests',
@@ -249,16 +256,8 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
             'test_manifest': test_manifest,
         }
 
-        if test_suite not in self.config["suite_definitions"]:
-            self.fatal("%s is not defined in the config!" % test_suite)
         for s in self.config["suite_definitions"][test_suite]["options"]:
             cmd.append(s % config_fmt_args)
-
-        # configure logging
-        log_dir = dirs.get('abs_log_dir')
-        cmd += ['--gecko-log', os.path.join(log_dir, 'gecko.log')]
-        cmd += ['--log-html', os.path.join(log_dir, 'media_tests.html')]
-        cmd += ['--log-mach', os.path.join(log_dir, 'media_tests_mach.log')]
 
         return cmd
 
@@ -285,49 +284,7 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
             except Exception as e:
                 self.fatal('Download of tooltool manifest file failed: %s' % e.message)
 
-        super(FirefoxMediaTestsBase, self).query_minidump_stackwalk(manifest=manifest_path)
-
-    @PostScriptAction('run-media-tests')
-    def _collect_uploads(self, action, success=None):
-        """ Copy extra (log) files to blob upload dir. """
-        dirs = self.query_abs_dirs()
-        log_dir = dirs.get('abs_log_dir')
-
-        # Move firefox-media-test screenshots into log_dir
-        screenshots_dir = os.path.join(dirs['base_work_dir'],
-                                       'screenshots')
-        log_screenshots_dir = os.path.join(log_dir, 'screenshots')
-
-        if os.access(log_screenshots_dir, os.F_OK):
-            self.rmtree(log_screenshots_dir)
-        if os.access(screenshots_dir, os.F_OK):
-            self.move(screenshots_dir, log_screenshots_dir)
-
-        # logs to upload: broadest level (info), error, screenshots
-        uploads = glob.glob(os.path.join(log_screenshots_dir, '*'))
-        for f in uploads:
-            self.copy_to_upload_dir(f,
-                        dest=os.path.join('screenshots', f),
-                        short_desc='screenshot',
-                        long_desc='screenshot',
-                        max_backups=self.config.get("log_max_rotate", 0))
-
-        uploads = []
-        log_files = self.log_obj.log_files
-        log_level = self.log_obj.log_level
-        uploads.append(log_files.get(ERROR))
-        if log_level == DEBUG:
-            uploads.append(log_files.get(INF0))
-        else:
-            uploads.append(log_files.get(log_level))
-        if 'default' in log_files:
-            uploads.append(log_files.get('default'))
-
-        for f in uploads:
-            self.copy_to_upload_dir(os.path.join(dirs['abs_log_dir'], f),
-                                     dest=os.path.join('logs', f),
-                                     short_desc='log %s' % f,
-                                     max_backups=self.config.get("log_max_rotate", 0))
+        return super(FirefoxMediaTestsBase, self).query_minidump_stackwalk(manifest=manifest_path)
 
     def run_media_tests(self):
         cmd = self._query_cmd()

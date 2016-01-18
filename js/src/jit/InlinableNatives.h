@@ -66,8 +66,9 @@
     _(MathTrunc)                    \
     _(MathCbrt)                     \
                                     \
-    _(RegExpExec)                   \
-    _(RegExpTest)                   \
+    _(RegExpMatcher)                \
+    _(RegExpTester)                 \
+    _(IsRegExpObject)               \
                                     \
     _(String)                       \
     _(StringSplit)                  \
@@ -77,8 +78,6 @@
     _(StringReplace)                \
                                     \
     _(ObjectCreate)                 \
-                                    \
-    _(CallBoundFunction)            \
                                     \
     _(SimdInt32x4)                  \
     _(SimdFloat32x4)                \

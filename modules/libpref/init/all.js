@@ -89,6 +89,11 @@ pref("browser.cache.disk.preload_chunk_count", 4); // 1 MB of read ahead
 // The half life used to re-compute cache entries frecency in hours.
 pref("browser.cache.frecency_half_life_hours", 6);
 
+// Number of seconds the cache spends writting pending data and closing files
+// after the shutdown has been signalled.  Past that time data are never written
+// and files are left open given up to the OS to do the cleanup.
+pref("browser.cache.max_shutdown_io_lag", 2);
+
 pref("browser.cache.offline.enable",           true);
 // enable offline apps by default, disable prompt
 pref("offline-apps.allow_by_default",          true);
@@ -202,11 +207,7 @@ pref("dom.url.getters_decode_hash", false);
 // Whether to run add-on code in different compartments from browser code. This
 // causes a separate compartment for each (addon, global) combination, which may
 // significantly increase the number of compartments in the system.
-#ifdef E10S_TESTING_ONLY
 pref("dom.compartment_per_addon", true);
-#else
-pref("dom.compartment_per_addon", false);
-#endif
 
 // Fastback caching - if this pref is negative, then we calculate the number
 // of content viewers to cache based on the amount of available memory.
@@ -323,6 +324,7 @@ pref("media.use-blank-decoder", false);
 pref("media.wmf.enabled", true);
 pref("media.wmf.decoder.thread-count", -1);
 pref("media.wmf.low-latency.enabled", false);
+pref("media.wmf.skip-blacklist", false);
 #endif
 #if defined(MOZ_FFMPEG)
 pref("media.ffmpeg.enabled", true);
@@ -578,6 +580,11 @@ pref("apz.pan_repaint_interval", 16);
 // Whether to print the APZC tree for debugging
 pref("apz.printtree", false);
 
+#ifdef NIGHTLY_BUILD
+pref("apz.record_checkerboarding", true);
+#else
+pref("apz.record_checkerboarding", false);
+#endif
 pref("apz.smooth_scroll_repaint_interval", 16);
 pref("apz.test.logging_enabled", false);
 pref("apz.touch_start_tolerance", "0.1");
@@ -634,6 +641,7 @@ pref("gfx.color_management.enablev4", false);
 
 pref("gfx.downloadable_fonts.enabled", true);
 pref("gfx.downloadable_fonts.fallback_delay", 3000);
+pref("gfx.downloadable_fonts.fallback_delay_short", 100);
 
 // disable downloadable font cache so that behavior is consistently
 // the uncached load behavior across pages (useful for testing reflow problems)
@@ -1004,6 +1012,9 @@ pref("print.print_edge_left", 0);
 pref("print.print_edge_right", 0);
 pref("print.print_edge_bottom", 0);
 
+// Print via the parent process. This is only used when e10s is enabled.
+pref("print.print_via_parent", false);
+
 // Pref used by the spellchecker extension to control the
 // maximum number of misspelled words that will be underlined
 // in a document.
@@ -1168,6 +1179,12 @@ pref("javascript.options.mem.gc_max_empty_chunk_count", 30);
 
 pref("javascript.options.showInConsole", false);
 
+#ifdef NIGHTLY_BUILD
+pref("javascript.options.shared_memory", true);
+#else
+pref("javascript.options.shared_memory", false);
+#endif
+
 // advanced prefs
 pref("advanced.mailftp",                    false);
 pref("image.animation_mode",                "normal");
@@ -1297,6 +1314,9 @@ pref("network.http.max-persistent-connections-per-proxy", 32);
 // host has been reached.  however, a new connection will not be created if
 // max-connections or max-connections-per-server has also been reached.
 pref("network.http.request.max-start-delay", 10);
+
+// If a connection is reset, we will retry it max-attempts times.
+pref("network.http.request.max-attempts", 3);
 
 // Headers
 pref("network.http.accept.default", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
@@ -2127,6 +2147,9 @@ pref("general.smoothScroll.other", true);
 // intervals).
 // This defines how longer is the duration compared to events interval (percentage)
 pref("general.smoothScroll.durationToIntervalRatio", 200);
+// These two prefs determine the timing function.
+pref("general.smoothScroll.currentVelocityWeighting", "0.25");
+pref("general.smoothScroll.stopDecelerationWeighting", "0.4");
 
 pref("profile.confirm_automigration",true);
 // profile.migration_behavior determines how the profiles root is set
@@ -2298,6 +2321,9 @@ pref("layout.css.float-logical-values.enabled", false);
 // Is support for the CSS4 image-orientation property enabled?
 pref("layout.css.image-orientation.enabled", true);
 
+// Is support for the font-display @font-face descriptor enabled?
+pref("layout.css.font-display.enabled", false);
+
 // Are sets of prefixed properties supported?
 pref("layout.css.prefixes.border-image", true);
 pref("layout.css.prefixes.transforms", true);
@@ -2308,7 +2334,16 @@ pref("layout.css.prefixes.font-features", true);
 pref("layout.css.prefixes.gradients", true);
 
 // Are webkit-prefixed properties & property-values supported?
+#ifdef RELEASE_BUILD
 pref("layout.css.prefixes.webkit", false);
+#else
+pref("layout.css.prefixes.webkit", true);
+#endif
+
+// Are "-webkit-{min|max}-device-pixel-ratio" media queries supported?
+// (Note: this pref has no effect if the master 'layout.css.prefixes.webkit'
+// pref is set to false.)
+pref("layout.css.prefixes.device-pixel-ratio-webkit", false);
 
 // Is the CSS Unprefixing Service enabled? (This service emulates support
 // for certain vendor-prefixed properties & values, for sites on a "fixlist".)
@@ -2413,7 +2448,7 @@ pref("layout.css.control-characters.visible", true);
 #endif
 
 // Is support for text-emphasis enabled?
-pref("layout.css.text-emphasis.enabled", false);
+pref("layout.css.text-emphasis.enabled", true);
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -3242,6 +3277,16 @@ pref("intl.imm.japanese.assume_active_tip_name_as", "");
 pref("ui.panel.default_level_parent", false);
 
 pref("mousewheel.system_scroll_override_on_root_content.enabled", true);
+
+// Enable system settings cache for mouse wheel message handling.
+// Note that even if this pref is set to true, Gecko may not cache the system
+// settings if Gecko detects that the cache won't be refreshed properly when
+// the settings are changed.
+pref("mousewheel.system_settings_cache.enabled", true);
+
+// This is a pref to test system settings cache for mouse wheel message
+// handling.  If this is set to true, Gecko forcibly use the cache.
+pref("mousewheel.system_settings_cache.force_enabled", false);
 
 // High resolution scrolling with supported mouse drivers on Vista or later.
 pref("mousewheel.enable_pixel_scrolling", true);
@@ -4169,7 +4214,7 @@ pref("gl.msaa-level", 2);
 #endif
 pref("gl.require-hardware", false);
 #ifdef XP_MACOSX
-pref("gl.multithreaded", false);
+pref("gl.multithreaded", true);
 #endif
 
 pref("webgl.force-enabled", false);
@@ -4341,17 +4386,23 @@ pref("layers.bufferrotation.enabled", true);
 
 pref("layers.componentalpha.enabled", true);
 
+// Use the DT-backend implemented PushLayer
+pref("gfx.content.use-native-pushlayer", false);
+
 #ifdef ANDROID
 pref("gfx.apitrace.enabled",false);
 #endif
 
 #ifdef MOZ_X11
+pref("gfx.content.use-native-pushlayer", true);
 #ifdef MOZ_WIDGET_GTK
 pref("gfx.xrender.enabled",true);
 #endif
 #endif
 
 #ifdef XP_WIN
+pref("gfx.content.use-native-pushlayer", true);
+
 // Whether to disable the automatic detection and use of direct2d.
 pref("gfx.direct2d.disabled", false);
 pref("gfx.direct2d.use1_1", true);
@@ -4675,8 +4726,12 @@ pref("dom.browserElement.maxScreenshotDelayMS", 2000);
 // Whether we should show the placeholder when the element is focused but empty.
 pref("dom.placeholder.show_on_focus", true);
 
-// VR is disabled by default
+// VR is disabled by default in release and enabled for nightly and aurora
+#ifdef RELEASE_BUILD
 pref("dom.vr.enabled", false);
+#else
+pref("dom.vr.enabled", true);
+#endif
 // Oculus > 0.5
 pref("dom.vr.oculus.enabled", true);
 // Oculus <= 0.5; will only trigger if > 0.5 is not used or found
@@ -4684,7 +4739,7 @@ pref("dom.vr.oculus050.enabled", true);
 // Cardboard VR device is disabled by default
 pref("dom.vr.cardboard.enabled", false);
 // 0 = never; 1 = only if real devices aren't there; 2 = always
-pref("dom.vr.add-test-devices", 1);
+pref("dom.vr.add-test-devices", 0);
 // true = show the VR textures in our compositing output; false = don't.
 // true might have performance impact
 pref("gfx.vr.mirror-textures", false);
@@ -5094,5 +5149,11 @@ pref("toolkit.pageThumbs.screenSizeDivisor", 7);
 pref("toolkit.pageThumbs.minWidth", 0);
 pref("toolkit.pageThumbs.minHeight", 0);
 
+pref("webextensions.tests", false);
+
 // Allow customization of the fallback directory for file uploads
 pref("dom.input.fallbackUploadDir", "");
+
+// Turn rewriting of youtube embeds on/off
+pref("plugins.rewrite_youtube_embeds", true);
+

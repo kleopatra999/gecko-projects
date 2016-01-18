@@ -288,6 +288,8 @@ bool nsContentUtils::sFragmentParsingActive = false;
 bool nsContentUtils::sDOMWindowDumpEnabled;
 #endif
 
+mozilla::LazyLogModule nsContentUtils::sDOMDumpLog("Dump");
+
 // Subset of http://www.whatwg.org/specs/web-apps/current-work/#autofill-field-name
 enum AutocompleteFieldName
 {
@@ -2771,11 +2773,14 @@ nsContentUtils::IsCustomElementName(nsIAtom* aName)
 {
   // The custom element name identifies a custom element and is a sequence of
   // alphanumeric ASCII characters that must match the NCName production and
-  // contain a U+002D HYPHEN-MINUS character.
+  // contain a U+002D HYPHEN-MINUS character.  We check for the HYPHEN-MINUS
+  // first, since that will typically not be present, which will allow us to
+  // return before doing the more expensive (and generally passing) CheckQName
+  // check.
   nsDependentAtomString str(aName);
   const char16_t* colon;
-  if (NS_FAILED(nsContentUtils::CheckQName(str, false, &colon)) || colon ||
-      str.FindChar('-') == -1) {
+  if (str.FindChar('-') == -1 ||
+      NS_FAILED(nsContentUtils::CheckQName(str, false, &colon)) || colon) {
     return false;
   }
 
@@ -4950,13 +4955,13 @@ nsContentUtils::GetAccelKeyCandidates(nsIDOMKeyEvent* aDOMKeyEvent,
   NS_PRECONDITION(aCandidates.IsEmpty(), "aCandidates must be empty");
 
   nsAutoString eventType;
-  aDOMKeyEvent->GetType(eventType);
+  aDOMKeyEvent->AsEvent()->GetType(eventType);
   // Don't process if aDOMKeyEvent is not a keypress event.
   if (!eventType.EqualsLiteral("keypress"))
     return;
 
   WidgetKeyboardEvent* nativeKeyEvent =
-    aDOMKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    aDOMKeyEvent->AsEvent()->GetInternalNSEvent()->AsKeyboardEvent();
   if (nativeKeyEvent) {
     NS_ASSERTION(nativeKeyEvent->mClass == eKeyboardEventClass,
                  "wrong type of native event");
@@ -6631,6 +6636,48 @@ nsContentUtils::FindInternalContentViewer(const nsACString& aType,
   return nullptr;
 }
 
+static void
+ReportPatternCompileFailure(nsAString& aPattern, nsIDocument* aDocument,
+                            JSContext* cx)
+{
+    MOZ_ASSERT(JS_IsExceptionPending(cx));
+
+    JS::RootedValue exn(cx);
+    if (!JS_GetPendingException(cx, &exn)) {
+      return;
+    }
+    if (!exn.isObject()) {
+      // If pending exception is not an object, it should be OOM.
+      return;
+    }
+
+    JS::AutoSaveExceptionState savedExc(cx);
+    JS::RootedObject exnObj(cx, &exn.toObject());
+    JS::RootedValue messageVal(cx);
+    if (!JS_GetProperty(cx, exnObj, "message", &messageVal)) {
+      return;
+    }
+    MOZ_ASSERT(messageVal.isString());
+
+    JS::RootedString messageStr(cx, messageVal.toString());
+    MOZ_ASSERT(messageStr);
+
+    nsAutoString wideMessage;
+    if (!AssignJSString(cx, wideMessage, messageStr)) {
+        return;
+    }
+
+    const nsString& pattern = PromiseFlatString(aPattern);
+    const char16_t *strings[] = { pattern.get(), wideMessage.get() };
+    nsContentUtils::ReportToConsole(nsIScriptError::errorFlag,
+                                    NS_LITERAL_CSTRING("DOM"),
+                                    aDocument,
+                                    nsContentUtils::eDOM_PROPERTIES,
+                                    "PatternAttributeCompileFailure",
+                                    strings, ArrayLength(strings));
+    savedExc.drop();
+}
+
 // static
 bool
 nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
@@ -6657,8 +6704,12 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   JS::Rooted<JSObject*> re(cx,
     JS_NewUCRegExpObjectNoStatics(cx,
                                   static_cast<char16_t*>(aPattern.BeginWriting()),
-                                  aPattern.Length(), 0));
+                                  aPattern.Length(), JSREG_UNICODE));
   if (!re) {
+    // Remove extra patterns added above to report with the original pattern.
+    aPattern.Cut(0, 4);
+    aPattern.Cut(aPattern.Length() - 2, 2);
+    ReportPatternCompileFailure(aPattern, aDocument, cx);
     return true;
   }
 
@@ -7114,6 +7165,12 @@ nsContentUtils::DOMWindowDumpEnabled()
 #else
   return true;
 #endif
+}
+
+mozilla::LogModule*
+nsContentUtils::DOMDumpLog()
+{
+  return sDOMDumpLog;
 }
 
 bool
@@ -7651,7 +7708,7 @@ nsContentUtils::ToWidgetPoint(const CSSPoint& aPoint,
 {
   return LayoutDeviceIntPoint::FromAppUnitsRounded(
     (CSSPoint::ToAppUnits(aPoint) +
-    aOffset).ApplyResolution(aPresContext->PresShell()->GetCumulativeNonRootScaleResolution()),
+    aOffset).ApplyResolution(nsLayoutUtils::GetCurrentAPZResolutionScale(aPresContext->PresShell())),
     aPresContext->AppUnitsPerDevPixel());
 }
 
@@ -7980,7 +8037,7 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
 
 /* static */
 nsContentPolicyType
-nsContentUtils::InternalContentPolicyTypeToExternalOrScript(nsContentPolicyType aType)
+nsContentUtils::InternalContentPolicyTypeToExternalOrMCBInternal(nsContentPolicyType aType)
 {
   switch (aType) {
   case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
@@ -7990,7 +8047,7 @@ nsContentUtils::InternalContentPolicyTypeToExternalOrScript(nsContentPolicyType 
     return aType;
 
   default:
-    return InternalContentPolicyTypeToExternal(aType);
+    return InternalContentPolicyTypeToExternalOrPreload(aType);
   }
 }
 

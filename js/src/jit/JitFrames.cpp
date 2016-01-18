@@ -1048,8 +1048,9 @@ MarkThisAndArguments(JSTracer* trc, const JitFrameIterator& frame)
 {
     // Mark |this| and any extra actual arguments for an Ion frame. Marking of
     // formal arguments is taken care of by the frame's safepoint/snapshot,
-    // except when the script might have lazy arguments, in which case we mark
-    // them as well. We also have to mark formals if we have a LazyLink frame.
+    // except when the script might have lazy arguments or rest, in which case
+    // we mark them as well. We also have to mark formals if we have a LazyLink
+    // frame.
 
     JitFrameLayout* layout = frame.isExitFrameLayout<LazyLinkExitFrameLayout>()
                              ? frame.exitFrame()->as<LazyLinkExitFrameLayout>()->jsFrame()
@@ -1063,7 +1064,7 @@ MarkThisAndArguments(JSTracer* trc, const JitFrameIterator& frame)
 
     JSFunction* fun = CalleeTokenToFunction(layout->calleeToken());
     if (!frame.isExitFrameLayout<LazyLinkExitFrameLayout>() &&
-        !fun->nonLazyScript()->argumentsHasVarBinding())
+        !fun->nonLazyScript()->mayReadFrameArgsDirectly())
     {
         nformals = fun->nargs();
     }
@@ -1629,11 +1630,11 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes)
             MOZ_ASSERT(it.isBaselineStub() || it.isBaselineJS() || it.isIonJS());
         }
 
-        // Skip Baseline or Ion stub frames.
+        // Skip Baseline/Ion stub and accessor IC frames.
         if (it.isBaselineStubMaybeUnwound()) {
             ++it;
             MOZ_ASSERT(it.isBaselineJS());
-        } else if (it.isIonStubMaybeUnwound()) {
+        } else if (it.isIonStubMaybeUnwound() || it.isIonAccessorICMaybeUnwound()) {
             ++it;
             MOZ_ASSERT(it.isIonJS());
         }

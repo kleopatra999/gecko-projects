@@ -33,11 +33,7 @@ pref("browser.tabs.expireTime", 900);
 
 // Control whether tab content should try to load from disk cache when network
 // is offline.
-#ifdef NIGHTLY_BUILD
 pref("browser.tabs.useCache", true);
-#else
-pref("browser.tabs.useCache", false);
-#endif
 
 // From libpref/src/init/all.js, extended to allow a slightly wider zoom range.
 pref("zoom.minPercent", 20);
@@ -471,8 +467,13 @@ pref("plugin.default.state", 1);
 // The breakpad report server to link to in about:crashes
 pref("breakpad.reportURL", "https://crash-stats.mozilla.com/report/index/");
 pref("app.support.baseURL", "http://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/");
+
 // Used to submit data to input from about:feedback
 pref("app.feedback.postURL", "https://input.mozilla.org/api/v1/feedback/");
+
+// URL for feedback page
+pref("app.feedbackURL", "about:feedback");
+
 pref("app.privacyURL", "https://www.mozilla.org/privacy/firefox/");
 pref("app.creditsURL", "http://www.mozilla.org/credits/");
 pref("app.channelURL", "http://www.mozilla.org/%LOCALE%/firefox/channel/");
@@ -497,8 +498,8 @@ pref("security.mixed_content.block_active_content", true);
 // Enable pinning
 pref("security.cert_pinning.enforcement_level", 1);
 
-// Allow SHA-1 certificates only before 2016-01-01
-pref("security.pki.sha1_enforcement_level", 2);
+// Allow SHA-1 certificates
+pref("security.pki.sha1_enforcement_level", 0);
 
 // Required blocklist freshness for OneCRL OCSP bypass
 // (default is 1.25x extensions.blocklist.interval, or 30 hours)
@@ -569,15 +570,19 @@ pref("layers.async-video.enabled", true);
 pref("layers.async-pan-zoom.enabled", true);
 // APZ prefs that are different from B2G
 pref("apz.allow_immediate_handoff", false);
+pref("apz.touch_start_tolerance", "0.06");
 // APZ physics settings, copied from B2G
 pref("apz.axis_lock.mode", 2); // Use "sticky" axis locking
+// APZ physics settings reviewed by UX
 pref("apz.fling_curve_function_x1", "0.41");
 pref("apz.fling_curve_function_y1", "0.0");
 pref("apz.fling_curve_function_x2", "0.80");
 pref("apz.fling_curve_function_y2", "1.0");
 pref("apz.fling_curve_threshold_inches_per_ms", "0.01");
-pref("apz.fling_friction", "0.0019");
+pref("apz.fling_friction", "0.004");
+pref("apz.fling_stopped_threshold", "0.1");
 pref("apz.max_velocity_inches_per_ms", "0.07");
+pref("apz.fling_accel_interval_ms", 750);
 #endif
 
 pref("layers.progressive-paint", true);
@@ -624,16 +629,11 @@ pref("media.mediasource.enabled", true);
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
 
-#ifdef NIGHTLY_BUILD
-// Shumway component (SWF player) is disabled by default. Also see bug 904346.
-pref("shumway.disabled", true);
-#endif
-
 #ifdef MOZ_SAFE_BROWSING
 pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
-pref("browser.safebrowsing.downloads.enabled", false);
-pref("browser.safebrowsing.downloads.remote.enabled", false);
+pref("browser.safebrowsing.downloads.enabled", true);
+pref("browser.safebrowsing.downloads.remote.enabled", true);
 pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
 pref("browser.safebrowsing.debug", false);
 
@@ -646,6 +646,7 @@ pref("browser.safebrowsing.provider.google.appRepURL", "https://sb-ssl.google.co
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
+pref("browser.safebrowsing.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
 
 pref("browser.safebrowsing.id", @MOZ_APP_UA_NAME@);
 
@@ -663,6 +664,9 @@ pref("urlclassifier.gethash.timeout_ms", 5000);
 // a gethash request will be forced to check that the result is still in
 // the database.
 pref("urlclassifier.max-complete-age", 2700);
+
+// Tables for application reputation.
+pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar");
 #endif
 
 // True if this is the first time we are showing about:firstrun

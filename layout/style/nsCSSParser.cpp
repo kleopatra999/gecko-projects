@@ -62,6 +62,7 @@ typedef nsCSSProps::KTableEntry KTableEntry;
 // pref-backed bool values (hooked up in nsCSSParser::Startup)
 static bool sOpentypeSVGEnabled;
 static bool sWebkitPrefixedAliasesEnabled;
+static bool sWebkitDevicePixelRatioEnabled;
 static bool sUnprefixingServiceEnabled;
 #ifdef NIGHTLY_BUILD
 static bool sUnprefixingServiceGloballyWhitelisted;
@@ -985,7 +986,8 @@ protected:
   bool ParseAlignJustifyPosition(nsCSSValue& aResult,
                                  const KTableEntry aTable[]);
   bool ParseJustifyItems();
-  bool ParseAlignItemsSelfJustifySelf(nsCSSProperty aPropID);
+  bool ParseAlignItems();
+  bool ParseAlignJustifySelf(nsCSSProperty aPropID);
   // parsing 'align/justify-content' from the css-align spec
   bool ParseAlignJustifyContent(nsCSSProperty aPropID);
 
@@ -1691,6 +1693,8 @@ CSSParserImpl::ParseSheet(const nsAString& aInput,
   mParsingMode = eAuthorSheetFeatures;
   mIsChrome = false;
   mReusableSheets = nullptr;
+
+  mSheet->SetParsingMode(aParsingMode);
 
   return NS_OK;
 }
@@ -3479,6 +3483,7 @@ CSSParserImpl::ParseMediaQueryExpression(nsMediaQuery* aQuery)
 
   // Strip off "-webkit-" prefix from featureString:
   if (sWebkitPrefixedAliasesEnabled &&
+      sWebkitDevicePixelRatioEnabled &&
       StringBeginsWith(featureString, NS_LITERAL_STRING("-webkit-"))) {
     satisfiedReqFlags |= nsMediaFeature::eHasWebkitPrefix;
     featureString.Rebind(featureString, 8);
@@ -3498,6 +3503,12 @@ CSSParserImpl::ParseMediaQueryExpression(nsMediaQuery* aQuery)
   nsCOMPtr<nsIAtom> mediaFeatureAtom = do_GetAtom(featureString);
   const nsMediaFeature *feature = nsMediaFeatures::features;
   for (; feature->mName; ++feature) {
+    MOZ_ASSERT(!(feature->mReqFlags & nsMediaFeature::eHasWebkitPrefix) ||
+               *(feature->mName) == nsGkAtoms::devicePixelRatio,
+               "If we add support for a webkit-prefixed media-query feature "
+               "*other than* device-pixel-ratio, we need to adjust logic "
+               "above around sWebkitDevicePixelRatioEnabled.");
+
     // See if name matches & all requirement flags are satisfied:
     // (We check requirements by turning off all of the flags that have been
     // satisfied, and then see if the result is 0.)
@@ -3947,7 +3958,9 @@ CSSParserImpl::ParseFontDescriptor(nsCSSFontFaceRule* aRule)
   nsCSSFontDesc descID = nsCSSProps::LookupFontDesc(descName);
   nsCSSValue value;
 
-  if (descID == eCSSFontDesc_UNKNOWN) {
+  if (descID == eCSSFontDesc_UNKNOWN ||
+      (descID == eCSSFontDesc_Display &&
+       !Preferences::GetBool("layout.css.font-display.enabled"))) {
     if (NonMozillaVendorIdentifier(descName)) {
       // silently skip other vendors' extensions
       SkipDeclaration(true);
@@ -9636,7 +9649,7 @@ CSSParserImpl::ParseAlignJustifyPosition(nsCSSValue& aResult,
   return true;
 }
 
-// auto | stretch | <baseline-position> |
+// auto | normal | stretch | <baseline-position> |
 // [ <self-position> && <overflow-position>? ] |
 // [ legacy && [ left | right | center ] ]
 bool
@@ -9652,7 +9665,7 @@ CSSParserImpl::ParseJustifyItems()
       value.SetIntValue(value.GetIntValue() | legacy.GetIntValue(),
                         eCSSUnit_Enumerated);
     } else {
-      if (!ParseEnum(value, nsCSSProps::kAlignAutoStretchBaseline)) {
+      if (!ParseEnum(value, nsCSSProps::kAlignAutoNormalStretchBaseline)) {
         if (!ParseAlignJustifyPosition(value, nsCSSProps::kAlignSelfPosition) ||
             value.GetUnit() == eCSSUnit_Null) {
           return false;
@@ -9674,14 +9687,32 @@ CSSParserImpl::ParseJustifyItems()
   return true;
 }
 
-// auto | stretch | <baseline-position> |
+// normal | stretch | <baseline-position> |
 // [ <overflow-position>? && <self-position> ] 
 bool
-CSSParserImpl::ParseAlignItemsSelfJustifySelf(nsCSSProperty aPropID)
+CSSParserImpl::ParseAlignItems()
 {
   nsCSSValue value;
   if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
-    if (!ParseEnum(value, nsCSSProps::kAlignAutoStretchBaseline)) {
+    if (!ParseEnum(value, nsCSSProps::kAlignNormalStretchBaseline)) {
+      if (!ParseAlignJustifyPosition(value, nsCSSProps::kAlignSelfPosition) ||
+          value.GetUnit() == eCSSUnit_Null) {
+        return false;
+      }
+    }
+  }
+  AppendValue(eCSSProperty_align_items, value);
+  return true;
+}
+
+// auto | normal | stretch | <baseline-position> |
+// [ <overflow-position>? && <self-position> ] 
+bool
+CSSParserImpl::ParseAlignJustifySelf(nsCSSProperty aPropID)
+{
+  nsCSSValue value;
+  if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
+    if (!ParseEnum(value, nsCSSProps::kAlignAutoNormalStretchBaseline)) {
       if (!ParseAlignJustifyPosition(value, nsCSSProps::kAlignSelfPosition) ||
           value.GetUnit() == eCSSUnit_Null) {
         return false;
@@ -9692,7 +9723,7 @@ CSSParserImpl::ParseAlignItemsSelfJustifySelf(nsCSSProperty aPropID)
   return true;
 }
 
-// auto | <baseline-position> | [ <content-distribution> ||
+// normal | <baseline-position> | [ <content-distribution> ||
 //   [ <overflow-position>? && <content-position> ] ]
 // (the part after the || is called <*-position> below)
 bool
@@ -9700,7 +9731,7 @@ CSSParserImpl::ParseAlignJustifyContent(nsCSSProperty aPropID)
 {
   nsCSSValue value;
   if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
-    if (!ParseEnum(value, nsCSSProps::kAlignAutoBaseline)) {
+    if (!ParseEnum(value, nsCSSProps::kAlignNormalBaseline)) {
       nsCSSValue fallbackValue;
       if (!ParseEnum(value, nsCSSProps::kAlignContentDistribution)) {
         if (!ParseAlignJustifyPosition(fallbackValue,
@@ -9723,7 +9754,8 @@ CSSParserImpl::ParseAlignJustifyContent(nsCSSProperty aPropID)
       }
       if (fallbackValue.GetUnit() != eCSSUnit_Null) {
         auto fallback = fallbackValue.GetIntValue();
-        value.SetIntValue(value.GetIntValue() | (fallback << 8),
+        value.SetIntValue(value.GetIntValue() |
+                            (fallback << NS_STYLE_ALIGN_ALL_SHIFT),
                           eCSSUnit_Enumerated);
       }
     }
@@ -9864,10 +9896,16 @@ CSSParserImpl::ParseLinearGradient(nsCSSValue& aValue,
   if (haveGradientLine) {
     // Parse a <legacy-gradient-line>
     cssGradient->mIsLegacySyntax = true;
-    bool haveAngle =
-      ParseSingleTokenVariant(cssGradient->mAngle, VARIANT_ANGLE, nullptr);
+    // In -webkit-linear-gradient expressions (handled below), we need to accept
+    // unitless 0 for angles, to match WebKit/Blink.
+    int32_t angleFlags = (aFlags & eGradient_WebkitLegacy) ?
+      VARIANT_ANGLE | VARIANT_ZERO_ANGLE :
+      VARIANT_ANGLE;
 
-    // if we got an angle, we might now have a comma, ending the gradient-line
+    bool haveAngle =
+      ParseSingleTokenVariant(cssGradient->mAngle, angleFlags, nullptr);
+
+    // If we got an angle, we might now have a comma, ending the gradient-line.
     bool haveAngleComma = haveAngle && ExpectSymbol(',', true);
 
     // If we're webkit-prefixed & didn't get an angle,
@@ -11336,15 +11374,15 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSProperty aPropID)
   case eCSSProperty_align_content:
     return ParseAlignJustifyContent(aPropID);
   case eCSSProperty_align_items:
-    return ParseAlignItemsSelfJustifySelf(aPropID);
+    return ParseAlignItems();
   case eCSSProperty_align_self:
-    return ParseAlignItemsSelfJustifySelf(aPropID);
+    return ParseAlignJustifySelf(aPropID);
   case eCSSProperty_justify_content:
     return ParseAlignJustifyContent(aPropID);
   case eCSSProperty_justify_items:
     return ParseJustifyItems();
   case eCSSProperty_justify_self:
-    return ParseAlignItemsSelfJustifySelf(aPropID);
+    return ParseAlignJustifySelf(aPropID);
   case eCSSProperty_list_style:
     return ParseListStyle();
   case eCSSProperty_margin:
@@ -11582,6 +11620,10 @@ CSSParserImpl::ParseFontDescriptorValue(nsCSSFontDesc aDescID,
     // property is VARIANT_HMK|VARIANT_SYSFONT
     return ParseSingleTokenVariant(aValue, VARIANT_KEYWORD | VARIANT_NORMAL,
                                    nsCSSProps::kFontStyleKTable);
+
+  case eCSSFontDesc_Display:
+    return ParseSingleTokenVariant(aValue, VARIANT_KEYWORD,
+                                   nsCSSProps::kFontDisplayKTable);
 
   case eCSSFontDesc_Weight:
     return (ParseFontWeight(aValue) &&
@@ -14661,8 +14703,7 @@ CSSParserImpl::ParseTextEmphasis()
   }
 
   if (!(found & 1)) { // Provide default text-emphasis-style
-    values[0].SetIntValue(NS_STYLE_TEXT_EMPHASIS_STYLE_NONE,
-                          eCSSUnit_Enumerated);
+    values[0].SetNoneValue();
   }
   if (!(found & 2)) { // Provide default text-emphasis-color
     values[1].SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
@@ -16977,6 +17018,8 @@ nsCSSParser::Startup()
                                "gfx.font_rendering.opentype_svg.enabled");
   Preferences::AddBoolVarCache(&sWebkitPrefixedAliasesEnabled,
                                "layout.css.prefixes.webkit");
+  Preferences::AddBoolVarCache(&sWebkitDevicePixelRatioEnabled,
+                               "layout.css.prefixes.device-pixel-ratio-webkit");
   Preferences::AddBoolVarCache(&sUnprefixingServiceEnabled,
                                "layout.css.unprefixing-service.enabled");
 #ifdef NIGHTLY_BUILD

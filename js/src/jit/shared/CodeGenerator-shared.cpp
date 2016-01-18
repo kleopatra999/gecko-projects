@@ -1530,13 +1530,13 @@ CodeGeneratorShared::emitAsmJSCall(LAsmJSCall* ins)
 }
 
 void
-CodeGeneratorShared::emitPreBarrier(Register base, const LAllocation* index)
+CodeGeneratorShared::emitPreBarrier(Register base, const LAllocation* index, int32_t offsetAdjustment)
 {
     if (index->isConstant()) {
-        Address address(base, ToInt32(index) * sizeof(Value));
+        Address address(base, ToInt32(index) * sizeof(Value) + offsetAdjustment);
         masm.patchableCallPreBarrier(address, MIRType_Value);
     } else {
-        BaseIndex address(base, ToRegister(index), TimesEight);
+        BaseIndex address(base, ToRegister(index), TimesEight, offsetAdjustment);
         masm.patchableCallPreBarrier(address, MIRType_Value);
     }
 }
@@ -1618,21 +1618,24 @@ CodeGeneratorShared::jumpToBlock(MBasicBlock* mir, Assembler::Condition cond)
 }
 #endif
 
-size_t
-CodeGeneratorShared::addCacheLocations(const CacheLocationList& locs, size_t* numLocs)
+MOZ_WARN_UNUSED_RESULT bool
+CodeGeneratorShared::addCacheLocations(const CacheLocationList& locs, size_t* numLocs,
+                                       size_t* curIndex)
 {
     size_t firstIndex = runtimeData_.length();
     size_t numLocations = 0;
     for (CacheLocationList::iterator iter = locs.begin(); iter != locs.end(); iter++) {
         // allocateData() ensures that sizeof(CacheLocation) is word-aligned.
         // If this changes, we will need to pad to ensure alignment.
-        size_t curIndex = allocateData(sizeof(CacheLocation));
-        new (&runtimeData_[curIndex]) CacheLocation(iter->pc, iter->script);
+        if (!allocateData(sizeof(CacheLocation), curIndex))
+            return false;
+        new (&runtimeData_[*curIndex]) CacheLocation(iter->pc, iter->script);
         numLocations++;
     }
     MOZ_ASSERT(numLocations != 0);
     *numLocs = numLocations;
-    return firstIndex;
+    *curIndex = firstIndex;
+    return true;
 }
 
 ReciprocalMulConstants

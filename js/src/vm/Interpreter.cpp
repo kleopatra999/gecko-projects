@@ -139,11 +139,11 @@ bool
 js::GetFunctionThis(JSContext* cx, AbstractFramePtr frame, MutableHandleValue res)
 {
     MOZ_ASSERT(frame.isNonEvalFunctionFrame());
-    MOZ_ASSERT(!frame.fun()->isArrow());
+    MOZ_ASSERT(!frame.callee()->isArrow());
 
     if (frame.thisArgument().isObject() ||
-        frame.fun()->strict() ||
-        frame.fun()->isSelfHostedBuiltin())
+        frame.callee()->strict() ||
+        frame.callee()->isSelfHostedBuiltin())
     {
         res.set(frame.thisArgument());
         return true;
@@ -296,9 +296,28 @@ MakeDefaultConstructor(JSContext* cx, JSOp op, JSAtom* atom, HandleObject proto)
     bool derived = op == JSOP_DERIVEDCONSTRUCTOR;
     MOZ_ASSERT(derived == !!proto);
 
+    PropertyName* lookup = derived ? cx->names().DefaultDerivedClassConstructor
+                                   : cx->names().DefaultBaseClassConstructor;
+
+    RootedPropertyName selfHostedName(cx, lookup);
     RootedAtom name(cx, atom == cx->names().empty ? nullptr : atom);
-    JSNative native = derived ? DefaultDerivedClassConstructor : DefaultClassConstructor;
-    return NewFunctionWithProto(cx, native, 0, JSFunction::NATIVE_CLASS_CTOR, nullptr, name, proto);
+
+    RootedFunction ctor(cx);
+    if (!cx->runtime()->createLazySelfHostedFunctionClone(cx, selfHostedName, name,
+                                                          /* nargs = */ !!derived,
+                                                          proto, TenuredObject, &ctor))
+    {
+        return nullptr;
+    }
+
+    ctor->setIsConstructor();
+    ctor->setIsClassConstructor();
+    if (derived)
+        ctor->setHasRest();
+
+    MOZ_ASSERT(ctor->infallibleIsDefaultClassConstructor(cx));
+
+    return ctor;
 }
 
 bool
@@ -329,7 +348,9 @@ RunState::maybeCreateThisForConstructor(JSContext* cx)
         InvokeState& invoke = *asInvoke();
         if (invoke.constructing() && invoke.args().thisv().isPrimitive()) {
             RootedObject callee(cx, &invoke.args().callee());
-            if (script()->isDerivedClassConstructor()) {
+            if (callee->isBoundFunction()) {
+                invoke.args().setThis(MagicValue(JS_UNINITIALIZED_LEXICAL));
+            } else if (script()->isDerivedClassConstructor()) {
                 MOZ_ASSERT(callee->as<JSFunction>().isClassConstructor());
                 invoke.args().setThis(MagicValue(JS_UNINITIALIZED_LEXICAL));
             } else {
@@ -636,8 +657,8 @@ js::ExecuteKernel(JSContext* cx, HandleScript script, JSObject& scopeChainArg,
                   Value* result)
 {
     MOZ_ASSERT_IF(evalInFrame, type == EXECUTE_DEBUG);
-    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL, IsGlobalLexicalScope(&scopeChainArg) ||
-                                          !IsSyntacticScope(&scopeChainArg));
+    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL_OR_MODULE && !script->module(),
+                  IsGlobalLexicalScope(&scopeChainArg) || !IsSyntacticScope(&scopeChainArg));
 #ifdef DEBUG
     RootedObject terminatingScope(cx, &scopeChainArg);
     while (IsSyntacticScope(terminatingScope))
@@ -695,9 +716,7 @@ js::Execute(JSContext* cx, HandleScript script, JSObject& scopeChainArg, Value* 
     } while ((s = s->enclosingScope()));
 #endif
 
-    ExecuteType type = script->module() ? EXECUTE_MODULE : EXECUTE_GLOBAL;
-
-    return ExecuteKernel(cx, script, *scopeChain, NullValue(), type,
+    return ExecuteKernel(cx, script, *scopeChain, NullValue(), EXECUTE_GLOBAL_OR_MODULE,
                          NullFramePtr() /* evalInFrame */, rval);
 }
 
@@ -1756,7 +1775,6 @@ CASE(JSOP_NOP)
 CASE(JSOP_UNUSED14)
 CASE(JSOP_UNUSED65)
 CASE(JSOP_BACKPATCH)
-CASE(JSOP_UNUSED178)
 CASE(JSOP_UNUSED179)
 CASE(JSOP_UNUSED180)
 CASE(JSOP_UNUSED181)
@@ -2875,6 +2893,18 @@ CASE(JSOP_FUNCALL)
     ADVANCE_AND_DISPATCH(0);
 }
 
+CASE(JSOP_OPTIMIZE_SPREADCALL)
+{
+    ReservedRooted<Value> val(&rootValue0, REGS.sp[-1]);
+
+    bool optimized = false;
+    if (!OptimizeSpreadCall(cx, val, &optimized))
+        goto error;
+
+    PUSH_BOOLEAN(optimized);
+}
+END_CASE(JSOP_OPTIMIZE_SPREADCALL)
+
 CASE(JSOP_THROWMSG)
 {
     JS_ALWAYS_FALSE(ThrowMsgOperation(cx, GET_UINT16(REGS.pc)));
@@ -2988,13 +3018,13 @@ END_CASE(JSOP_SYMBOL)
 CASE(JSOP_OBJECT)
 {
     ReservedRooted<JSObject*> ref(&rootObject0, script->getObject(REGS.pc));
-    if (JS::CompartmentOptionsRef(cx).cloneSingletons()) {
+    if (cx->compartment()->creationOptions().cloneSingletons()) {
         JSObject* obj = DeepCloneObjectLiteral(cx, ref, TenuredObject);
         if (!obj)
             goto error;
         PUSH_OBJECT(*obj);
     } else {
-        JS::CompartmentOptionsRef(cx).setSingletonsAsValues();
+        cx->compartment()->behaviors().setSingletonsAsValues();
         PUSH_OBJECT(*ref);
     }
 }
@@ -4528,14 +4558,9 @@ js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc, Hand
                                    constructing ? CONSTRUCT : NO_CONSTRUCT);
     }
 
-#ifdef DEBUG
     // The object must be an array with dense elements and no holes. Baseline's
     // optimized spread call stubs rely on this.
-    MOZ_ASSERT(aobj->getDenseInitializedLength() == length);
-    MOZ_ASSERT(!aobj->isIndexed());
-    for (uint32_t i = 0; i < length; i++)
-        MOZ_ASSERT(!aobj->getDenseElement(i).isMagic());
-#endif
+    MOZ_ASSERT(IsPackedArray(aobj));
 
     if (constructing) {
         if (!StackCheckIsConstructorCalleeNewTarget(cx, callee, newTarget))
@@ -4586,6 +4611,35 @@ js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc, Hand
 
     TypeScript::Monitor(cx, script, pc, res);
     return true;
+}
+
+bool
+js::OptimizeSpreadCall(JSContext* cx, HandleValue arg, bool* optimized)
+{
+    // Optimize spread call by skipping spread operation when following
+    // conditions are met:
+    //   * the argument is an array
+    //   * the array has no hole
+    //   * array[@@iterator] is not modified
+    //   * the array's prototype is Array.prototype
+    //   * Array.prototype[@@iterator] is not modified
+    //   * %ArrayIteratorPrototype%.next is not modified
+    if (!arg.isObject()) {
+        *optimized = false;
+        return true;
+    }
+
+    RootedObject obj(cx, &arg.toObject());
+    if (!IsPackedArray(obj)) {
+        *optimized = false;
+        return true;
+    }
+
+    ForOfPIC::Chain* stubChain = ForOfPIC::getOrCreate(cx);
+    if (!stubChain)
+        return false;
+
+    return stubChain->tryOptimizeArray(cx, obj.as<ArrayObject>(), optimized);
 }
 
 JSObject*
@@ -4795,50 +4849,6 @@ js::ReportRuntimeLexicalError(JSContext* cx, unsigned errorNumber,
     }
 
     ReportRuntimeLexicalError(cx, errorNumber, name);
-}
-
-bool
-js::DefaultClassConstructor(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    if (!args.isConstructing()) {
-        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
-        return false;
-    }
-
-    RootedObject newTarget(cx, &args.newTarget().toObject());
-    JSObject* obj = CreateThis(cx, &PlainObject::class_, newTarget);
-    if (!obj)
-        return false;
-
-    args.rval().set(ObjectValue(*obj));
-    return true;
-}
-
-bool
-js::DefaultDerivedClassConstructor(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    if (!args.isConstructing()) {
-        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
-        return false;
-    }
-
-    RootedObject fun(cx, &args.callee());
-    RootedObject superFun(cx);
-    if (!GetPrototype(cx, fun, &superFun))
-        return false;
-
-    RootedValue fval(cx, ObjectOrNullValue(superFun));
-    if (!IsConstructor(fval)) {
-        ReportValueError(cx, JSMSG_NOT_CONSTRUCTOR, JSDVG_IGNORE_STACK, fval, nullptr);
-        return false;
-    }
-
-    ConstructArgs constArgs(cx);
-    if (!FillArgumentsFromArraylike(cx, constArgs, args))
-        return false;
-    return Construct(cx, fval, constArgs, args.newTarget(), args.rval());
 }
 
 void

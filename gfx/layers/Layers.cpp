@@ -76,8 +76,7 @@ LayerManager::GetRootScrollableLayerId()
     return FrameMetrics::NULL_SCROLL_ID;
   }
 
-  nsTArray<LayerMetricsWrapper> queue;
-  queue.AppendElement(LayerMetricsWrapper(mRoot));
+  nsTArray<LayerMetricsWrapper> queue = { LayerMetricsWrapper(mRoot) };
   while (queue.Length()) {
     LayerMetricsWrapper layer = queue[0];
     queue.RemoveElementAt(0);
@@ -110,8 +109,7 @@ LayerManager::GetRootScrollableLayers(nsTArray<Layer*>& aArray)
     return;
   }
 
-  nsTArray<Layer*> queue;
-  queue.AppendElement(mRoot);
+  nsTArray<Layer*> queue = { mRoot };
   while (queue.Length()) {
     Layer* layer = queue[0];
     queue.RemoveElementAt(0);
@@ -134,8 +132,7 @@ LayerManager::GetScrollableLayers(nsTArray<Layer*>& aArray)
     return;
   }
 
-  nsTArray<Layer*> queue;
-  queue.AppendElement(mRoot);
+  nsTArray<Layer*> queue = { mRoot };
   while (!queue.IsEmpty()) {
     Layer* layer = queue.LastElement();
     queue.RemoveElementAt(queue.Length() - 1);
@@ -895,6 +892,12 @@ Layer::GetTransform() const
   return transform;
 }
 
+const CSSTransformMatrix
+Layer::GetTransformTyped() const
+{
+  return ViewAs<CSSTransformMatrix>(GetTransform());
+}
+
 const Matrix4x4
 Layer::GetLocalTransform()
 {
@@ -910,6 +913,12 @@ Layer::GetLocalTransform()
   }
 
   return transform;
+}
+
+const LayerToParentLayerMatrix4x4
+Layer::GetLocalTransformTyped()
+{
+  return ViewAs<LayerToParentLayerMatrix4x4>(GetLocalTransform());
 }
 
 bool
@@ -941,7 +950,7 @@ Layer::ApplyPendingUpdatesForThisTransaction()
   }
 }
 
-const float
+float
 Layer::GetLocalOpacity()
 {
   float opacity = mOpacity;
@@ -2431,7 +2440,7 @@ void
 SetAntialiasingFlags(Layer* aLayer, DrawTarget* aTarget)
 {
   bool permitSubpixelAA = !(aLayer->GetContentFlags() & Layer::CONTENT_DISABLE_SUBPIXEL_AA);
-  if (aTarget->GetFormat() != SurfaceFormat::B8G8R8A8) {
+  if (aTarget->IsCurrentGroupOpaque()) {
     aTarget->SetPermitSubpixelAA(permitSubpixelAA);
     return;
   }

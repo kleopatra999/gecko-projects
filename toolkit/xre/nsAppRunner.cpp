@@ -145,6 +145,7 @@
 #include "mozilla/LateWriteChecks.h"
 
 #include <stdlib.h>
+#include <locale.h>
 
 #ifdef XP_UNIX
 #include <sys/stat.h>
@@ -2957,7 +2958,42 @@ static void MOZ_gdk_display_close(GdkDisplay *display)
   (void) display;
 #endif
 }
-#endif // MOZ_WIDGET_GTK2
+
+static const char* detectDisplay(void)
+{
+  bool tryX11 = false;
+  bool tryWayland = false;
+  bool tryBroadway = false;
+
+  // Honor user backend selection
+  const char *backend = PR_GetEnv("GDK_BACKEND");
+  if (!backend || strstr(backend, "*")) {
+    // Try all backends
+    tryX11 = true;
+    tryWayland = true;
+    tryBroadway = true;
+  } else if (backend) {
+    if (strstr(backend, "x11"))
+      tryX11 = true;
+    if (strstr(backend, "wayland"))
+      tryWayland = true;
+    if (strstr(backend, "broadway"))
+      tryBroadway = true;
+  }
+
+  const char *display_name;
+  if (tryX11 && (display_name = PR_GetEnv("DISPLAY"))) {
+    return display_name;
+  } else if (tryWayland && (display_name = PR_GetEnv("WAYLAND_DISPLAY"))) {
+    return display_name;
+  } else if (tryBroadway && (display_name = PR_GetEnv("BROADWAY_DISPLAY"))) {
+    return display_name;
+  }
+
+  PR_fprintf(PR_STDERR, "Error: GDK_BACKEND does not match available displays\n");
+  return nullptr;
+}
+#endif // MOZ_WIDGET_GTK
 
 /** 
  * NSPR will search for the "nspr_use_zone_allocator" symbol throughout
@@ -3714,12 +3750,12 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
 #if defined(MOZ_WIDGET_GTK)
   // display_name is owned by gdk.
   const char *display_name = gdk_get_display_arg_name();
+  bool saveDisplayArg = false;
   if (display_name) {
-    SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
+    saveDisplayArg = true;
   } else {
-    display_name = PR_GetEnv("DISPLAY");
+    display_name = detectDisplay();
     if (!display_name) {
-      PR_fprintf(PR_STDERR, "Error: no display specified\n");
       return 1;
     }
   }
@@ -3730,16 +3766,19 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   XInitThreads();
 #endif
 #if defined(MOZ_WIDGET_GTK)
-  {
-    mGdkDisplay = gdk_display_open(display_name);
-    if (!mGdkDisplay) {
-      PR_fprintf(PR_STDERR, "Error: cannot open display: %s\n", display_name);
-      return 1;
+  mGdkDisplay = gdk_display_open(display_name);
+  if (!mGdkDisplay) {
+    PR_fprintf(PR_STDERR, "Error: cannot open display: %s\n", display_name);
+    return 1;
+  }
+  gdk_display_manager_set_default_display (gdk_display_manager_get(),
+                                           mGdkDisplay);
+  if (GDK_IS_X11_DISPLAY(mGdkDisplay)) {
+    if (saveDisplayArg) {
+      SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
     }
-    gdk_display_manager_set_default_display (gdk_display_manager_get(),
-                                             mGdkDisplay);
-    if (!GDK_IS_X11_DISPLAY(mGdkDisplay))
-      mDisableRemote = true;
+  } else {
+    mDisableRemote = true;
   }
 #endif
 #ifdef MOZ_ENABLE_XREMOTE
@@ -4149,6 +4188,8 @@ XREMain::XRE_mainRun()
   }
 
   mDirProvider.DoStartup();
+
+  OverrideDefaultLocaleIfNeeded();
 
 #ifdef MOZ_CRASHREPORTER
   nsCString userAgentLocale;
@@ -4682,7 +4723,7 @@ mozilla::BrowserTabsRemoteAutostart()
   // When running tests with 'layers.offmainthreadcomposition.testing.enabled', e10s must be
   // allowed because these tests must be allowed to run remotely.
   // We are also allowing e10s to be enabled on Beta (which doesn't have E10S_TESTING_ONLY defined.
-  bool e10sAllowed = Preferences::GetDefaultCString("app.update.channel").EqualsLiteral("beta") ||
+  bool e10sAllowed = !Preferences::GetDefaultCString("app.update.channel").EqualsLiteral("release") ||
                      gfxPrefs::GetSingleton().LayersOffMainThreadCompositionTestingEnabled();
 #endif
 
@@ -4741,7 +4782,6 @@ mozilla::BrowserTabsRemoteAutostart()
     status = kE10sEnabledByUser;
   }
 
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_AUTOSTART, gBrowserTabsRemoteAutostart);
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_AUTOSTART_STATUS, status);
   if (Preferences::GetBool("browser.enabledE10SFromPrompt", false)) {
     mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_STILL_ACCEPTED_FROM_PROMPT,
@@ -4807,4 +4847,16 @@ SetupErrorHandling(const char* progname)
 
   // Unbuffer stdout, needed for tinderbox tests.
   setbuf(stdout, 0);
+}
+
+void
+OverrideDefaultLocaleIfNeeded() {
+  // Read pref to decide whether to override default locale with US English.
+  if (mozilla::Preferences::GetBool("javascript.use_us_english_locale", false)) {
+    // Set the application-wide C-locale. Needed to resist fingerprinting
+    // of Date.toLocaleFormat(). We use the locale to "C.UTF-8" if possible,
+    // to avoid interfering with non-ASCII keyboard input on some Linux desktops.
+    // Otherwise fall back to the "C" locale, which is available on all platforms.
+    setlocale(LC_ALL, "C.UTF-8") || setlocale(LC_ALL, "C");
+  }
 }
