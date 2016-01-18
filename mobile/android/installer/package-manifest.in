@@ -279,8 +279,7 @@
 @BINPATH@/components/NotificationStorage.manifest
 @BINPATH@/components/Push.js
 @BINPATH@/components/Push.manifest
-@BINPATH@/components/PushClient.js
-@BINPATH@/components/PushNotificationService.js
+@BINPATH@/components/PushComponents.js
 @BINPATH@/components/SettingsManager.js
 @BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/BrowserElementParent.manifest
