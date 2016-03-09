@@ -655,7 +655,7 @@ class BaseMarionetteTestRunner(object):
         self.marionette.delete_session()
         return self._capabilities
 
-     @property
+    @property
     def appinfo(self):
         if self._appinfo:
             return self._appinfo
