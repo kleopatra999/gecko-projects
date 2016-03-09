@@ -299,7 +299,7 @@
         <getter>
           <![CDATA[
             var document = this.contentDocument;
-            if (!document || !(document instanceof Ci.nsIImageDocument))
+            if (!document || !(document instanceof Components.interfaces.nsIImageDocument))
               return null;
 
             try {
@@ -751,12 +751,23 @@
         </setter>
       </property>
 
+      <!-- increases or decreases the browser's network priority -->
       <method name="adjustPriority">
         <parameter name="adjustment"/>
         <body><![CDATA[
-          let loadGroup = this.webNavigation.QueryInterface(Ci.nsIDocumentLoader)
-                              .loadGroup.QueryInterface(Ci.nsISupportsPriority);
+          let loadGroup = this.webNavigation.QueryInterface(Components.interfaces.nsIDocumentLoader)
+                              .loadGroup.QueryInterface(Components.interfaces.nsISupportsPriority);
           loadGroup.adjustPriority(adjustment);
+        ]]></body>
+      </method>
+
+      <!-- sets the browser's network priority to a discrete value -->
+      <method name="setPriority">
+        <parameter name="priority"/>
+        <body><![CDATA[
+          let loadGroup = this.webNavigation.QueryInterface(Components.interfaces.nsIDocumentLoader)
+                              .loadGroup.QueryInterface(Components.interfaces.nsISupportsPriority);
+          loadGroup.priority = priority;
         ]]></body>
       </method>
 
@@ -844,7 +855,7 @@
             if (this.docShell && this.webNavigation.sessionHistory) {
               var os = Components.classes["@mozilla.org/observer-service;1"]
                                  .getService(Components.interfaces.nsIObserverService);
-              os.addObserver(this, "browser:purge-session-history", false);
+              os.addObserver(this, "browser:purge-session-history", true);
 
               // enable global history if we weren't told otherwise
               if (!this.hasAttribute("disableglobalhistory") && !this.isRemoteBrowser) {
@@ -1158,6 +1169,20 @@
             throw new Error("Can only swap docshells between browsers in the same process.");
 
           // Give others a chance to swap state.
+          // IMPORTANT: Since a swapDocShells call does not swap the messageManager
+          //            instances attached to a browser to aOtherBrowser, others
+          //            will need to add the message listeners to the new
+          //            messageManager.
+          //            This is not a bug in swapDocShells or the FrameLoader,
+          //            merely a design decision: If message managers were swapped,
+          //            so that no new listeners were needed, the new
+          //            aOtherBrowser.messageManager would have listeners pointing
+          //            to the JS global of the current browser, which would rather
+          //            easily create leaks while swapping.
+          // IMPORTANT2: When the current browser element is removed from DOM,
+          //             which is quite common after a swpDocShells call, its
+          //             frame loader is destroyed, and that destroys the relevant
+          //             message manager, which will remove the listeners.
           let event = new CustomEvent("SwapDocShells", {"detail": aOtherBrowser});
           this.dispatchEvent(event);
           event = new CustomEvent("SwapDocShells", {"detail": this});
@@ -1199,7 +1224,7 @@
 
           var ourFieldValues = {};
           var otherFieldValues = {};
-          for (var field of fieldsToSwap) {
+          for (let field of fieldsToSwap) {
             ourFieldValues[field] = this[field];
             otherFieldValues[field] = aOtherBrowser[field];
           }
@@ -1207,8 +1232,13 @@
           if (window.PopupNotifications)
             PopupNotifications._swapBrowserNotifications(aOtherBrowser, this);
 
-          this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner)
-              .swapFrameLoaders(aOtherBrowser);
+          try {
+            this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner)
+                .swapFrameLoaders(aOtherBrowser);
+          } catch(ex) {
+            // This may not be implemented for browser elements that are not
+            // attached to a BrowserDOMWindow.
+          }
 
           // Before we swap the actual docShell property we need to detach the
           // form fill controller from those docShells.
@@ -1217,7 +1247,7 @@
             aOtherBrowser.detachFormFill();
           }
 
-          for (var field of fieldsToSwap) {
+          for (let field of fieldsToSwap) {
             this[field] = otherFieldValues[field];
             aOtherBrowser[field] = ourFieldValues[field];
           }
@@ -1237,8 +1267,10 @@
             this._remoteWebNavigationImpl.swapBrowser(this);
             aOtherBrowser._remoteWebNavigationImpl.swapBrowser(aOtherBrowser);
 
-            this._remoteWebProgressManager.swapBrowser(this);
-            aOtherBrowser._remoteWebProgressManager.swapBrowser(aOtherBrowser);
+            if (this._remoteWebProgressManager && aOtherBrowser._remoteWebProgressManager) {
+              this._remoteWebProgressManager.swapBrowser(this);
+              aOtherBrowser._remoteWebProgressManager.swapBrowser(aOtherBrowser);
+            }
 
             if (this._remoteFinder)
               this._remoteFinder.swapBrowser(this);

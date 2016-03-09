@@ -138,8 +138,7 @@ JS_NewObjectWithUniqueType(JSContext* cx, const JSClass* clasp, HandleObject pro
 JS_FRIEND_API(JSObject*)
 JS_NewObjectWithoutMetadata(JSContext* cx, const JSClass* clasp, JS::Handle<JSObject*> proto)
 {
-    // Use an AutoEnterAnalysis to suppress invocation of the metadata callback.
-    AutoEnterAnalysis enter(cx);
+    AutoSuppressObjectMetadataCallback suppressMetadata(cx);
     return JS_NewObjectWithGivenProto(cx, clasp, proto);
 }
 
@@ -401,7 +400,7 @@ js::GetOutermostEnclosingFunctionOfScriptedCaller(JSContext* cx)
     if (iter.done())
         return nullptr;
 
-    if (!iter.isNonEvalFunctionFrame())
+    if (!iter.isFunctionFrame())
         return nullptr;
 
     RootedFunction curr(cx, iter.callee(cx));
@@ -725,7 +724,7 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
 
     RootedValue thisVal(cx);
     if (iter.hasUsableAbstractFramePtr() &&
-        iter.isNonEvalFunctionFrame() &&
+        iter.isFunctionFrame() &&
         fun && !fun->isArrow() && !fun->isDerivedClassConstructor())
     {
         if (!GetFunctionThis(cx, iter.abstractFramePtr(), &thisVal))
@@ -759,13 +758,17 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
                         break;
                     }
                 }
-            } else if (script->argsObjAliasesFormals() && iter.hasArgsObj()) {
-                arg = iter.argsObj().arg(i);
-            } else {
-                if (iter.hasUsableAbstractFramePtr())
+            } else if (iter.hasUsableAbstractFramePtr()) {
+                if (script->analyzedArgsUsage() &&
+                    script->argsObjAliasesFormals() &&
+                    iter.hasArgsObj())
+                {
+                    arg = iter.argsObj().arg(i);
+                } else {
                     arg = iter.unaliasedActual(i, DONT_CHECK_ALIASING);
-                else
-                    arg = MagicValue(JS_OPTIMIZED_OUT);
+                }
+            } else {
+                arg = MagicValue(JS_OPTIMIZED_OUT);
             }
 
             JSAutoByteString valueBytes;
@@ -924,6 +927,28 @@ JS::FormatStackDump(JSContext* cx, char* buf, bool showArgs, bool showLocals, bo
     return buf;
 }
 
+extern JS_FRIEND_API(bool)
+JS::ForceLexicalInitialization(JSContext *cx, HandleObject obj)
+{
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    assertSameCompartment(cx, obj);
+
+    bool initializedAny = false;
+    NativeObject* nobj = &obj->as<NativeObject>();
+
+    for (Shape::Range<NoGC> r(nobj->lastProperty()); !r.empty(); r.popFront()) {
+        Shape* s = &r.front();
+        Value v = nobj->getSlot(s->slot());
+        if (s->hasSlot() && v.isMagic() && v.whyMagic() == JS_UNINITIALIZED_LEXICAL) {
+            nobj->setSlot(s->slot(), UndefinedValue());
+            initializedAny = true;
+        }
+
+    }
+    return initializedAny;
+}
+
 struct DumpHeapTracer : public JS::CallbackTracer, public WeakMapTracer
 {
     const char* prefix;
@@ -983,7 +1008,7 @@ DumpHeapVisitArena(JSRuntime* rt, void* data, gc::Arena* arena,
 {
     DumpHeapTracer* dtrc = static_cast<DumpHeapTracer*>(data);
     fprintf(dtrc->output, "# arena allockind=%u size=%u\n",
-            unsigned(arena->aheader.getAllocKind()), unsigned(thingSize));
+            unsigned(arena->getAllocKind()), unsigned(thingSize));
 }
 
 static void

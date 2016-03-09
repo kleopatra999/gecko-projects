@@ -1335,9 +1335,8 @@ MSimdBox::writeRecoverData(CompactBufferWriter& writer) const
 {
     MOZ_ASSERT(canRecoverOnBailout());
     writer.writeUnsigned(uint32_t(RInstruction::Recover_SimdBox));
-    SimdTypeDescr& simdTypeDescr = templateObject()->typeDescr().as<SimdTypeDescr>();
-    SimdTypeDescr::Type type = simdTypeDescr.type();
-    writer.writeByte(uint8_t(type));
+    static_assert(sizeof(SimdType) == sizeof(uint8_t), "assuming uint8 storage class for SimdType");
+    writer.writeByte(uint8_t(simdType()));
     return true;
 }
 
@@ -1352,50 +1351,47 @@ RSimdBox::recover(JSContext* cx, SnapshotIterator& iter) const
     JSObject* resultObject = nullptr;
     RValueAllocation a = iter.readAllocation();
     MOZ_ASSERT(iter.allocationReadable(a));
+    MOZ_ASSERT_IF(a.mode() == RValueAllocation::ANY_FLOAT_REG, a.fpuReg().isSimd128());
     const FloatRegisters::RegisterContent* raw = iter.floatAllocationPointer(a);
-    switch (SimdTypeDescr::Type(type_)) {
-      case SimdTypeDescr::Bool32x4:
-        MOZ_ASSERT_IF(a.mode() == RValueAllocation::ANY_FLOAT_REG,
-                      a.fpuReg().isSimd128());
+    switch (SimdType(type_)) {
+      case SimdType::Bool32x4:
         resultObject = js::CreateSimd<Bool32x4>(cx, (const Bool32x4::Elem*) raw);
         break;
-      case SimdTypeDescr::Int32x4:
-        MOZ_ASSERT_IF(a.mode() == RValueAllocation::ANY_FLOAT_REG,
-                      a.fpuReg().isSimd128());
+      case SimdType::Int32x4:
         resultObject = js::CreateSimd<Int32x4>(cx, (const Int32x4::Elem*) raw);
         break;
-      case SimdTypeDescr::Float32x4:
-        MOZ_ASSERT_IF(a.mode() == RValueAllocation::ANY_FLOAT_REG,
-                      a.fpuReg().isSimd128());
+      case SimdType::Uint32x4:
+        resultObject = js::CreateSimd<Uint32x4>(cx, (const Uint32x4::Elem*) raw);
+        break;
+      case SimdType::Float32x4:
         resultObject = js::CreateSimd<Float32x4>(cx, (const Float32x4::Elem*) raw);
         break;
-      case SimdTypeDescr::Float64x2:
+      case SimdType::Float64x2:
         MOZ_CRASH("NYI, RSimdBox of Float64x2");
         break;
-      case SimdTypeDescr::Int8x16:
+      case SimdType::Int8x16:
         MOZ_CRASH("NYI, RSimdBox of Int8x16");
         break;
-      case SimdTypeDescr::Int16x8:
+      case SimdType::Int16x8:
         MOZ_CRASH("NYI, RSimdBox of Int16x8");
         break;
-      case SimdTypeDescr::Uint8x16:
+      case SimdType::Uint8x16:
         MOZ_CRASH("NYI, RSimdBox of UInt8x16");
         break;
-      case SimdTypeDescr::Uint16x8:
+      case SimdType::Uint16x8:
         MOZ_CRASH("NYI, RSimdBox of UInt16x8");
         break;
-      case SimdTypeDescr::Uint32x4:
-        MOZ_CRASH("NYI, RSimdBox of UInt32x4");
-        break;
-      case SimdTypeDescr::Bool8x16:
+      case SimdType::Bool8x16:
         MOZ_CRASH("NYI, RSimdBox of Bool8x16");
         break;
-      case SimdTypeDescr::Bool16x8:
+      case SimdType::Bool16x8:
         MOZ_CRASH("NYI, RSimdBox of Bool16x8");
         break;
-      case SimdTypeDescr::Bool64x2:
+      case SimdType::Bool64x2:
         MOZ_CRASH("NYI, RSimdBox of Bool64x2");
         break;
+      case SimdType::Count:
+        MOZ_CRASH("RSimdBox of Count is unreachable");
     }
 
     if (!resultObject)

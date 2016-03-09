@@ -247,11 +247,15 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
             return false;
         }
 
+        event.offsetLocation(0, -mSurfaceTranslation);
+
         return sendEventToGecko(event);
     }
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
+        event.offsetLocation(0, -mSurfaceTranslation);
+
         if (AndroidGamepadManager.handleMotionEvent(event)) {
             return true;
         }
@@ -440,7 +444,9 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
             glController.attachToJava(mLayerClient, npzc);
         } else {
             GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
-                    glController, "attachToJava", mLayerClient, npzc);
+                    glController, "attachToJava",
+                    GeckoLayerClient.class, mLayerClient,
+                    NativePanZoomController.class, npzc);
         }
     }
 

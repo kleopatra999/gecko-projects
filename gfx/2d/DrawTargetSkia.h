@@ -6,11 +6,6 @@
 #ifndef _MOZILLA_GFX_SOURCESURFACESKIA_H
 #define _MOZILLA_GFX_SOURCESURFACESKIA_H
 
-#ifdef USE_SKIA_GPU
-#include "skia/include/gpu/GrContext.h"
-#include "skia/include/gpu/gl/GrGLInterface.h"
-#endif
-
 #include "skia/include/core/SkCanvas.h"
 
 #include "2D.h"
@@ -121,7 +116,14 @@ public:
 #ifdef USE_SKIA_GPU
   bool InitWithGrContext(GrContext* aGrContext,
                          const IntSize &aSize,
-                         SurfaceFormat aFormat) override;
+                         SurfaceFormat aFormat,
+                         bool aCached);
+  virtual bool
+    InitWithGrContext(GrContext* aGrContext,
+                      const IntSize &aSize,
+                      SurfaceFormat aFormat) override {
+    return InitWithGrContext(aGrContext, aSize, aFormat, false);
+  }
 #endif
 
   // Skia assumes that texture sizes fit in 16-bit signed integers.
@@ -168,7 +170,6 @@ private:
 
 #ifdef USE_SKIA_GPU
   RefPtrSkia<GrContext> mGrContext;
-  GrGLuint mTexture;
 #endif
 
   IntSize mSize;

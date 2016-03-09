@@ -16,9 +16,9 @@ import java.util.Set;
 
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.mozilla.gecko.Assert;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.Telemetry;
+import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.ContentResolver;
@@ -80,7 +80,6 @@ public class LocalURLMetadata implements URLMetadata {
             if (obj.has("touchIconList") &&
                     (icons = obj.getJSONObject("touchIconList")).length() > 0) {
                 int preferredSize = GeckoAppShell.getPreferredIconSize();
-                int bestSizeFound = -1;
 
                 Iterator<String> keys = icons.keys();
 
@@ -89,27 +88,13 @@ public class LocalURLMetadata implements URLMetadata {
                     sizes.add(new Integer(keys.next()));
                 }
 
-                Collections.sort(sizes);
-                for (int size : sizes) {
-                    if (size >= preferredSize) {
-                        bestSizeFound = size;
-                        break;
-                    }
-                }
-
-                // If all icons are smaller than the preferred size then we don't have an icon
-                // selected yet (bestSizeFound == -1), therefore just take the largest (last) icon.
-                if (bestSizeFound == -1) {
-                    bestSizeFound = sizes.get(sizes.size() - 1);
-                }
-
-                String iconURL = icons.getString(Integer.toString(bestSizeFound));
+                final int bestSize = Favicons.selectBestSizeFromList(sizes, preferredSize);
+                final String iconURL = icons.getString(Integer.toString(bestSize));
 
                 data.put(URLMetadataTable.TOUCH_ICON_COLUMN, iconURL);
             }
         } catch (JSONException e) {
             Log.w(LOGTAG, "Exception processing touchIconList for LocalURLMetadata; ignoring.", e);
-            Assert.isTrue(false);
         }
 
         return Collections.unmodifiableMap(data);
@@ -182,8 +167,6 @@ public class LocalURLMetadata implements URLMetadata {
                 urlsToQuery.add(url);
             }
         }
-
-        Telemetry.addToHistogram("FENNEC_TILES_CACHE_HIT", data.size());
 
         // If everything was in the cache, we're done!
         if (urlsToQuery.size() == 0) {

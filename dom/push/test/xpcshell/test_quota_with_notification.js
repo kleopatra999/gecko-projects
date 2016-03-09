@@ -14,6 +14,7 @@ function run_test() {
   do_get_profile();
   setPrefs({
     userAgentID,
+    'testing.ignorePermission': true,
   });
   run_next_test();
 }
@@ -21,8 +22,8 @@ function run_test() {
 add_task(function* test_expiration_origin_threshold() {
   let db = PushServiceWebSocket.newPushDB();
   do_register_cleanup(() => {
-    db.drop().then(_ => db.close())
     PushService.notificationForOriginClosed("https://example.com");
+    return db.drop().then(_ => db.close());
   });
 
   // Simulate a notification being shown for the origin,
@@ -42,19 +43,17 @@ add_task(function* test_expiration_origin_threshold() {
   });
 
   // A visit one day ago should provide a quota of 8 messages.
-  yield addVisit({
+  yield PlacesTestUtils.addVisits({
     uri: 'https://example.com/login',
     title: 'Sign in to see your auctions',
-    visits: [{
-      visitDate: (Date.now() - 1 * 24 * 60 * 60 * 1000) * 1000,
-      transitionType: Ci.nsINavHistoryService.TRANSITION_LINK,
-    }],
+    visitDate: (Date.now() - 1 * 24 * 60 * 60 * 1000) * 1000,
+    transition: Ci.nsINavHistoryService.TRANSITION_LINK
   });
 
   let numMessages = 10;
 
   let updates = 0;
-  let notifyPromise = promiseObserverNotification('push-notification', (subject, data) => {
+  let notifyPromise = promiseObserverNotification(PushServiceComponent.pushTopic, (subject, data) => {
     updates++;
     return updates == numMessages;
   });

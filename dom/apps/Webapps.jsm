@@ -73,9 +73,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "OfflineCacheInstaller",
 XPCOMUtils.defineLazyModuleGetter(this, "SystemMessagePermissionsChecker",
   "resource://gre/modules/SystemMessagePermissionsChecker.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "WebappOSUtils",
-  "resource://gre/modules/WebappOSUtils.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
 
@@ -135,9 +132,7 @@ function supportSystemMessages() {
 // Minimum delay between two progress events while downloading, in ms.
 const MIN_PROGRESS_EVENT_DELAY = 1500;
 
-const WEBAPP_RUNTIME = Services.appinfo.ID == "webapprt@mozilla.org";
-
-const chromeWindowType = WEBAPP_RUNTIME ? "webapprt:webapp" : "navigator:browser";
+const chromeWindowType = "navigator:browser";
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
                                    "@mozilla.org/parentprocessmessagemanager;1",
@@ -180,10 +175,8 @@ XPCOMUtils.defineLazyGetter(this, "permMgr", function() {
 #elifdef ANDROID
   const DIRECTORY_NAME = "webappsDir";
 #else
-  // If we're executing in the context of the webapp runtime, the data files
-  // are in a different directory (currently the Firefox profile that installed
-  // the webapp); otherwise, they're in the current profile.
-  const DIRECTORY_NAME = WEBAPP_RUNTIME ? "WebappRegD" : "ProfD";
+  // Mulet, B2G Desktop, etc.
+  const DIRECTORY_NAME = "ProfD";
 #endif
 
 // We'll use this to identify privileged apps that have been preinstalled
@@ -2051,7 +2044,7 @@ this.DOMApplicationRegistry = {
         Services.scriptSecurityManager.createCodebasePrincipal(appURI,
                                                                {appId: aApp.localId});
       let cacheUpdate = updateSvc.scheduleAppUpdate(
-        appcacheURI, docURI, principal, aApp.localId, false, aProfileDir);
+        appcacheURI, docURI, principal, aProfileDir);
 
       // We save the download details for potential further usage like
       // cancelling it.
@@ -2205,7 +2198,7 @@ this.DOMApplicationRegistry = {
           Services.scriptSecurityManager.createCodebasePrincipal(appURI,
                                                                  {appId: aApp.localId});
         updateSvc.checkForUpdate(Services.io.newURI(helper.fullAppcachePath(), null, null),
-                                 principal, app.localId, false, updateObserver);
+                                 principal, updateObserver);
       });
       return;
     }
@@ -2479,8 +2472,7 @@ this.DOMApplicationRegistry = {
                                                                {appId: aApp.localId});
 
       updateSvc.checkForUpdate(Services.io.newURI(manifest.fullAppcachePath(), null, null),
-                               principal, aApp.localId, false,
-                               (aSubject, aTopic, aData) => updateDeferred.resolve(aTopic));
+                               principal, (aSubject, aTopic, aData) => updateDeferred.resolve(aTopic));
 
       let topic = yield updateDeferred.promise;
 
@@ -2999,7 +2991,7 @@ this.DOMApplicationRegistry = {
     app.manifestHash = AppsUtils.computeHash(JSON.stringify(aUpdateManifest ||
                                                             aManifest));
 
-    let zipFile = WebappOSUtils.getPackagePath(app);
+    let zipFile = app.basePath + "/" + app.id;
     app.packageHash = yield this._computeFileHash(zipFile);
 
     app.role = aManifest.role || "";
@@ -3491,21 +3483,15 @@ this.DOMApplicationRegistry = {
     let requestChannel;
 
     let appURI = NetUtil.newURI(aNewApp.origin, null, null);
-    let principal =
-      Services.scriptSecurityManager.createCodebasePrincipal(appURI,
-                                                             {appId: aNewApp.localId});
-
     if (aIsLocalFileInstall) {
       requestChannel = NetUtil.newChannel({
         uri: aFullPackagePath,
-        loadingPrincipal: principal,
-        contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER}
+        loadUsingSystemPrincipal: true}
       ).QueryInterface(Ci.nsIFileChannel);
     } else {
       requestChannel = NetUtil.newChannel({
         uri: aFullPackagePath,
-        loadingPrincipal: principal,
-        contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER}
+        loadUsingSystemPrincipal: true}
       ).QueryInterface(Ci.nsIHttpChannel);
       requestChannel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
     }
@@ -3543,10 +3529,10 @@ this.DOMApplicationRegistry = {
 
       // nsILoadContext
       appId: aOldApp.installerAppId,
-      isInBrowserElement: aOldApp.installerIsBrowser,
+      isInIsolatedMozBrowserElement: aOldApp.installerIsBrowser,
       originAttributes: {
         appId: aOldApp.installerAppId,
-        inBrowser: aOldApp.installerIsBrowser
+        inIsolatedMozBrowser: aOldApp.installerIsBrowser
       },
       usePrivateBrowsing: false,
       isContent: false,
@@ -4806,6 +4792,10 @@ this.DOMApplicationRegistry = {
     return OS.Path.dirname(this.appsFile);
   },
 
+  areAnyAppsInstalled: function() {
+    return AppsUtils.areAnyAppsInstalled(this.webapps);
+  },
+
   updateDataStoreEntriesFromLocalId: function(aLocalId) {
     let app = appsService.getAppByLocalId(aLocalId);
     if (app) {
@@ -4814,10 +4804,7 @@ this.DOMApplicationRegistry = {
   },
 
   _isLaunchable: function(aApp) {
-    if (this.allAppsLaunchable)
-      return true;
-
-    return WebappOSUtils.isLaunchable(aApp);
+    return true;
   },
 
   _notifyCategoryAndObservers: function(subject, topic, data,  msg) {
@@ -4909,7 +4896,7 @@ this.DOMApplicationRegistry = {
   _clearOriginData: function(appId, browserOnly) {
     let attributes = {appId: appId};
     if (browserOnly) {
-      attributes.inBrowser = true;
+      attributes.inIsolatedMozBrowser = true;
     }
     this._notifyCategoryAndObservers(null, "clear-origin-data", JSON.stringify(attributes));
   }

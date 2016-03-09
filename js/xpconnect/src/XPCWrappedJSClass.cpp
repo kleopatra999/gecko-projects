@@ -549,6 +549,22 @@ nsXPCWrappedJSClass::DelegatedQueryInterface(nsXPCWrappedJS* self,
         return NS_OK;
     }
 
+    // Check if the desired interface is a function interface. If so, we don't
+    // want to QI, because the function almost certainly doesn't have a QueryInterface
+    // property, and doesn't need one.
+    bool isFunc = false;
+    nsCOMPtr<nsIInterfaceInfo> info;
+    nsXPConnect::XPConnect()->GetInfoForIID(&aIID, getter_AddRefs(info));
+    if (info && NS_SUCCEEDED(info->IsFunction(&isFunc)) && isFunc) {
+        RefPtr<nsXPCWrappedJS> wrapper;
+        RootedObject obj(nsContentUtils::RootingCx(), self->GetJSObject());
+        nsresult rv = nsXPCWrappedJS::GetNewOrUsed(obj, aIID, getter_AddRefs(wrapper));
+
+        // Do the same thing we do for the "check for any existing wrapper" case above.
+        *aInstancePtr = wrapper.forget().take()->GetXPTCStub();
+        return rv;
+    }
+
     // else we do the more expensive stuff...
 
     // check if the JSObject claims to implement this interface
@@ -759,12 +775,14 @@ nsXPCWrappedJSClass::CleanupOutparams(JSContext* cx, uint16_t methodIndex,
 
 nsresult
 nsXPCWrappedJSClass::CheckForException(XPCCallContext & ccx,
+                                       AutoEntryScript& aes,
                                        const char * aPropertyName,
                                        const char * anInterfaceName,
                                        bool aForceReport)
 {
     XPCContext * xpcc = ccx.GetXPCContext();
     JSContext * cx = ccx.GetJSContext();
+    MOZ_ASSERT(cx == aes.cx());
     nsCOMPtr<nsIException> xpc_exception;
     /* this one would be set by our error reporter */
 
@@ -795,7 +813,7 @@ nsXPCWrappedJSClass::CheckForException(XPCCallContext & ccx,
     // Clear the pending exception now, because xpc_exception might be JS-
     // implemented, so invoking methods on it might re-enter JS, which we can't
     // do with an exception on the stack.
-    JS_ClearPendingException(cx);
+    aes.ClearException();
 
     if (xpc_exception) {
         nsresult e_result;
@@ -844,7 +862,8 @@ nsXPCWrappedJSClass::CheckForException(XPCCallContext & ccx,
                 // just so that we can tell the JS engine to pass it back to us via the
                 // error reporting callback. This is all very dumb.
                 JS_SetPendingException(cx, js_exception);
-                reportable = !JS_ReportPendingException(cx);
+                aes.ReportException();
+                reportable = false;
             }
 
             if (reportable) {
@@ -963,6 +982,7 @@ nsXPCWrappedJSClass::CallMethod(nsXPCWrappedJS* wrapper, uint16_t methodIndex,
       NativeGlobal(js::GetGlobalForObjectCrossCompartment(wrapper->GetJSObject()));
     AutoEntryScript aes(nativeGlobal, "XPCWrappedJS method call",
                         /* aIsMainThread = */ true);
+    aes.TakeOwnershipOfErrorReporting();
     XPCCallContext ccx(NATIVE_CALLER, aes.cx());
     if (!ccx.IsValid())
         return retval;
@@ -981,7 +1001,7 @@ nsXPCWrappedJSClass::CallMethod(nsXPCWrappedJS* wrapper, uint16_t methodIndex,
         // Throw and warn for good measure.
         JS_ReportError(cx, str);
         NS_WARNING(str);
-        return NS_ERROR_FAILURE;
+        return CheckForException(ccx, aes, name, GetInterfaceName(), false);
     }
 
     RootedValue fval(cx);
@@ -1205,7 +1225,7 @@ pre_call_clean_up:
 
     // do the deed - note exceptions
 
-    JS_ClearPendingException(cx);
+    MOZ_ASSERT(!aes.HasException());
 
     RootedValue rval(cx);
     if (XPT_MD_IS_GETTER(info->flags)) {
@@ -1251,7 +1271,8 @@ pre_call_clean_up:
         // May also want to check if we're moving from content->chrome and force
         // a report in that case.
 
-        return CheckForException(ccx, name, GetInterfaceName(), forceReport);
+        return CheckForException(ccx, aes, name, GetInterfaceName(),
+                                 forceReport);
     }
 
     XPCJSRuntime::Get()->SetPendingException(nullptr); // XXX necessary?

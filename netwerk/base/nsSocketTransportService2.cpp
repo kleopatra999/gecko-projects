@@ -4,11 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsSocketTransportService2.h"
-#if !defined(MOZILLA_XPCOMRT_API)
 #include "nsSocketTransport2.h"
 #include "NetworkActivityMonitor.h"
 #include "mozilla/Preferences.h"
-#endif // !defined(MOZILLA_XPCOMRT_API)
+#include "nsIOService.h"
 #include "nsASocketHandler.h"
 #include "nsError.h"
 #include "prnetdb.h"
@@ -46,6 +45,7 @@ Atomic<PRThread*, Relaxed> gSocketThread;
 #define BLIP_INTERVAL_PREF "network.activity.blipIntervalMilliseconds"
 #define MAX_TIME_BETWEEN_TWO_POLLS "network.sts.max_time_for_events_between_two_polls"
 #define TELEMETRY_PREF "toolkit.telemetry.enabled"
+#define MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN "network.sts.max_time_for_pr_close_during_shutdown"
 
 uint32_t nsSocketTransportService::gMaxCount;
 PRCallOnceType nsSocketTransportService::gMaxCountInitOnce;
@@ -110,6 +110,7 @@ nsSocketTransportService::nsSocketTransportService()
     , mServingPendingQueue(false)
     , mMaxTimePerPollIter(100)
     , mTelemetryEnabledPref(false)
+    , mMaxTimeForPrClosePref(PR_SecondsToInterval(5))
     , mProbedMaxCount(false)
 {
     NS_ASSERTION(NS_IsMainThread(), "wrong thread");
@@ -549,6 +550,7 @@ nsSocketTransportService::Init()
         tmpPrefService->AddObserver(KEEPALIVE_PROBE_COUNT_PREF, this, false);
         tmpPrefService->AddObserver(MAX_TIME_BETWEEN_TWO_POLLS, this, false);
         tmpPrefService->AddObserver(TELEMETRY_PREF, this, false);
+        tmpPrefService->AddObserver(MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN, this, false);
     }
     UpdatePrefs();
 
@@ -606,9 +608,7 @@ nsSocketTransportService::Shutdown()
         obsSvc->RemoveObserver(this, "last-pb-context-exited");
     }
 
-#if !defined(MOZILLA_XPCOMRT_API)
     mozilla::net::NetworkActivityMonitor::Shutdown();
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
     mInitialized = false;
     mShuttingDown = false;
@@ -696,10 +696,6 @@ nsSocketTransportService::CreateRoutedTransport(const char **types,
                                                 nsIProxyInfo *proxyInfo,
                                                 nsISocketTransport **result)
 {
-#if defined(MOZILLA_XPCOMRT_API)
-    NS_WARNING("nsSocketTransportService::CreateTransport not implemented");
-    return NS_ERROR_NOT_IMPLEMENTED;
-#else
     NS_ENSURE_TRUE(mInitialized, NS_ERROR_NOT_INITIALIZED);
     NS_ENSURE_TRUE(port >= 0 && port <= 0xFFFF, NS_ERROR_ILLEGAL_VALUE);
 
@@ -711,17 +707,12 @@ nsSocketTransportService::CreateRoutedTransport(const char **types,
 
     trans.forget(result);
     return NS_OK;
-#endif // defined(MOZILLA_XPCOMRT_API)
 }
 
 NS_IMETHODIMP
 nsSocketTransportService::CreateUnixDomainTransport(nsIFile *aPath,
                                                     nsISocketTransport **result)
 {
-#if defined(MOZILLA_XPCOMRT_API)
-    NS_WARNING("nsSocketTransportService::CreateUnixDomainTransport not implemented");
-    return NS_ERROR_NOT_IMPLEMENTED;
-#else
     nsresult rv;
 
     NS_ENSURE_TRUE(mInitialized, NS_ERROR_NOT_INITIALIZED);
@@ -739,7 +730,6 @@ nsSocketTransportService::CreateUnixDomainTransport(nsIFile *aPath,
 
     trans.forget(result);
     return NS_OK;
-#endif // defined(MOZILLA_XPCOMRT_API)
 }
 
 NS_IMETHODIMP
@@ -802,9 +792,7 @@ nsSocketTransportService::Run()
 
     SOCKET_LOG(("STS thread init\n"));
 
-#if !defined(MOZILLA_XPCOMRT_API)
     psm::InitializeSSLServerCertVerificationThreads();
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
     gSocketThread = PR_GetCurrentThread();
 
@@ -967,9 +955,7 @@ nsSocketTransportService::Run()
 
     gSocketThread = nullptr;
 
-#if !defined(MOZILLA_XPCOMRT_API)
     psm::StopSSLServerCertVerificationThreads();
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
     SOCKET_LOG(("STS thread exit\n"));
     return NS_OK;
@@ -1063,9 +1049,14 @@ nsSocketTransportService::DoPollIteration(bool wait, TimeDuration *pollDuration)
 #endif
 
     // Measures seconds spent while blocked on PR_Poll
-    uint32_t pollInterval;
+    uint32_t pollInterval = 0;
+    int32_t n = 0;
+    *pollDuration = 0;
+    if (!gIOService->IsNetTearingDown()) {
+        // Let's not do polling during shutdown.
+        n = Poll(wait, &pollInterval, pollDuration);
+    }
 
-    int32_t n = Poll(wait, &pollInterval, pollDuration);
     if (n < 0) {
         SOCKET_LOG(("  PR_Poll error [%d] os error [%d]\n", PR_GetError(),
                     PR_GetOSError()));
@@ -1153,12 +1144,8 @@ nsSocketTransportService::DoPollIteration(bool wait, TimeDuration *pollDuration)
 nsresult
 nsSocketTransportService::UpdatePrefs()
 {
-#if defined(MOZILLA_XPCOMRT_API)
-    NS_WARNING("nsSocketTransportService::UpdatePrefs not implemented");
-    return NS_ERROR_NOT_IMPLEMENTED;
-#else
     mSendBufferSize = 0;
-    
+
     nsCOMPtr<nsIPrefBranch> tmpPrefService = do_GetService(NS_PREFSERVICE_CONTRACTID);
     if (tmpPrefService) {
         int32_t bufferSize;
@@ -1208,10 +1195,16 @@ nsSocketTransportService::UpdatePrefs()
         if (NS_SUCCEEDED(rv)) {
             mTelemetryEnabledPref = telemetryPref;
         }
+
+        int32_t maxTimeForPrClosePref;
+        rv = tmpPrefService->GetIntPref(MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN,
+                                        &maxTimeForPrClosePref);
+        if (NS_SUCCEEDED(rv) && maxTimeForPrClosePref >=0) {
+            mMaxTimeForPrClosePref = PR_MillisecondsToInterval(maxTimeForPrClosePref);
+        }
     }
-    
+
     return NS_OK;
-#endif // defined(MOZILLA_XPCOMRT_API)
 }
 
 void
@@ -1256,7 +1249,6 @@ nsSocketTransportService::Observe(nsISupports *subject,
                                   const char *topic,
                                   const char16_t *data)
 {
-#if !defined(MOZILLA_XPCOMRT_API)
     if (!strcmp(topic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         UpdatePrefs();
         return NS_OK;
@@ -1270,7 +1262,6 @@ nsSocketTransportService::Observe(nsISupports *subject,
 
         return net::NetworkActivityMonitor::Init(blipInterval);
     }
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
     if (!strcmp(topic, "last-pb-context-exited")) {
         nsCOMPtr<nsIRunnable> ev =
@@ -1304,9 +1295,7 @@ nsSocketTransportService::ClosePrivateConnections()
         }
     }
 
-#if !defined(MOZILLA_XPCOMRT_API)
     mozilla::ClearPrivateSSLState();
-#endif // !defined(MOZILLA_XPCOMRT_API)
 }
 
 NS_IMETHODIMP
@@ -1445,8 +1434,12 @@ nsSocketTransportService::AnalyzeConnection(nsTArray<SocketInfo> *data,
     if (context->mHandler->mIsPrivate)
         return;
     PRFileDesc *aFD = context->mFD;
-    bool tcp = (PR_GetDescType(PR_GetIdentitiesLayer(aFD, PR_NSPR_IO_LAYER)) ==
-                PR_DESC_SOCKET_TCP);
+
+    PRFileDesc *idLayer = PR_GetIdentitiesLayer(aFD, PR_NSPR_IO_LAYER);
+
+    NS_ENSURE_TRUE_VOID(idLayer);
+
+    bool tcp = PR_GetDescType(idLayer) == PR_DESC_SOCKET_TCP;
 
     PRNetAddr peer_addr;
     PR_GetPeerName(aFD, &peer_addr);

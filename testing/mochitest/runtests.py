@@ -31,6 +31,7 @@ import tempfile
 import time
 import traceback
 import urllib2
+import uuid
 import zipfile
 import bisection
 
@@ -44,6 +45,15 @@ from manifestparser.filters import (
     subsuite,
     tags,
 )
+
+try:
+    from marionette import Marionette
+    from marionette_driver.addons import Addons
+
+except ImportError:
+    # Marionette not needed nor supported on android
+    Marionette = None
+
 from leaks import ShutdownLeaks, LSANLeaks
 from mochitest_options import (
     MochitestArgumentParser, build_obj, get_default_valgrind_suppression_files
@@ -56,6 +66,13 @@ from mozlog import commandline
 from mozrunner.utils import get_stack_fixer_function, test_environment
 from mozscreenshot import dump_screen
 import mozleak
+
+HAVE_PSUTIL = False
+try:
+    import psutil
+    HAVE_PSUTIL = True
+except ImportError:
+    pass
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -351,8 +368,7 @@ class MochitestServer(object):
         self.shutdownURL = "http://%(server)s:%(port)s/server/shutdown" % {
             "server": self.webServer,
             "port": self.httpPort}
-        self.testPrefix = "'webapprt_'" if options.get(
-            'webapprtContent') else "undefined"
+        self.testPrefix = "undefined"
 
         if options.get('httpdPath'):
             self._httpdPath = options['httpdPath']
@@ -498,7 +514,7 @@ class MochitestBase(object):
     """
 
     oldcwd = os.getcwd()
-    jarDir = 'mochijar'
+    mochijar = os.path.join(SCRIPT_DIR, 'mochijar')
 
     # Path to the test script on the server
     TEST_PATH = "tests"
@@ -515,6 +531,11 @@ class MochitestBase(object):
         self._active_tests = None
         self._locations = None
 
+        self.marionette = None
+        self.start_script = None
+        self.nsprLogs = None
+        self.start_script_args = []
+
         if self.log is None:
             commandline.log_formatters["tbpl"] = (
                 MochitestFormatter,
@@ -527,6 +548,7 @@ class MochitestBase(object):
             MochitestBase.log = self.log
 
         self.message_logger = MessageLogger(logger=self.log)
+
 
     def update_mozinfo(self):
         """walk up directories to find mozinfo.json update the info"""
@@ -592,8 +614,7 @@ class MochitestBase(object):
             options.logFile = self.getLogFilePath(options.logFile)
 
         if options.browserChrome or options.chrome or \
-           options.a11y or options.webapprtChrome or options.jetpackPackage or \
-           options.jetpackAddon:
+           options.a11y or options.jetpackPackage or options.jetpackAddon:
             self.makeTestConfig(options)
         else:
             if options.autorun:
@@ -604,8 +625,6 @@ class MochitestBase(object):
                 self.urlOpts.append("maxTimeouts=%d" % options.maxTimeouts)
             if not options.keep_open:
                 self.urlOpts.append("closeWhenDone=1")
-            if options.webapprtContent:
-                self.urlOpts.append("testRoot=webapprtContent")
             if options.logFile:
                 self.urlOpts.append(
                     "logFile=" +
@@ -675,10 +694,6 @@ class MochitestBase(object):
             return "chrome"
         elif options.a11y:
             return "a11y"
-        elif options.webapprtChrome:
-            return "webapprt-chrome"
-        elif options.webapprtContent:
-            return "webapprt-content"
         else:
             return "mochitest"
 
@@ -695,11 +710,6 @@ class MochitestBase(object):
             testPattern = re.compile(r".+\.xpi")
         elif options.chrome or options.a11y:
             testPattern = re.compile(r"(browser|test)_.+\.(xul|html|js|xhtml)")
-        elif options.webapprtContent:
-            testPattern = re.compile(r"webapprt_")
-        elif options.webapprtChrome:
-            allow_js_css = True
-            testPattern = re.compile(r"browser_")
         else:
             testPattern = re.compile(r"test_")
 
@@ -723,10 +733,6 @@ class MochitestBase(object):
             self.testRoot = 'jetpack-addon'
         elif options.a11y:
             self.testRoot = 'a11y'
-        elif options.webapprtChrome:
-            self.testRoot = 'webapprtChrome'
-        elif options.webapprtContent:
-            self.testRoot = 'webapprtContent'
         elif options.chrome:
             self.testRoot = 'chrome'
         else:
@@ -871,14 +877,6 @@ class MochitestBase(object):
                     "runtests.py | Failed to copy %s to profile" %
                     abspath)
 
-    def installChromeJar(self, chrome, options):
-        """
-          copy mochijar directory to profile as an extension so we have chrome://mochikit for all harness code
-        """
-        # Write chrome.manifest.
-        with open(os.path.join(options.profilePath, "extensions", "staged", "mochikit@mozilla.org", "chrome.manifest"), "a") as mfile:
-            mfile.write(chrome)
-
     def getChromeTestDir(self, options):
         dir = os.path.join(os.path.abspath("."), SCRIPT_DIR) + "/"
         if mozinfo.isWin:
@@ -930,39 +928,16 @@ toolbar#nav-bar {
 
         manifest = self.writeChromeManifest(options)
 
-        # Call installChromeJar().
-        if not os.path.isdir(os.path.join(SCRIPT_DIR, self.jarDir)):
+        if not os.path.isdir(self.mochijar):
             self.log.info(
                 "TEST-UNEXPECTED-FAIL | invalid setup: missing mochikit extension")
             return None
 
-        # Support Firefox (browser), B2G (shell), SeaMonkey (navigator), and Webapp
-        # Runtime (webapp).
-        chrome = ""
-        if options.browserChrome or options.chrome or options.a11y or options.webapprtChrome:
-            chrome += """
-overlay chrome://browser/content/browser.xul chrome://mochikit/content/browser-test-overlay.xul
-overlay chrome://browser/content/shell.xhtml chrome://mochikit/content/browser-test-overlay.xul
-overlay chrome://navigator/content/navigator.xul chrome://mochikit/content/browser-test-overlay.xul
-overlay chrome://webapprt/content/webapp.xul chrome://mochikit/content/browser-test-overlay.xul
-"""
-
-        if options.jetpackPackage:
-            chrome += """
-overlay chrome://browser/content/browser.xul chrome://mochikit/content/jetpack-package-overlay.xul
-"""
-
-        if options.jetpackAddon:
-            chrome += """
-overlay chrome://browser/content/browser.xul chrome://mochikit/content/jetpack-addon-overlay.xul
-"""
-
-        self.installChromeJar(chrome, options)
         return manifest
 
     def getExtensionsToInstall(self, options):
         "Return a list of extensions to install in the profile"
-        extensions = options.extensionsToInstall or []
+        extensions = []
         appDir = options.app[
             :options.app.rfind(
                 os.sep)] if options.app else options.utilityPath
@@ -987,9 +962,7 @@ overlay chrome://browser/content/browser.xul chrome://mochikit/content/jetpack-a
                         if os.path.isdir(path) or (
                                 os.path.isfile(path) and path.endswith(".xpi")):
                             extensions.append(path)
-
-        # append mochikit
-        extensions.append(os.path.join(SCRIPT_DIR, self.jarDir))
+        extensions.extend(options.extensionsToInstall)
         return extensions
 
     def logPreamble(self, tests):
@@ -1222,8 +1195,6 @@ overlay chrome://browser/content/browser.xul chrome://mochikit/content/jetpack-a
         self.nsprLogs = NSPR_LOG_MODULES and "MOZ_UPLOAD_DIR" in os.environ
         if self.nsprLogs:
             browserEnv["NSPR_LOG_MODULES"] = NSPR_LOG_MODULES
-
-            browserEnv["NSPR_LOG_FILE"] = "%s/nspr.log" % tempfile.gettempdir()
             browserEnv["GECKO_SEPARATE_NSPR_LOGS"] = "1"
 
         if debugger and not options.slowscript:
@@ -1260,6 +1231,20 @@ overlay chrome://browser/content/browser.xul chrome://mochikit/content/jetpack-a
                                             processOutputLine=_psKill)
         process.run()
         process.wait()
+
+    def execute_start_script(self):
+        if not self.start_script or not self.marionette:
+            return
+
+        if os.path.isfile(self.start_script):
+            with open(self.start_script, 'r') as fh:
+                script = fh.read()
+        else:
+            script = self.start_script
+
+        with self.marionette.using_context('chrome'):
+            return self.marionette.execute_script(script,
+                script_args=self.start_script_args)
 
 
 class SSLTunnel:
@@ -1505,8 +1490,8 @@ class MochitestDesktop(MochitestBase):
     # TODO: replace this with 'runtests.py' or 'mochitest' or the like
     test_name = 'automation.py'
 
-    def __init__(self, logger_options):
-        MochitestBase.__init__(self, logger_options)
+    def __init__(self, *args, **kwargs):
+        MochitestBase.__init__(self, *args, **kwargs)
 
         # Max time in seconds to wait for server startup before tests will fail -- if
         # this seems big, it's mostly for debug machines where cold startup
@@ -1524,6 +1509,8 @@ class MochitestDesktop(MochitestBase):
 
         self.expectedError = {}
         self.result = {}
+
+        self.start_script = os.path.join(here, 'start_desktop.js')
 
     def extraPrefs(self, extraPrefs):
         """interpolate extra preferences from option strings"""
@@ -1768,7 +1755,7 @@ class MochitestDesktop(MochitestBase):
         Also attempts to obtain a screenshot before killing the process
         if specified.
         """
-
+        self.log.info("Killing process: %s" % processPID)
         if dump_screen:
             self.dumpScreen(utilityPath)
 
@@ -1776,7 +1763,8 @@ class MochitestDesktop(MochitestBase):
             try:
                 minidump_path = os.path.join(self.profile.profile,
                                              'minidumps')
-                mozcrash.kill_and_get_minidump(processPID, minidump_path)
+                mozcrash.kill_and_get_minidump(processPID, minidump_path,
+                                               utilityPath)
             except OSError:
                 # https://bugzilla.mozilla.org/show_bug.cgi?id=921509
                 self.log.info(
@@ -1784,6 +1772,26 @@ class MochitestDesktop(MochitestBase):
             return
         self.log.info("Can't trigger Breakpad, just killing process")
         killPid(processPID, self.log)
+
+    def extract_child_pids(self, process_log, parent_pid=None):
+        """Parses the given log file for the pids of any processes launched by
+        the main process and returns them as a list.
+        If parent_pid is provided, and psutil is available, returns children of
+        parent_pid according to psutil.
+        """
+        if parent_pid and HAVE_PSUTIL:
+            self.log.info("Determining child pids from psutil")
+            return [p.pid for p in psutil.Process(parent_pid).children()]
+
+        rv = []
+        pid_re = re.compile(r'==> process \d+ launched child process (\d+)')
+        with open(process_log) as fd:
+            for line in fd:
+                self.log.info(line.rstrip())
+                m = pid_re.search(line)
+                if m:
+                    rv.append(int(m.group(1)))
+        return rv
 
     def checkForZombies(self, processLog, utilityPath, debuggerInfo):
         """Look for hung processes"""
@@ -1798,15 +1806,7 @@ class MochitestDesktop(MochitestBase):
 
         # scan processLog for zombies
         self.log.info('zombiecheck | Reading PID log: %s' % processLog)
-        processList = []
-        pidRE = re.compile(r'launched child process (\d+)$')
-        with open(processLog) as processLogFD:
-            for line in processLogFD:
-                self.log.info(line.rstrip())
-                m = pidRE.search(line)
-                if m:
-                    processList.append(int(m.group(1)))
-
+        processList = self.extract_child_pids(processLog)
         # kill zombies
         foundZombie = False
         for processPID in processList:
@@ -1839,11 +1839,11 @@ class MochitestDesktop(MochitestBase):
                valgrindSuppFiles=None,
                symbolsPath=None,
                timeout=-1,
-               onLaunch=None,
                detectShutdownLeaks=False,
                screenshotOnFail=False,
                bisectChunk=None,
-               quiet=False):
+               quiet=False,
+               marionette_args=None):
         """
         Run the app, log the duration it took to execute, return the status code.
         Kills the app if it runs for longer than |maxTime| seconds, or outputs nothing for |timeout| seconds.
@@ -1868,7 +1868,7 @@ class MochitestDesktop(MochitestBase):
         if valgrindPath:
             interactive = False
             valgrindArgs_split = ([] if valgrindArgs is None
-                                  else valgrindArgs.split())
+                                  else valgrindArgs.split(","))
 
             valgrindSuppFiles_final = []
             if valgrindSuppFiles is not None:
@@ -1907,13 +1907,11 @@ class MochitestDesktop(MochitestBase):
             # build command line
             cmd = os.path.abspath(app)
             args = list(extraArgs)
+            args.append('-marionette')
             # TODO: mozrunner should use -foreground at least for mac
             # https://bugzilla.mozilla.org/show_bug.cgi?id=916512
             args.append('-foreground')
-            if testUrl:
-                if debuggerInfo and debuggerInfo.requiresEscapedArgs:
-                    testUrl = testUrl.replace("&", "\\&")
-                args.append(testUrl)
+            self.start_script_args.append(testUrl or 'about:blank')
 
             if detectShutdownLeaks:
                 shutdownLeaks = ShutdownLeaks(self.log)
@@ -1943,7 +1941,8 @@ class MochitestDesktop(MochitestBase):
                     proc,
                     utilityPath,
                     debuggerInfo,
-                    browserProcessId)
+                    browserProcessId,
+                    processLog)
             kp_kwargs = {'kill_on_timeout': False,
                          'cwd': SCRIPT_DIR,
                          'onTimeout': [timeoutHandler]}
@@ -1963,6 +1962,7 @@ class MochitestDesktop(MochitestBase):
                         'appname',
                         'firefox'),
                     mozrunner.Runner)
+
             runner = runner_cls(profile=self.profile,
                                 binary=cmd,
                                 cmdargs=args,
@@ -1978,12 +1978,25 @@ class MochitestDesktop(MochitestBase):
             self.log.info("runtests.py | Application pid: %d" % proc.pid)
             self.log.process_start("Main app process")
 
-            if onLaunch is not None:
-                # Allow callers to specify an onLaunch callback to be fired after the
-                # app is launched.
-                # We call onLaunch for b2g desktop mochitests so that we can
-                # run a Marionette script after gecko has completed startup.
-                onLaunch()
+            # start marionette and kick off the tests
+            marionette_args = marionette_args or {}
+            port_timeout = marionette_args.pop('port_timeout')
+            self.marionette = Marionette(**marionette_args)
+            self.marionette.start_session(timeout=port_timeout)
+
+            # install specialpowers and mochikit as temporary addons
+            addons = Addons(self.marionette)
+
+            if mozinfo.info.get('toolkit') != 'gonk':
+                addons.install(os.path.join(here, 'extensions', 'specialpowers'), temp=True)
+                addons.install(self.mochijar, temp=True)
+
+            self.execute_start_script()
+
+            # an open marionette session interacts badly with mochitest,
+            # delete it until we figure out why.
+            self.marionette.delete_session()
+            del self.marionette
 
             # wait until app is finished
             # XXX copy functionality from
@@ -2086,7 +2099,7 @@ class MochitestDesktop(MochitestBase):
 
         return testsToRun
 
-    def runMochitests(self, options, testsToRun, onLaunch=None):
+    def runMochitests(self, options, testsToRun):
         "This is a base method for calling other methods in this class for --bisect-chunk."
         # Making an instance of bisect class for --bisect-chunk option.
         bisect = bisection.Bisect(self)
@@ -2103,7 +2116,7 @@ class MochitestDesktop(MochitestBase):
                         "TEST-UNEXPECTED-FAIL | Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
                     bisection_log = 1
 
-            result = self.doTests(options, onLaunch, testsToRun)
+            result = self.doTests(options, testsToRun)
             if options.bisectChunk:
                 status = bisect.post_test(
                     options,
@@ -2123,7 +2136,7 @@ class MochitestDesktop(MochitestBase):
 
         return result
 
-    def runTests(self, options, onLaunch=None):
+    def runTests(self, options):
         """ Prepare, configure, run tests and cleanup """
 
         self.setTestRoot(options)
@@ -2137,11 +2150,11 @@ class MochitestDesktop(MochitestBase):
         self.killNamedOrphans('xpcshell')
 
         # Until we have all green, this only runs on bc*/dt*/mochitest-chrome
-        # jobs, not webapprt*, jetpack*, a11yr (for perf reasons), or plain
+        # jobs, not jetpack*, a11yr (for perf reasons), or plain
 
         testsToRun = self.getTestsToRun(options)
         if not options.runByDir:
-            return self.runMochitests(options, testsToRun, onLaunch)
+            return self.runMochitests(options, testsToRun)
 
         # code for --run-by-dir
         dirs = self.getDirectories(options)
@@ -2154,7 +2167,7 @@ class MochitestDesktop(MochitestBase):
             # If we are using --run-by-dir, we should not use the profile path (if) provided
             # by the user, since we need to create a new directory for each run. We would face problems
             # if we use the directory provided by the user.
-            result = self.runMochitests(options, tests_in_dir, onLaunch)
+            result = self.runMochitests(options, tests_in_dir)
 
             # Dump the logging buffer
             self.message_logger.dump_buffered()
@@ -2179,7 +2192,7 @@ class MochitestDesktop(MochitestBase):
 
         return result
 
-    def doTests(self, options, onLaunch=None, testsToFilter=None):
+    def doTests(self, options, testsToFilter=None):
         # A call to initializeLooping method is required in case of --run-by-dir or --bisect-chunk
         # since we need to initialize variables for each loop.
         if options.bisectChunk or options.runByDir:
@@ -2258,6 +2271,9 @@ class MochitestDesktop(MochitestBase):
         if self.browserEnv is None:
             return 1
 
+        if self.nsprLogs:
+            self.browserEnv["NSPR_LOG_FILE"] = "{}/nspr-pid=%PID-uid={}.log".format(self.browserEnv["MOZ_UPLOAD_DIR"], str(uuid.uuid4()))
+
         try:
             self.startServers(options, debuggerInfo)
 
@@ -2283,15 +2299,6 @@ class MochitestDesktop(MochitestBase):
             if self.urlOpts:
                 testURL += "?" + "&".join(self.urlOpts)
 
-            # On Mac, pass the path to the runtime, to ensure the test app
-            # uses that specific runtime instead of another one on the system.
-            if mozinfo.isMac and options.webapprtChrome:
-                options.browserArgs.extend(('-runtime', os.path.dirname(os.path.dirname(options.xrePath))))
-
-            if options.webapprtContent:
-                options.browserArgs.extend(('-test-mode', testURL))
-                testURL = None
-
             if options.immersiveMode:
                 options.browserArgs.extend(('-firefoxpath', options.app))
                 options.app = self.immersiveHelperPath
@@ -2315,7 +2322,19 @@ class MochitestDesktop(MochitestBase):
 
             # detect shutdown leaks for m-bc runs
             detectShutdownLeaks = mozinfo.info[
-                "debug"] and options.browserChrome and not options.webapprtChrome
+                "debug"] and options.browserChrome
+
+            self.start_script_args.append(self.getTestFlavor(options))
+            marionette_args = {
+                'symbols_path': options.symbolsPath,
+                'socket_timeout': options.marionette_socket_timeout,
+                'port_timeout': options.marionette_port_timeout,
+            }
+
+            if options.marionette:
+                host, port = options.marionette.split(':')
+                marionette_args['host'] = host
+                marionette_args['port'] = int(port)
 
             self.log.info("runtests.py | Running tests: start.\n")
             try:
@@ -2331,11 +2350,11 @@ class MochitestDesktop(MochitestBase):
                                      valgrindSuppFiles=valgrindSuppFiles,
                                      symbolsPath=options.symbolsPath,
                                      timeout=timeout,
-                                     onLaunch=onLaunch,
                                      detectShutdownLeaks=detectShutdownLeaks,
                                      screenshotOnFail=options.screenshotOnFail,
                                      bisectChunk=options.bisectChunk,
-                                     quiet=options.quiet
+                                     quiet=options.quiet,
+                                     marionette_args=marionette_args,
                                      )
             except KeyboardInterrupt:
                 self.log.info("runtests.py | Received keyboard interrupt.\n")
@@ -2358,14 +2377,6 @@ class MochitestDesktop(MochitestBase):
                                                  options.symbolsPath),
         )
 
-        if self.nsprLogs:
-            with zipfile.ZipFile("%s/nsprlog.zip" % self.browserEnv["MOZ_UPLOAD_DIR"], "w", zipfile.ZIP_DEFLATED) as logzip:
-                for logfile in glob.glob(
-                        "%s/nspr*.log*" %
-                        tempfile.gettempdir()):
-                    logzip.write(logfile)
-                    os.remove(logfile)
-
         self.log.info("runtests.py | Running tests: end.")
 
         if self.manifest is not None:
@@ -2373,29 +2384,44 @@ class MochitestDesktop(MochitestBase):
 
         return status
 
-    def handleTimeout(
-            self,
-            timeout,
-            proc,
-            utilityPath,
-            debuggerInfo,
-            browserProcessId):
+    def handleTimeout(self, timeout, proc, utilityPath, debuggerInfo,
+                      browser_pid, processLog):
         """handle process output timeout"""
         # TODO: bug 913975 : _processOutput should call self.processOutputLine
         # one more time one timeout (I think)
         error_message = "TEST-UNEXPECTED-TIMEOUT | %s | application timed out after %d seconds with no output" % (
             self.lastTestSeen, int(timeout))
-
         self.message_logger.dump_buffered()
         self.message_logger.buffering = False
         self.log.info(error_message)
 
-        browserProcessId = browserProcessId or proc.pid
-        self.killAndGetStack(
-            browserProcessId,
-            utilityPath,
-            debuggerInfo,
-            dump_screen=not debuggerInfo)
+        browser_pid = browser_pid or proc.pid
+        child_pids = self.extract_child_pids(processLog, browser_pid)
+        self.log.info('Found child pids: %s' % child_pids)
+
+        if HAVE_PSUTIL:
+            child_procs = [psutil.Process(pid) for pid in child_pids]
+            for pid in child_pids:
+                self.killAndGetStack(pid, utilityPath, debuggerInfo,
+                                     dump_screen=not debuggerInfo)
+            gone, alive = psutil.wait_procs(child_procs, timeout=30)
+            for p in gone:
+                self.log.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                self.log.warning('failed to kill pid %d after 30s' %
+                                 p.pid)
+        else:
+            self.log.error("psutil not available! Will wait 30s before "
+                           "attempting to kill parent process. This should "
+                           "not occur in mozilla automation. See bug 1143547.")
+            for pid in child_pids:
+                self.killAndGetStack(pid, utilityPath, debuggerInfo,
+                                     dump_screen=not debuggerInfo)
+            if child_pids:
+                time.sleep(30)
+
+        self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
+                             dump_screen=not debuggerInfo)
 
     class OutputHandler(object):
 
@@ -2578,6 +2604,7 @@ def run_test_harness(options):
     logger_options = {
         key: value for key, value in vars(options).iteritems()
         if key.startswith('log') or key == 'valgrind'}
+
     runner = MochitestDesktop(logger_options)
 
     options.runByDir = False
@@ -2595,6 +2622,14 @@ def run_test_harness(options):
         options.runByDir = False
 
     result = runner.runTests(options)
+
+    if runner.nsprLogs:
+        with zipfile.ZipFile("{}/nsprlogs.zip".format(runner.browserEnv["MOZ_UPLOAD_DIR"]),
+                             "w", zipfile.ZIP_DEFLATED) as logzip:
+            for logfile in glob.glob("{}/nspr*.log*".format(runner.browserEnv["MOZ_UPLOAD_DIR"])):
+                logzip.write(logfile)
+                os.remove(logfile)
+            logzip.close()
 
     # don't dump failures if running from automation as treeherder already displays them
     if build_obj:

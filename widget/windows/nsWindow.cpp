@@ -189,6 +189,7 @@
 
 #include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/ScrollInputMethods.h"
 #include "ClientLayerManager.h"
 #include "InputData.h"
 
@@ -460,7 +461,6 @@ nsWindow::nsWindow()
 
   mIdleService = nullptr;
 
-  ::InitializeCriticalSection(&mPresentLock);
   mSizeConstraintsScale = GetDefaultScale().scale;
 
   sInstanceCount++;
@@ -497,7 +497,6 @@ nsWindow::~nsWindow()
       sIsOleInitialized = FALSE;
     }
   }
-  ::DeleteCriticalSection(&mPresentLock);
 
   NS_IF_RELEASE(mNativeDragTarget);
 }
@@ -1411,10 +1410,7 @@ nsWindow::SetSizeConstraints(const SizeConstraints& aConstraints)
     c.mMinSize.width = std::max(int32_t(::GetSystemMetrics(SM_CXMINTRACK)), c.mMinSize.width);
     c.mMinSize.height = std::max(int32_t(::GetSystemMetrics(SM_CYMINTRACK)), c.mMinSize.height);
   }
-  ClientLayerManager *clientLayerManager =
-      (GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT)
-      ? static_cast<ClientLayerManager*>(GetLayerManager())
-      : nullptr;
+  ClientLayerManager *clientLayerManager = GetLayerManager()->AsClientLayerManager();
 
   if (clientLayerManager) {
     int32_t maxSize = clientLayerManager->GetMaxTextureSize();
@@ -1753,6 +1749,15 @@ NS_METHOD nsWindow::PlaceBehind(nsTopLevelWidgetZPlacement aPlacement,
   return NS_OK;
 }
 
+static UINT
+GetCurrentShowCmd(HWND aWnd)
+{
+  WINDOWPLACEMENT pl;
+  pl.length = sizeof(pl);
+  ::GetWindowPlacement(aWnd, &pl);
+  return pl.showCmd;
+}
+
 // Maximize, minimize or restore the window.
 NS_IMETHODIMP
 nsWindow::SetSizeMode(nsSizeMode aMode) {
@@ -1794,14 +1799,11 @@ nsWindow::SetSizeMode(nsSizeMode aMode) {
         mode = SW_RESTORE;
     }
 
-    WINDOWPLACEMENT pl;
-    pl.length = sizeof(pl);
-    ::GetWindowPlacement(mWnd, &pl);
     // Don't call ::ShowWindow if we're trying to "restore" a window that is
     // already in a normal state.  Prevents a bug where snapping to one side
     // of the screen and then minimizing would cause Windows to forget our
     // window's correct restored position/size.
-    if( !(pl.showCmd == SW_SHOWNORMAL && mode == SW_RESTORE) ) {
+    if(!(GetCurrentShowCmd(mWnd) == SW_SHOWNORMAL && mode == SW_RESTORE)) {
       ::ShowWindow(mWnd, mode);
     }
     // we activate here to ensure that the right child window is focused
@@ -2324,18 +2326,6 @@ nsWindow::UpdateNonClientMargins(int32_t aSizeMode, bool aReflowWindow)
     // maximized.  If we try to mess with the frame sizes by setting these
     // offsets to positive values, our client area will fall off the screen.
     mNonClientOffset.top = mCaptionHeight;
-    // Adjust for the case where the window is maximized on a screen with DPI
-    // different from the primary monitor; this seems to be linked to Windows'
-    // failure to scale the non-client area the same as the client area.
-    // Any modifications here need to be tested for both high- and low-dpi
-    // secondary displays, and for windows both with and without the titlebar
-    // and/or menubar displayed.
-    double ourScale = WinUtils::LogToPhysFactor(mWnd);
-    double primaryScale =
-      WinUtils::LogToPhysFactor(WinUtils::GetPrimaryMonitor());
-    mNonClientOffset.top +=
-      NSToIntRound(mVertResizeMargin * (ourScale - primaryScale));
-
     mNonClientOffset.bottom = 0;
     mNonClientOffset.left = 0;
     mNonClientOffset.right = 0;
@@ -3709,92 +3699,6 @@ nsWindow::OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsWindow::OverrideSystemMouseScrollSpeed(double aOriginalDeltaX,
-                                         double aOriginalDeltaY,
-                                         double& aOverriddenDeltaX,
-                                         double& aOverriddenDeltaY)
-{
-  // The default vertical and horizontal scrolling speed is 3, this is defined
-  // on the document of SystemParametersInfo in MSDN.
-  const uint32_t kSystemDefaultScrollingSpeed = 3;
-
-  double absOriginDeltaX = Abs(aOriginalDeltaX);
-  double absOriginDeltaY = Abs(aOriginalDeltaY);
-
-  // Compute the simple overridden speed.
-  double absComputedOverriddenDeltaX, absComputedOverriddenDeltaY;
-  nsresult rv =
-    nsBaseWidget::OverrideSystemMouseScrollSpeed(absOriginDeltaX,
-                                                 absOriginDeltaY,
-                                                 absComputedOverriddenDeltaX,
-                                                 absComputedOverriddenDeltaY);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  aOverriddenDeltaX = aOriginalDeltaX;
-  aOverriddenDeltaY = aOriginalDeltaY;
-
-  if (absComputedOverriddenDeltaX == absOriginDeltaX &&
-      absComputedOverriddenDeltaY == absOriginDeltaY) {
-    // We don't override now.
-    return NS_OK;
-  }
-
-  // Otherwise, we should check whether the user customized the system settings
-  // or not.  If the user did it, we should respect the will.
-  UINT systemSpeed;
-  if (!::SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &systemSpeed, 0)) {
-    return NS_ERROR_FAILURE;
-  }
-  // The default vertical scrolling speed is 3, this is defined on the document
-  // of SystemParametersInfo in MSDN.
-  if (systemSpeed != kSystemDefaultScrollingSpeed) {
-    return NS_OK;
-  }
-
-  // Only Vista and later, Windows has the system setting of horizontal
-  // scrolling by the mouse wheel.
-  if (IsVistaOrLater()) {
-    if (!::SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &systemSpeed, 0)) {
-      return NS_ERROR_FAILURE;
-    }
-    // The default horizontal scrolling speed is 3, this is defined on the
-    // document of SystemParametersInfo in MSDN.
-    if (systemSpeed != kSystemDefaultScrollingSpeed) {
-      return NS_OK;
-    }
-  }
-
-  // Limit the overridden delta value from the system settings.  The mouse
-  // driver might accelerate the scrolling speed already.  If so, we shouldn't
-  // override the scrolling speed for preventing the unexpected high speed
-  // scrolling.
-  double absDeltaLimitX, absDeltaLimitY;
-  rv =
-    nsBaseWidget::OverrideSystemMouseScrollSpeed(kSystemDefaultScrollingSpeed,
-                                                 kSystemDefaultScrollingSpeed,
-                                                 absDeltaLimitX,
-                                                 absDeltaLimitY);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // If the given delta is larger than our computed limitation value, the delta
-  // was accelerated by the mouse driver.  So, we should do nothing here.
-  if (absDeltaLimitX <= absOriginDeltaX || absDeltaLimitY <= absOriginDeltaY) {
-    return NS_OK;
-  }
-
-  aOverriddenDeltaX = std::min(absComputedOverriddenDeltaX, absDeltaLimitX);
-  aOverriddenDeltaY = std::min(absComputedOverriddenDeltaY, absDeltaLimitY);
-
-  if (aOriginalDeltaX < 0) {
-    aOverriddenDeltaX *= -1;
-  }
-  if (aOriginalDeltaY < 0) {
-    aOverriddenDeltaY *= -1;
-  }
-  return NS_OK;
-}
-
 already_AddRefed<mozilla::gfx::DrawTarget>
 nsWindow::StartRemoteDrawing()
 {
@@ -5047,13 +4951,13 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         //
         // To do this we take mPresentLock in nsWindow::PreRender and
         // if that lock is taken we wait before doing WM_SETTEXT
-        EnterCriticalSection(&mPresentLock);
+        mPresentLock.Enter();
         DWORD style = GetWindowLong(mWnd, GWL_STYLE);
         SetWindowLong(mWnd, GWL_STYLE, style & ~WS_VISIBLE);
         *aRetValue = CallWindowProcW(GetPrevWindowProc(), mWnd,
                                      msg, wParam, lParam);
         SetWindowLong(mWnd, GWL_STYLE, style);
-        LeaveCriticalSection(&mPresentLock);
+        mPresentLock.Leave();
 
         return true;
       }
@@ -5309,18 +5213,11 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
                                     WidgetMouseEvent::eLeftButton :
                                     WidgetMouseEvent::eRightButton,
                                   MOUSE_INPUT_SOURCE());
-      if (lParam != -1 && !result && mCustomNonClient) {
-        WidgetMouseEvent event(true, eMouseHitTest, this,
-                               WidgetMouseEvent::eReal,
-                               WidgetMouseEvent::eNormal);
-        event.refPoint = LayoutDeviceIntPoint(GET_X_LPARAM(pos), GET_Y_LPARAM(pos));
-        event.inputSource = MOUSE_INPUT_SOURCE();
-        event.mFlags.mOnlyChromeDispatch = true;
-        if (DispatchWindowEvent(&event)) {
-          // Blank area hit, throw up the system menu.
-          DisplaySystemMenu(mWnd, mSizeMode, mIsRTL, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-          result = true;
-        }
+      if (lParam != -1 && !result && mCustomNonClient &&
+          mDraggableRegion.Contains(GET_X_LPARAM(pos), GET_Y_LPARAM(pos))) {
+        // Blank area hit, throw up the system menu.
+        DisplaySystemMenu(mWnd, mSizeMode, mIsRTL, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        result = true;
       }
     }
     break;
@@ -5427,6 +5324,29 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
                                   WidgetMouseEvent::eRightButton,
                                   MOUSE_INPUT_SOURCE());
       DispatchPendingEvents();
+      break;
+
+    // Windows doesn't provide to customize the behavior of 4th nor 5th button
+    // of mouse.  If 5-button mouse works with standard mouse deriver of
+    // Windows, users cannot disable 4th button (browser back) nor 5th button
+    // (browser forward).  We should allow to do it with our prefs since we can
+    // prevent Windows to generate WM_APPCOMMAND message if WM_XBUTTONUP
+    // messages are not sent to DefWindowProc.
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_NCXBUTTONDOWN:
+    case WM_NCXBUTTONUP:
+      *aRetValue = TRUE;
+      switch (GET_XBUTTON_WPARAM(wParam)) {
+        case XBUTTON1:
+          result = !Preferences::GetBool("mousebutton.4th.enabled", true);
+          break;
+        case XBUTTON2:
+          result = !Preferences::GetBool("mousebutton.5th.enabled", true);
+          break;
+        default:
+          break;
+      }
       break;
 
     case WM_SIZING:
@@ -5629,6 +5549,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         }
       }
     }
+    break;
 #endif
 
     case WM_SYSCOMMAND:
@@ -5639,8 +5560,10 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         ::ShowWindow(mWnd, SW_SHOWMINIMIZED);
         result = true;
       }
-	  
-      if (mSizeMode == nsSizeMode_Fullscreen && filteredWParam == SC_RESTORE) {
+
+      if (mSizeMode == nsSizeMode_Fullscreen &&
+          filteredWParam == SC_RESTORE &&
+          GetCurrentShowCmd(mWnd) != SW_SHOWMINIMIZED) {
         MakeFullScreen(false);
         result = true;
       }
@@ -6005,24 +5928,11 @@ nsWindow::ClientMarginHitTestPoint(int32_t mx, int32_t my)
     if (pt.x == mCachedHitTestPoint.x && pt.y == mCachedHitTestPoint.y &&
         TimeStamp::Now() - mCachedHitTestTime < TimeDuration::FromMilliseconds(HITTEST_CACHE_LIFETIME_MS)) {
       return mCachedHitTestResult;
-    } else if (mDraggableRegion.Contains(pt.x, pt.y)) {
+    }
+    if (mDraggableRegion.Contains(pt.x, pt.y)) {
       testResult = HTCAPTION;
     } else {
-      WidgetMouseEvent event(true, eMouseHitTest, this,
-                             WidgetMouseEvent::eReal,
-                             WidgetMouseEvent::eNormal);
-      event.refPoint = LayoutDeviceIntPoint(pt.x, pt.y);
-      event.inputSource = MOUSE_INPUT_SOURCE();
-      event.mFlags.mOnlyChromeDispatch = true;
-      bool result = ConvertStatus(DispatchInputEvent(&event));
-      if (result) {
-        // The mouse is over a blank area
-        testResult = testResult == HTCLIENT ? HTCAPTION : testResult;
-      } else {
-        // There's content over the mouse pointer. Set HTCLIENT
-        // to possibly override a resizer border.
-        testResult = HTCLIENT;
-      }
+      testResult = HTCLIENT;
     }
     mCachedHitTestPoint = pt;
     mCachedHitTestTime = TimeStamp::Now();
@@ -6234,6 +6144,8 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
     pl.length = sizeof(pl);
     ::GetWindowPlacement(mWnd, &pl);
 
+    nsSizeMode previousSizeMode = mSizeMode;
+
     // Windows has just changed the size mode of this window. The call to
     // SizeModeChanged will trigger a call into SetSizeMode where we will
     // set the min/max window state again or for nsSizeMode_Normal, call
@@ -6275,10 +6187,10 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
       default:
           MOZ_LOG(gWindowsLog, LogLevel::Info, ("*** mSizeMode: ??????\n"));
         break;
-    };
+    }
 #endif
 
-    if (mWidgetListener)
+    if (mWidgetListener && mSizeMode != previousSizeMode)
       mWidgetListener->SizeModeChanged(mSizeMode);
 
     // If window was restored, window activation was bypassed during the 
@@ -6601,6 +6513,8 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
     bool endFeedback = true;
 
     if (mGesture.PanDeltaToPixelScroll(wheelEvent)) {
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
+          (uint32_t) ScrollInputMethod::MainThreadTouch);
       DispatchEvent(&wheelEvent, status);
     }
 
@@ -6700,7 +6614,7 @@ static HRGN
 CreateHRGNFromArray(const nsTArray<LayoutDeviceIntRect>& aRects)
 {
   int32_t size = sizeof(RGNDATAHEADER) + sizeof(RECT)*aRects.Length();
-  nsAutoTArray<uint8_t,100> buf;
+  AutoTArray<uint8_t,100> buf;
   buf.SetLength(size);
   RGNDATA* data = reinterpret_cast<RGNDATA*>(buf.Elements());
   RECT* rects = reinterpret_cast<RECT*>(data->Buffer);
@@ -6867,12 +6781,6 @@ bool nsWindow::AutoErase(HDC dc)
   return false;
 }
 
-void
-nsWindow::ClearCompositor(nsWindow* aWindow)
-{
-  aWindow->DestroyLayerManager();
-}
-
 bool
 nsWindow::IsPopup()
 {
@@ -6955,13 +6863,19 @@ nsWindow::OnSysColorChanged()
 void
 nsWindow::OnDPIChanged(int32_t x, int32_t y, int32_t width, int32_t height)
 {
+  // Don't try to handle WM_DPICHANGED for popup windows (see bug 1239353);
+  // they remain tied to their original parent's resolution.
+  if (mWindowType == eWindowType_popup) {
+    return;
+  }
   if (DefaultScaleOverride() > 0.0) {
     return;
   }
   double oldScale = mDefaultScale;
   mDefaultScale = -1.0; // force recomputation of scale factor
   double newScale = GetDefaultScaleInternal();
-  if (mResizeState != NOT_RESIZING) {
+
+  if (mResizeState != RESIZING) {
     // We want to try and maintain the size of the client area, rather than
     // the overall size of the window including non-client area, so we prefer
     // to calculate the new size instead of using Windows' suggested values.
@@ -7482,7 +7396,7 @@ nsWindow::GetPopupsToRollup(nsIRollupListener* aRollupListener,
   // to rollup some of them if the click is in a parent menu of the current
   // submenu.
   *aPopupsToRollup = UINT32_MAX;
-  nsAutoTArray<nsIWidget*, 5> widgetChain;
+  AutoTArray<nsIWidget*, 5> widgetChain;
   uint32_t sameTypeCount =
     aRollupListener->GetSubmenuWidgetChain(&widgetChain);
   for (uint32_t i = 0; i < widgetChain.Length(); ++i) {
@@ -7891,13 +7805,13 @@ bool nsWindow::PreRender(LayerManagerComposite*)
   // Using PreRender is unnecessarily pessimistic because
   // we technically only need to block during the present call
   // not all of compositor rendering
-  EnterCriticalSection(&mPresentLock);
+  mPresentLock.Enter();
   return true;
 }
 
 void nsWindow::PostRender(LayerManagerComposite*)
 {
-  LeaveCriticalSection(&mPresentLock);
+  mPresentLock.Leave();
 }
 
 bool
@@ -7919,13 +7833,21 @@ nsWindow::ComputeShouldAccelerate()
 }
 
 void
-nsWindow::SetCandidateWindowForPlugin(int32_t aX, int32_t aY)
+nsWindow::SetCandidateWindowForPlugin(const CandidateWindowPosition& aPosition)
 {
   CANDIDATEFORM form;
   form.dwIndex = 0;
-  form.dwStyle = CFS_CANDIDATEPOS;
-  form.ptCurrentPos.x = aX;
-  form.ptCurrentPos.y = aY;
+  if (aPosition.mExcludeRect) {
+    form.dwStyle = CFS_EXCLUDE;
+    form.rcArea.left = aPosition.mRect.x;
+    form.rcArea.top = aPosition.mRect.y;
+    form.rcArea.right = aPosition.mRect.x + aPosition.mRect.width;
+    form.rcArea.bottom = aPosition.mRect.y + aPosition.mRect.height;
+  } else {
+    form.dwStyle = CFS_CANDIDATEPOS;
+  }
+  form.ptCurrentPos.x = aPosition.mPoint.x;
+  form.ptCurrentPos.y = aPosition.mPoint.y;
 
   IMEHandler::SetCandidateWindow(this, &form);
 }

@@ -31,7 +31,7 @@
  * Screen real estate is limited so when there are too many thumbnails to fit
  * on the screen, the taskbar stops displaying thumbnails and instead displays
  * just the title, icon and close button in a similar fashion to previous
- * versions of the taskbar. If there are still too many previews to fit on the 
+ * versions of the taskbar. If there are still too many previews to fit on the
  * screen, the taskbar resorts to a scroll up and scroll down button pair to let
  * the user scroll through the list of tabs. Since this is undoubtedly
  * inconvenient for users with many tabs, the AeroPeek objects turns off all of
@@ -371,8 +371,6 @@ function TabWindow(win) {
   this.win = win;
   this.tabbrowser = win.gBrowser;
 
-  this.cacheDims();
-
   this.previews = new Map();
 
   for (let i = 0; i < this.tabEvents.length; i++)
@@ -394,6 +392,8 @@ function TabWindow(win) {
 
 TabWindow.prototype = {
   _enabled: false,
+  _cachedWidth: 0,
+  _cachedHeight: 0,
   tabEvents: ["TabOpen", "TabClose", "TabSelect", "TabMove"],
   winEvents: ["resize"],
 
@@ -404,8 +404,8 @@ TabWindow.prototype = {
 
     this.tabbrowser.removeTabsProgressListener(this);
 
-  for (let i = 0; i < this.winEvents.length; i++)
-    this.win.removeEventListener(this.winEvents[i], this, false);
+    for (let i = 0; i < this.winEvents.length; i++)
+      this.win.removeEventListener(this.winEvents[i], this, false);
 
     for (let i = 0; i < this.tabEvents.length; i++)
       this.tabbrowser.tabContainer.removeEventListener(this.tabEvents[i], this, false);

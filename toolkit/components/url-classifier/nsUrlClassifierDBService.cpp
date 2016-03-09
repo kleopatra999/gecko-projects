@@ -177,6 +177,10 @@ nsUrlClassifierDBServiceWorker::DoLocalLookup(const nsACString& spec,
 static nsresult
 TablesToResponse(const nsACString& tables)
 {
+  if (tables.IsEmpty()) {
+    return NS_OK;
+  }
+
   // We don't check mCheckMalware and friends because BuildTables never
   // includes a table that is not enabled.
   if (FindInReadable(NS_LITERAL_CSTRING("-malware-"), tables)) {
@@ -656,6 +660,11 @@ nsUrlClassifierDBServiceWorker::CacheCompletions(CacheResultArray *results)
   // Ownership is transferred in to us
   nsAutoPtr<CacheResultArray> resultsPtr(results);
 
+  if (mLastResults == *resultsPtr) {
+    LOG(("Skipping completions that have just been cached already."));
+    return NS_OK;
+  }
+
   nsAutoPtr<ProtocolParser> pParse(new ProtocolParser());
   nsTArray<TableUpdate*> updates;
 
@@ -698,6 +707,7 @@ nsUrlClassifierDBServiceWorker::CacheCompletions(CacheResultArray *results)
    }
 
   mClassifier->ApplyUpdates(&updates);
+  mLastResults = *resultsPtr;
   return NS_OK;
 }
 
@@ -754,6 +764,15 @@ nsUrlClassifierDBServiceWorker::SetLastUpdateTime(const nsACString &table,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsUrlClassifierDBServiceWorker::ClearLastResults()
+{
+  MOZ_ASSERT(!NS_IsMainThread(), "Must be on the background thread");
+  mLastResults.Clear();
+  return NS_OK;
+}
+
+
 // -------------------------------------------------------------------------
 // nsUrlClassifierLookupCallback
 //
@@ -798,11 +817,8 @@ NS_IMPL_ISUPPORTS(nsUrlClassifierLookupCallback,
 
 nsUrlClassifierLookupCallback::~nsUrlClassifierLookupCallback()
 {
-  nsCOMPtr<nsIThread> thread;
-  (void)NS_GetMainThread(getter_AddRefs(thread));
-
   if (mCallback) {
-    (void)NS_ProxyRelease(thread, mCallback, false);
+    NS_ReleaseOnMainThread(mCallback.forget());
   }
 }
 
@@ -866,6 +882,8 @@ nsUrlClassifierLookupCallback::LookupComplete(nsTArray<LookupResult>* results)
     }
   }
 
+  LOG(("nsUrlClassifierLookupCallback::LookupComplete [%p] "
+       "%u pending completions", this, mPendingCompletions));
   if (mPendingCompletions == 0) {
     // All results were complete, we're ready!
     HandleResults();
@@ -877,10 +895,11 @@ nsUrlClassifierLookupCallback::LookupComplete(nsTArray<LookupResult>* results)
 NS_IMETHODIMP
 nsUrlClassifierLookupCallback::CompletionFinished(nsresult status)
 {
-  LOG(("nsUrlClassifierLookupCallback::CompletionFinished [%p, %08x]",
-       this, status));
-  if (NS_FAILED(status)) {
-    NS_WARNING("gethash response failed.");
+  if (LOG_ENABLED()) {
+    nsAutoCString errorName;
+    mozilla::GetErrorName(status, errorName);
+    LOG(("nsUrlClassifierLookupCallback::CompletionFinished [%p, %s]",
+         this, errorName.get()));
   }
 
   mPendingCompletions--;
@@ -936,8 +955,14 @@ nsUrlClassifierLookupCallback::HandleResults()
 {
   if (!mResults) {
     // No results, this URI is clean.
+    LOG(("nsUrlClassifierLookupCallback::HandleResults [%p, no results]", this));
     return mCallback->HandleEvent(NS_LITERAL_CSTRING(""));
   }
+  MOZ_ASSERT(mPendingCompletions == 0, "HandleResults() should never be "
+             "called while there are pending completions");
+
+  LOG(("nsUrlClassifierLookupCallback::HandleResults [%p, %u results]",
+       this, mResults->Length()));
 
   nsTArray<nsCString> tables;
   // Build a stringified list of result tables.
@@ -947,15 +972,18 @@ nsUrlClassifierLookupCallback::HandleResults()
     // Leave out results that weren't confirmed, as their existence on
     // the list can't be verified.  Also leave out randomly-generated
     // noise.
-    if (!result.Confirmed()) {
-      LOG(("Skipping result from table %s (not confirmed)", result.mTableName.get()));
+    if (result.mNoise) {
+      LOG(("Skipping result %X from table %s (noise)",
+           result.hash.prefix.ToUint32(), result.mTableName.get()));
       continue;
-    } else if (result.mNoise) {
-      LOG(("Skipping result from table %s (noise)", result.mTableName.get()));
+    } else if (!result.Confirmed()) {
+      LOG(("Skipping result %X from table %s (not confirmed)",
+           result.hash.prefix.ToUint32(), result.mTableName.get()));
       continue;
     }
 
-    LOG(("Confirmed result from table %s", result.mTableName.get()));
+    LOG(("Confirmed result %X from table %s",
+         result.hash.prefix.ToUint32(), result.mTableName.get()));
 
     if (tables.IndexOf(result.mTableName) == nsTArray<nsCString>::NoIndex) {
       tables.AppendElement(result.mTableName);
@@ -1310,6 +1338,7 @@ nsUrlClassifierDBService::ClassifyLocalWithTables(nsIURI *aURI,
                                                   const nsACString & aTables,
                                                   nsACString & aTableResults)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   MOZ_ASSERT(NS_IsMainThread(), "ClassifyLocalWithTables must be on main thread");
 
   nsCOMPtr<nsIURI> uri = NS_GetInnermostURI(aURI);
@@ -1444,7 +1473,7 @@ nsUrlClassifierDBService::SetHashCompleter(const nsACString &tableName,
   } else {
     mCompleters.Remove(tableName);
   }
-
+  ClearLastResults();
   return NS_OK;
 }
 
@@ -1455,6 +1484,14 @@ nsUrlClassifierDBService::SetLastUpdateTime(const nsACString &tableName,
   NS_ENSURE_TRUE(gDbBackgroundThread, NS_ERROR_NOT_INITIALIZED);
 
   return mWorkerProxy->SetLastUpdateTime(tableName, lastUpdateTime);
+}
+
+NS_IMETHODIMP
+nsUrlClassifierDBService::ClearLastResults()
+{
+  NS_ENSURE_TRUE(gDbBackgroundThread, NS_ERROR_NOT_INITIALIZED);
+
+  return mWorkerProxy->ClearLastResults();
 }
 
 NS_IMETHODIMP

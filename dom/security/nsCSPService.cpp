@@ -102,10 +102,6 @@ CSPService::ShouldLoad(uint32_t aContentType,
                        nsIPrincipal *aRequestPrincipal,
                        int16_t *aDecision)
 {
-  MOZ_ASSERT(aContentType ==
-             nsContentUtils::InternalContentPolicyTypeToExternalOrCSPInternal(aContentType),
-             "We should only see external content policy types or CSP special types (preloads or workers) here.");
-
   if (!aContentLocation) {
     return NS_ERROR_FAILURE;
   }
@@ -209,15 +205,38 @@ CSPService::ShouldProcess(uint32_t         aContentType,
                           nsIPrincipal     *aRequestPrincipal,
                           int16_t          *aDecision)
 {
-  MOZ_ASSERT(aContentType ==
-             nsContentUtils::InternalContentPolicyTypeToExternalOrCSPInternal(aContentType),
-             "We should only see external content policy types or preloads here.");
-
-  if (!aContentLocation)
+  if (!aContentLocation) {
     return NS_ERROR_FAILURE;
+  }
 
-  *aDecision = nsIContentPolicy::ACCEPT;
-  return NS_OK;
+  if (MOZ_LOG_TEST(gCspPRLog, LogLevel::Debug)) {
+    nsAutoCString location;
+    aContentLocation->GetSpec(location);
+    MOZ_LOG(gCspPRLog, LogLevel::Debug,
+        ("CSPService::ShouldProcess called for %s", location.get()));
+  }
+
+  // ShouldProcess is only relevant to TYPE_OBJECT, so let's convert the
+  // internal contentPolicyType to the mapping external one.
+  // If it is not TYPE_OBJECT, we can return at this point.
+  // Note that we should still pass the internal contentPolicyType
+  // (aContentType) to ShouldLoad().
+  uint32_t policyType =
+    nsContentUtils::InternalContentPolicyTypeToExternal(aContentType);
+
+  if (policyType != nsIContentPolicy::TYPE_OBJECT) {
+    *aDecision = nsIContentPolicy::ACCEPT;
+    return NS_OK;
+  }
+
+  return ShouldLoad(aContentType,
+                    aContentLocation,
+                    aRequestOrigin,
+                    aRequestContext,
+                    aMimeTypeGuess,
+                    aExtra,
+                    aRequestPrincipal,
+                    aDecision);
 }
 
 /* nsIChannelEventSink implementation */

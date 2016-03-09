@@ -7,8 +7,6 @@
 <script type="application/javascript" src="chrome://global/content/viewZoomOverlay.js"/>
 <script type="application/javascript" src="chrome://browser/content/places/browserPlacesViews.js"/>
 <script type="application/javascript" src="chrome://browser/content/browser.js"/>
-<script type="application/javascript" src="chrome://browser/content/downloads/downloads.js"/>
-<script type="application/javascript" src="chrome://browser/content/downloads/indicator.js"/>
 <script type="application/javascript" src="chrome://browser/content/customizableui/panelUI.js"/>
 <script type="application/javascript" src="chrome://global/content/inlineSpellCheckUI.js"/>
 <script type="application/javascript" src="chrome://global/content/viewSourceUtils.js"/>
@@ -24,6 +22,7 @@
 <script type="application/javascript" src="chrome://browser/content/browser-gestureSupport.js"/>
 <script type="application/javascript" src="chrome://browser/content/browser-places.js"/>
 <script type="application/javascript" src="chrome://browser/content/browser-plugins.js"/>
+<script type="application/javascript" src="chrome://browser/content/browser-refreshblocker.js"/>
 #ifdef MOZ_SAFE_BROWSING
 <script type="application/javascript" src="chrome://browser/content/browser-safebrowsing.js"/>
 #endif

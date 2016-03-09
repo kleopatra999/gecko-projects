@@ -68,14 +68,12 @@
 #include "nsContentCreatorFunctions.h"
 
 #include "mozilla/dom/FormData.h"
-#include "nsHostObjectProtocolHandler.h"
 #include "nsHostObjectURI.h"
 #include "nsGlobalWindowCommands.h"
 #include "nsIControllerCommandTable.h"
 #include "nsJSProtocolHandler.h"
 #include "nsScriptNameSpaceManager.h"
 #include "nsIControllerContext.h"
-#include "nsDOMScriptObjectFactory.h"
 #include "DOMStorageManager.h"
 #include "nsJSON.h"
 #include "nsZipArchive.h"
@@ -124,6 +122,13 @@ using mozilla::dom::bluetooth::BluetoothService;
 using mozilla::dom::gonk::AudioManager;
 #include "nsVolumeService.h"
 using mozilla::system::nsVolumeService;
+#endif
+
+#ifndef MOZ_SIMPLEPUSH
+#include "mozilla/dom/PushNotifier.h"
+using mozilla::dom::PushNotifier;
+#define PUSHNOTIFIER_CID \
+{ 0x2fc2d3e3, 0x020f, 0x404e, { 0xb0, 0x6a, 0x6e, 0xcf, 0x3e, 0xa2, 0x33, 0x4a } }
 #endif
 
 #include "AudioChannelAgent.h"
@@ -300,10 +305,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(txNodeSetAdaptor, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDOMSerializer)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsXMLHttpRequest, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(FormData)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsBlobProtocolHandler)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsMediaStreamProtocolHandler)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsMediaSourceProtocolHandler)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsFontTableProtocolHandler)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHostObjectURI)
 NS_GENERIC_FACTORY_CONSTRUCTOR(DOMParser)
 NS_GENERIC_FACTORY_CONSTRUCTOR(Exception)
@@ -315,7 +316,8 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(QuotaManagerService,
                                          QuotaManagerService::FactoryCreate)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ServiceWorkerManager,
                                          ServiceWorkerManager::GetInstance)
-NS_GENERIC_FACTORY_CONSTRUCTOR(WorkerDebuggerManager)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(WorkerDebuggerManager,
+                                         WorkerDebuggerManager::GetInstance)
 
 #ifdef MOZ_WIDGET_GONK
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(SystemWorkerManager,
@@ -400,6 +402,10 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIPresentationService,
                                          NS_CreatePresentationService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(PresentationSessionTransport)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(NotificationTelemetryService, Init)
+
+#ifndef MOZ_SIMPLEPUSH
+NS_GENERIC_FACTORY_CONSTRUCTOR(PushNotifier)
+#endif
 //-----------------------------------------------------------------------------
 
 static bool gInitialized = false;
@@ -612,8 +618,6 @@ _InstanceClass##Constructor(nsISupports *aOuter, REFNSIID aIID,               \
     return rv;                                                                \
 }                                                                             \
 
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsDOMScriptObjectFactory)
-
 #define NS_GEOLOCATION_CID \
   { 0x1E1C3FF, 0x94A, 0xD048, { 0x44, 0xB4, 0x62, 0xD2, 0x9C, 0x7B, 0x4F, 0x39 } }
 
@@ -734,7 +738,6 @@ NS_DEFINE_NAMED_CID(NS_XULTREEBUILDER_CID);
 NS_DEFINE_NAMED_CID(NS_XULDOCUMENT_CID);
 #endif
 NS_DEFINE_NAMED_CID(NS_CONTENT_DOCUMENT_LOADER_FACTORY_CID);
-NS_DEFINE_NAMED_CID(NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
 NS_DEFINE_NAMED_CID(NS_JSPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_JSURI_CID);
 NS_DEFINE_NAMED_CID(NS_WINDOWCOMMANDTABLE_CID);
@@ -748,10 +751,6 @@ NS_DEFINE_NAMED_CID(TRANSFORMIIX_XPATH_EVALUATOR_CID);
 NS_DEFINE_NAMED_CID(TRANSFORMIIX_NODESET_CID);
 NS_DEFINE_NAMED_CID(NS_XMLSERIALIZER_CID);
 NS_DEFINE_NAMED_CID(NS_FORMDATA_CID);
-NS_DEFINE_NAMED_CID(NS_BLOBPROTOCOLHANDLER_CID);
-NS_DEFINE_NAMED_CID(NS_MEDIASTREAMPROTOCOLHANDLER_CID);
-NS_DEFINE_NAMED_CID(NS_MEDIASOURCEPROTOCOLHANDLER_CID);
-NS_DEFINE_NAMED_CID(NS_FONTTABLEPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_HOSTOBJECTURI_CID);
 NS_DEFINE_NAMED_CID(NS_XMLHTTPREQUEST_CID);
 NS_DEFINE_NAMED_CID(NS_DOMPARSER_CID);
@@ -763,6 +762,11 @@ NS_DEFINE_NAMED_CID(DOMREQUEST_SERVICE_CID);
 NS_DEFINE_NAMED_CID(QUOTAMANAGER_SERVICE_CID);
 NS_DEFINE_NAMED_CID(SERVICEWORKERMANAGER_CID);
 NS_DEFINE_NAMED_CID(NOTIFICATIONTELEMETRYSERVICE_CID);
+
+#ifndef MOZ_SIMPLEPUSH
+NS_DEFINE_NAMED_CID(PUSHNOTIFIER_CID);
+#endif
+
 NS_DEFINE_NAMED_CID(WORKERDEBUGGERMANAGER_CID);
 #ifdef MOZ_WIDGET_GONK
 NS_DEFINE_NAMED_CID(SYSTEMWORKERMANAGER_CID);
@@ -1041,7 +1045,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_XULDOCUMENT_CID, false, nullptr, CreateXULDocument },
 #endif
   { &kNS_CONTENT_DOCUMENT_LOADER_FACTORY_CID, false, nullptr, CreateContentDLF },
-  { &kNS_DOM_SCRIPT_OBJECT_FACTORY_CID, false, nullptr, nsDOMScriptObjectFactoryConstructor },
   { &kNS_JSPROTOCOLHANDLER_CID, false, nullptr, nsJSProtocolHandler::Create },
   { &kNS_JSURI_CID, false, nullptr, nsJSURIConstructor },
   { &kNS_WINDOWCOMMANDTABLE_CID, false, nullptr, CreateWindowCommandTableConstructor },
@@ -1055,10 +1058,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kTRANSFORMIIX_NODESET_CID, false, nullptr, txNodeSetAdaptorConstructor },
   { &kNS_XMLSERIALIZER_CID, false, nullptr, nsDOMSerializerConstructor },
   { &kNS_FORMDATA_CID, false, nullptr, FormDataConstructor },
-  { &kNS_BLOBPROTOCOLHANDLER_CID, false, nullptr, nsBlobProtocolHandlerConstructor },
-  { &kNS_MEDIASTREAMPROTOCOLHANDLER_CID, false, nullptr, nsMediaStreamProtocolHandlerConstructor },
-  { &kNS_MEDIASOURCEPROTOCOLHANDLER_CID, false, nullptr, nsMediaSourceProtocolHandlerConstructor },
-  { &kNS_FONTTABLEPROTOCOLHANDLER_CID, false, nullptr, nsFontTableProtocolHandlerConstructor },
   { &kNS_HOSTOBJECTURI_CID, false, nullptr, nsHostObjectURIConstructor },
   { &kNS_XMLHTTPREQUEST_CID, false, nullptr, nsXMLHttpRequestConstructor },
   { &kNS_DOMPARSER_CID, false, nullptr, DOMParserConstructor },
@@ -1071,6 +1070,9 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kQUOTAMANAGER_SERVICE_CID, false, nullptr, QuotaManagerServiceConstructor },
   { &kSERVICEWORKERMANAGER_CID, false, nullptr, ServiceWorkerManagerConstructor },
   { &kNOTIFICATIONTELEMETRYSERVICE_CID, false, nullptr, NotificationTelemetryServiceConstructor },
+#ifndef MOZ_SIMPLEPUSH
+  { &kPUSHNOTIFIER_CID, false, nullptr, PushNotifierConstructor },
+#endif
   { &kWORKERDEBUGGERMANAGER_CID, true, nullptr, WorkerDebuggerManagerConstructor },
 #ifdef MOZ_WIDGET_GONK
   { &kSYSTEMWORKERMANAGER_CID, true, nullptr, SystemWorkerManagerConstructor },
@@ -1222,10 +1224,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { TRANSFORMIIX_NODESET_CONTRACTID, &kTRANSFORMIIX_NODESET_CID },
   { NS_XMLSERIALIZER_CONTRACTID, &kNS_XMLSERIALIZER_CID },
   { NS_FORMDATA_CONTRACTID, &kNS_FORMDATA_CID },
-  { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX BLOBURI_SCHEME, &kNS_BLOBPROTOCOLHANDLER_CID },
-  { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX MEDIASTREAMURI_SCHEME, &kNS_MEDIASTREAMPROTOCOLHANDLER_CID },
-  { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX MEDIASOURCEURI_SCHEME, &kNS_MEDIASOURCEPROTOCOLHANDLER_CID },
-  { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX FONTTABLEURI_SCHEME, &kNS_FONTTABLEPROTOCOLHANDLER_CID },
   { NS_XMLHTTPREQUEST_CONTRACTID, &kNS_XMLHTTPREQUEST_CID },
   { NS_DOMPARSER_CONTRACTID, &kNS_DOMPARSER_CID },
   { XPC_EXCEPTION_CONTRACTID, &kNS_XPCEXCEPTION_CID },
@@ -1239,6 +1237,9 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { QUOTAMANAGER_SERVICE_CONTRACTID, &kQUOTAMANAGER_SERVICE_CID },
   { SERVICEWORKERMANAGER_CONTRACTID, &kSERVICEWORKERMANAGER_CID },
   { NOTIFICATIONTELEMETRYSERVICE_CONTRACTID, &kNOTIFICATIONTELEMETRYSERVICE_CID },
+#ifndef MOZ_SIMPLEPUSH
+  { PUSHNOTIFIER_CONTRACTID, &kPUSHNOTIFIER_CID },
+#endif
   { WORKERDEBUGGERMANAGER_CONTRACTID, &kWORKERDEBUGGERMANAGER_CID },
 #ifdef MOZ_WIDGET_GONK
   { SYSTEMWORKERMANAGER_CONTRACTID, &kSYSTEMWORKERMANAGER_CID },
@@ -1338,6 +1339,9 @@ static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
   { "net-channel-event-sinks", "CSPService", CSPSERVICE_CONTRACTID },
   { "net-channel-event-sinks", NS_MIXEDCONTENTBLOCKER_CONTRACTID, NS_MIXEDCONTENTBLOCKER_CONTRACTID },
   { "app-startup", "Script Security Manager", "service," NS_SCRIPTSECURITYMANAGER_CONTRACTID },
+#ifndef MOZ_SIMPLEPUSH
+  { "app-startup", "Push Notifier", "service," PUSHNOTIFIER_CONTRACTID },
+#endif
   { TOPIC_WEB_APP_CLEAR_DATA, "QuotaManagerService", "service," QUOTAMANAGER_SERVICE_CONTRACTID },
   { OBSERVER_TOPIC_IDLE_DAILY, "QuotaManagerService", QUOTAMANAGER_SERVICE_CONTRACTID },
 #ifdef MOZ_WIDGET_GONK

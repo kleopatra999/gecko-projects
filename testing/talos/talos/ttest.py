@@ -91,9 +91,8 @@ class TTest(object):
         if test_config['shutdown']:
             global_counters['shutdown'] = []
         if test_config.get('responsiveness') and \
-                platform.system() != "Linux":
-            # ignore responsiveness tests on linux until we fix
-            # Bug 710296
+           platform.system() != "Darwin":
+            # ignore osx for now as per bug 1245793
             setup.env['MOZ_INSTRUMENT_EVENT_LOOP'] = '1'
             setup.env['MOZ_INSTRUMENT_EVENT_LOOP_THRESHOLD'] = '20'
             setup.env['MOZ_INSTRUMENT_EVENT_LOOP_INTERVAL'] = '10'
@@ -149,14 +148,6 @@ class TTest(object):
                     ['python'] + test_config['setup'].split(),
                 )
 
-            mm_httpd = None
-
-            if test_config['name'] == 'media_tests':
-                from startup_test.media import media_manager
-                mm_httpd = media_manager.run_server(
-                    os.path.dirname(os.path.realpath(__file__))
-                )
-
             counter_management = None
             if counters:
                 counter_management = CounterManagement(
@@ -178,8 +169,6 @@ class TTest(object):
             finally:
                 if counter_management:
                     counter_management.stop()
-                if mm_httpd:
-                    mm_httpd.stop()
 
             if test_config['mainthread']:
                 rawlog = os.path.join(here, "mainthread_io.log")

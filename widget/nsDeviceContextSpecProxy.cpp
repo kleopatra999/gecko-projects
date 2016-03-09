@@ -49,13 +49,13 @@ nsDeviceContextSpecProxy::Init(nsIWidget* aWidget,
   rv = mPrintSettings->GetPrintSession(getter_AddRefs(mPrintSession));
   if (NS_FAILED(rv) || !mPrintSession) {
     NS_WARNING("We can't print via the parent without an nsIPrintSession.");
-    return rv;
+    return NS_ERROR_FAILURE;
   }
 
   rv = mPrintSession->GetRemotePrintJob(getter_AddRefs(mRemotePrintJob));
   if (NS_FAILED(rv) || !mRemotePrintJob) {
     NS_WARNING("We can't print via the parent without a RemotePrintJobChild.");
-    return rv;
+    return NS_ERROR_FAILURE;
   }
 
   return NS_OK;
@@ -67,15 +67,8 @@ nsDeviceContextSpecProxy::GetSurfaceForPrinter(gfxASurface** aSurface)
   MOZ_ASSERT(aSurface);
   MOZ_ASSERT(mRealDeviceContextSpec);
 
-  // The real device context may need to have created a real printing surface
-  // even though we're not using it directly.
-  nsresult rv = mRealDeviceContextSpec->GetSurfaceForPrinter(aSurface);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
   double width, height;
-  rv = mPrintSettings->GetEffectivePageSize(&width, &height);
+  nsresult rv = mPrintSettings->GetEffectivePageSize(&width, &height);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }

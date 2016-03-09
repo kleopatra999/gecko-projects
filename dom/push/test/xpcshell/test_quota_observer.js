@@ -57,18 +57,16 @@ add_task(function* test_expiration_history_observer() {
     quota: 0,
   });
 
-  yield addVisit({
+  yield PlacesTestUtils.addVisits({
     uri: 'https://example.com/infrequent',
     title: 'Infrequently-visited page',
-    visits: [{
-      visitDate: (Date.now() - 14 * 24 * 60 * 60 * 1000) * 1000,
-      transitionType: Ci.nsINavHistoryService.TRANSITION_LINK,
-    }],
+    visitDate: (Date.now() - 14 * 24 * 60 * 60 * 1000) * 1000,
+    transition: Ci.nsINavHistoryService.TRANSITION_LINK
   });
 
   let unregisterDone;
   let unregisterPromise = new Promise(resolve => unregisterDone = resolve);
-  let subChangePromise = promiseObserverNotification('push-subscription-change', (subject, data) =>
+  let subChangePromise = promiseObserverNotification(PushServiceComponent.subscriptionChangeTopic, (subject, data) =>
     data == 'https://example.com/stuff');
 
   PushService.init({
@@ -109,7 +107,7 @@ add_task(function* test_expiration_history_observer() {
   strictEqual(expiredRecord.quota, 0, 'Expired record not updated');
 
   let notifiedScopes = [];
-  subChangePromise = promiseObserverNotification('push-subscription-change', (subject, data) => {
+  subChangePromise = promiseObserverNotification(PushServiceComponent.subscriptionChangeTopic, (subject, data) => {
     notifiedScopes.push(data);
     return notifiedScopes.length == 2;
   });
@@ -127,13 +125,11 @@ add_task(function* test_expiration_history_observer() {
   });
 
   // Now visit the site...
-  yield addVisit({
+  yield PlacesTestUtils.addVisits({
     uri: 'https://example.com/another-page',
     title: 'Infrequently-visited page',
-    visits: [{
-      visitDate: Date.now() * 1000,
-      transitionType: Ci.nsINavHistoryService.TRANSITION_LINK,
-    }],
+    visitDate: Date.now() * 1000,
+    transition: Ci.nsINavHistoryService.TRANSITION_LINK
   });
   Services.obs.notifyObservers(null, 'idle-daily', '');
 

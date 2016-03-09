@@ -52,11 +52,10 @@ handlers[actions.READ_SNAPSHOT_END] = function (snapshots, { id, creationTime })
   });
 };
 
-handlers[actions.TAKE_CENSUS_START] = function (snapshots, { id, breakdown, inverted, filter }) {
+handlers[actions.TAKE_CENSUS_START] = function (snapshots, { id, display, filter }) {
   const census = {
     report: null,
-    breakdown,
-    inverted,
+    display,
     filter,
   };
 
@@ -67,12 +66,16 @@ handlers[actions.TAKE_CENSUS_START] = function (snapshots, { id, breakdown, inve
   });
 };
 
-handlers[actions.TAKE_CENSUS_END] = function (snapshots, { id, report, breakdown, inverted, filter }) {
+handlers[actions.TAKE_CENSUS_END] = function (snapshots, { id,
+                                                           report,
+                                                           parentMap,
+                                                           display,
+                                                           filter }) {
   const census = {
     report,
+    parentMap,
     expanded: new Set(),
-    breakdown,
-    inverted,
+    display,
     filter,
   };
 
@@ -138,6 +141,14 @@ handlers[actions.SELECT_SNAPSHOT] = function (snapshots, { id }) {
   return snapshots.map(s => immutableUpdate(s, { selected: s.id === id }));
 };
 
+handlers[actions.DELETE_SNAPSHOTS_START] = function (snapshots, { ids }) {
+  return snapshots.filter(s => ids.indexOf(s.id) === -1);
+};
+
+handlers[actions.DELETE_SNAPSHOTS_END] = function (snapshots) {
+  return snapshots;
+};
+
 handlers[actions.CHANGE_VIEW] = function (snapshots, { view }) {
   return view === viewState.DIFFING
     ? snapshots.map(s => immutableUpdate(s, { selected: false }))
@@ -180,7 +191,7 @@ handlers[actions.COMPUTE_DOMINATOR_TREE_END] = function (snapshots, { id, domina
   });
 };
 
-handlers[actions.FETCH_DOMINATOR_TREE_START] = function (snapshots, { id, breakdown }) {
+handlers[actions.FETCH_DOMINATOR_TREE_START] = function (snapshots, { id, display }) {
   return snapshots.map(snapshot => {
     if (snapshot.id !== id) {
       return snapshot;
@@ -194,7 +205,7 @@ handlers[actions.FETCH_DOMINATOR_TREE_START] = function (snapshots, { id, breakd
     const dominatorTree = immutableUpdate(snapshot.dominatorTree, {
       state: dominatorTreeState.FETCHING,
       root: undefined,
-      breakdown,
+      display,
     });
     return immutableUpdate(snapshot, { dominatorTree });
   });

@@ -22,9 +22,11 @@
 #include "base/thread.h"                // for Thread
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Attributes.h"         // for override
+#include "mozilla/Maybe.h"
 #include "mozilla/Monitor.h"            // for Monitor
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/TimeStamp.h"          // for TimeStamp
+#include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/layers/GeckoContentController.h"
@@ -54,6 +56,8 @@ class Compositor;
 class CompositorParent;
 class LayerManagerComposite;
 class LayerTransactionParent;
+class PAPZParent;
+class CrossProcessCompositorParent;
 
 struct ScopedLayerTreeRegistration
 {
@@ -100,6 +104,20 @@ class CompositorVsyncScheduler
 
 public:
   explicit CompositorVsyncScheduler(CompositorParent* aCompositorParent, nsIWidget* aWidget);
+
+#ifdef MOZ_WIDGET_GONK
+  // emulator-ics never trigger the display on/off, so compositor will always
+  // skip composition request at that device. Only check the display status
+  // with kk device and upon.
+#if ANDROID_VERSION >= 19
+  // SetDisplay() and CancelSetDisplayTask() are used for the display on/off.
+  // It will clear all composition related task and flag, and skip another
+  // composition task during the display off. That could prevent the problem
+  // that compositor might show the old content at the first frame of display on.
+  void SetDisplay(bool aDisplayEnable);
+#endif
+#endif
+
   bool NotifyVsync(TimeStamp aVsyncTimestamp);
   void SetNeedsComposite();
   void OnForceComposeToTarget();
@@ -126,7 +144,7 @@ public:
     return mExpectedComposeStartTime;
   }
 #endif
- 
+
 private:
   virtual ~CompositorVsyncScheduler();
 
@@ -136,6 +154,11 @@ private:
   void DispatchTouchEvents(TimeStamp aVsyncTimestamp);
   void DispatchVREvents(TimeStamp aVsyncTimestamp);
   void CancelCurrentSetNeedsCompositeTask();
+#ifdef MOZ_WIDGET_GONK
+#if ANDROID_VERSION >= 19
+  void CancelSetDisplayTask();
+#endif
+#endif
 
   class Observer final : public VsyncObserver
   {
@@ -153,7 +176,6 @@ private:
 
   CompositorParent* mCompositorParent;
   TimeStamp mLastCompose;
-  CancelableTask* mCurrentCompositeTask;
 
 #ifdef COMPOSITOR_PERFORMANCE_WARNING
   TimeStamp mExpectedComposeStartTime;
@@ -167,9 +189,18 @@ private:
   RefPtr<CompositorVsyncScheduler::Observer> mVsyncObserver;
 
   mozilla::Monitor mCurrentCompositeTaskMonitor;
+  CancelableTask* mCurrentCompositeTask;
 
   mozilla::Monitor mSetNeedsCompositeMonitor;
   CancelableTask* mSetNeedsCompositeTask;
+
+#ifdef MOZ_WIDGET_GONK
+#if ANDROID_VERSION >= 19
+  bool mDisplayEnabled;
+  mozilla::Monitor mSetDisplayMonitor;
+  CancelableTask* mSetDisplayTask;
+#endif
+#endif
 };
 
 class CompositorUpdateObserver
@@ -208,6 +239,7 @@ public:
                                 const gfx::IntRect& aRect) override;
   virtual bool RecvMakeWidgetSnapshot(const SurfaceDescriptor& aInSnapshot) override;
   virtual bool RecvFlushRendering() override;
+  virtual bool RecvForcePresent() override;
 
   virtual bool RecvGetTileSize(int32_t* aWidth, int32_t* aHeight) override;
 
@@ -245,6 +277,20 @@ public:
   virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aLayerTree) override { return mCompositionManager; }
 
   /**
+   * Request that the compositor be recreated due to a shared device reset.
+   * This must be called on the main thread, and blocks until a task posted
+   * to the compositor thread has completed.
+   *
+   * Note that this posts a task directly, rather than using synchronous
+   * IPDL, and waits on a monitor notification from the compositor thread.
+   * We do this as a best-effort attempt to jump any IPDL messages that
+   * have not yet been posted (and are sitting around in the IO pipe), to
+   * minimize the amount of time the main thread is blocked.
+   */
+  bool ResetCompositor(const nsTArray<LayersBackend>& aBackendHints,
+                       TextureFactoryIdentifier* aOutIdentifier);
+
+  /**
    * This forces the is-first-paint flag to true. This is intended to
    * be called by the widget code when it loses its viewport information
    * (or for whatever reason wants to refresh the viewport information).
@@ -256,7 +302,7 @@ public:
 
   static void SetShadowProperties(Layer* aLayer);
 
-  void NotifyChildCreated(const uint64_t& aChild);
+  void NotifyChildCreated(uint64_t aChild);
 
   void AsyncRender();
 
@@ -287,6 +333,15 @@ public:
    * tree of this compositor.
    */
   uint64_t RootLayerTreeId();
+
+  /**
+   * Notify local and remote layer trees connected to this compositor that
+   * the compositor's local device is being reset. All layers must be
+   * invalidated to clear any cached TextureSources.
+   *
+   * This must be called on the compositor thread.
+   */
+  void InvalidateRemoteLayers();
 
   /**
    * Returns a pointer to the compositor corresponding to the given ID.
@@ -360,7 +415,7 @@ public:
     // Pointer to the CrossProcessCompositorParent. Used by APZCs to share
     // their FrameMetrics with the corresponding child process that holds
     // the PCompositorChild
-    PCompositorParent* mCrossProcessParent;
+    CrossProcessCompositorParent* mCrossProcessParent;
     TargetConfig mTargetConfig;
     APZTestData mApzTestData;
     LayerTransactionParent* mLayerTree;
@@ -368,6 +423,8 @@ public:
     bool mUpdatedPluginDataAvailable;
     RefPtr<CompositorUpdateObserver> mLayerTreeReadyObserver;
     RefPtr<CompositorUpdateObserver> mLayerTreeClearedObserver;
+
+    PCompositorParent* CrossProcessPCompositor() const;
   };
 
   /**
@@ -418,6 +475,22 @@ public:
 
   nsIWidget* GetWidget() { return mWidget; }
 
+  void ForceComposeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
+
+  /**
+   * Creates a new RemoteContentController for aTabId. Should only be called on
+   * the main thread.
+   *
+   * aLayersId The layers id for the browser corresponding to aTabId.
+   * aContentParent The ContentParent for the process that the TabChild for
+   *                aTabId lives in.
+   * aBrowserParent The toplevel TabParent for aTabId.
+   */
+  static bool UpdateRemoteContentController(uint64_t aLayersId,
+                                            dom::ContentParent* aContentParent,
+                                            const dom::TabId& aTabId,
+                                            dom::TabParent* aBrowserParent);
+
 protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~CompositorParent();
@@ -432,7 +505,6 @@ protected:
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) override;
   virtual void ScheduleTask(CancelableTask*, int);
   void CompositeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
-  void ForceComposeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
 
   void SetEGLSurfaceSize(int width, int height);
 
@@ -443,6 +515,11 @@ protected:
   void ForceComposition();
   void CancelCurrentCompositeTask();
   void Invalidate();
+
+  RefPtr<Compositor> NewCompositor(const nsTArray<LayersBackend>& aBackendHints);
+  void ResetCompositorTask(const nsTArray<LayersBackend>& aBackendHints,
+                           Maybe<TextureFactoryIdentifier>* aOutNewIdentifier);
+  Maybe<TextureFactoryIdentifier> ResetCompositorImpl(const nsTArray<LayersBackend>& aBackendHints);
 
   /**
    * Add a compositor to the global compositor map.
@@ -461,6 +538,11 @@ protected:
 
   void DidComposite(TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd);
 
+  // The indirect layer tree lock must be held before calling this function.
+  // Callback should take (LayerTreeState* aState, const uint64_t& aLayersId)
+  template <typename Lambda>
+  inline void ForEachIndirectLayerTree(const Lambda& aCallback);
+
   RefPtr<LayerManagerComposite> mLayerManager;
   RefPtr<Compositor> mCompositor;
   RefPtr<AsyncCompositionManager> mCompositionManager;
@@ -477,6 +559,7 @@ protected:
 
   mozilla::Monitor mPauseCompositionMonitor;
   mozilla::Monitor mResumeCompositionMonitor;
+  mozilla::Monitor mResetCompositorMonitor;
 
   uint64_t mCompositorID;
   const uint64_t mRootLayerTreeID;
@@ -501,6 +584,9 @@ protected:
   // indicates if plugin window visibility and metric updates are currently
   // being defered due to a scroll operation.
   bool mDeferPluginWindows;
+  // indicates if the plugin windows were hidden, and need to be made
+  // visible again even if their geometry has not changed.
+  bool mPluginWindowsHidden;
 #endif
 
   DISALLOW_EVIL_CONSTRUCTORS(CompositorParent);

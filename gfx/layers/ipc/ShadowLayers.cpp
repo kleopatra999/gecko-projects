@@ -29,7 +29,7 @@
 #include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr, getter_AddRefs, etc
-#include "nsTArray.h"                   // for nsAutoTArray, nsTArray, etc
+#include "nsTArray.h"                   // for AutoTArray, nsTArray, etc
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
 #include "mozilla/ReentrantMonitor.h"
 
@@ -39,6 +39,23 @@ class Shmem;
 } // namespace ipc
 
 namespace layers {
+
+static int sShmemCreationCounter = 0;
+
+static void ResetShmemCounter()
+{
+  sShmemCreationCounter = 0;
+}
+
+static void ShmemAllocated(LayerTransactionChild* aProtocol)
+{
+  sShmemCreationCounter++;
+  if (sShmemCreationCounter > 256) {
+    aProtocol->SendSyncWithCompositor();
+    ResetShmemCounter();
+    MOZ_PERFORMANCE_WARNING("gfx", "The number of shmem allocations is too damn high!");
+  }
+}
 
 using namespace mozilla::gfx;
 using namespace mozilla::gl;
@@ -387,7 +404,7 @@ ShadowLayerForwarder::UseTextures(CompositableClient* aCompositable,
 {
   MOZ_ASSERT(aCompositable && aCompositable->IsConnected());
 
-  nsAutoTArray<TimedTexture,4> textures;
+  AutoTArray<TimedTexture,4> textures;
 
   for (auto& t : aTextures) {
     MOZ_ASSERT(t.mTextureClient);
@@ -396,9 +413,9 @@ ShadowLayerForwarder::UseTextures(CompositableClient* aCompositable,
     textures.AppendElement(TimedTexture(nullptr, t.mTextureClient->GetIPDLActor(),
                                         fence.IsValid() ? MaybeFence(fence) : MaybeFence(null_t()),
                                         t.mTimeStamp, t.mPictureRect,
-                                        t.mFrameID, t.mProducerID));
+                                        t.mFrameID, t.mProducerID, t.mInputFrameID));
     if ((t.mTextureClient->GetFlags() & TextureFlags::IMMEDIATE_UPLOAD)
-        && t.mTextureClient->HasInternalBuffer()) {
+        && t.mTextureClient->HasIntermediateBuffer()) {
 
       // We use IMMEDIATE_UPLOAD when we want to be sure that the upload cannot
       // race with updates on the main thread. In this case we want the transaction
@@ -552,6 +569,8 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
 {
   *aSent = false;
 
+  ResetShmemCounter();
+
   MOZ_ASSERT(aId);
 
   PROFILER_LABEL("ShadowLayerForwarder", "EndTransaction",
@@ -668,7 +687,7 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
     mTxn->AddEdit(OpSetLayerAttributes(nullptr, Shadow(shadow), attrs));
   }
 
-  AutoInfallibleTArray<Edit, 10> cset;
+  AutoTArray<Edit, 10> cset;
   size_t nCsets = mTxn->mCset.size() + mTxn->mPaints.size();
   MOZ_ASSERT(nCsets > 0 || mTxn->RotationChanged(), "should have bailed by now");
 
@@ -744,6 +763,8 @@ ShadowLayerForwarder::AllocShmem(size_t aSize,
       !mShadowManager->IPCOpen()) {
     return false;
   }
+
+  ShmemAllocated(mShadowManager);
   return mShadowManager->AllocShmem(aSize, aType, aShmem);
 }
 bool
@@ -756,6 +777,7 @@ ShadowLayerForwarder::AllocUnsafeShmem(size_t aSize,
       !mShadowManager->IPCOpen()) {
     return false;
   }
+  ShmemAllocated(mShadowManager);
   return mShadowManager->AllocUnsafeShmem(aSize, aType, aShmem);
 }
 void

@@ -7,20 +7,22 @@
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://devtools/client/framework/gDevTools.jsm");
-Cu.import("resource://devtools/shared/event-emitter.js");
-Cu.import("resource://devtools/client/shared/widgets/ViewHelpers.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SystemAppProxy",
-                                  "resource://gre/modules/SystemAppProxy.jsm");
-
-var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var {loader, require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
 var Telemetry = require("devtools/client/shared/telemetry");
-var { showDoorhanger } = require("devtools/client/shared/doorhanger");
-var { TouchEventSimulator } = require("devtools/shared/touch/simulator");
-var { Task } = require("resource://gre/modules/Task.jsm");
+var {showDoorhanger} = require("devtools/client/shared/doorhanger");
+var {TouchEventSimulator} = require("devtools/shared/touch/simulator");
+var {Task} = require("resource://gre/modules/Task.jsm");
 var promise = require("promise");
+var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+var Services = require("Services");
+var EventEmitter = require("devtools/shared/event-emitter");
+var {ViewHelpers} = require("devtools/client/shared/widgets/ViewHelpers.jsm");
+loader.lazyImporter(this, "SystemAppProxy",
+                    "resource://gre/modules/SystemAppProxy.jsm");
+loader.lazyRequireGetter(this, "DebuggerClient",
+                         "devtools/shared/client/main", true);
+loader.lazyRequireGetter(this, "DebuggerServer",
+                         "devtools/server/main", true);
 
 this.EXPORTED_SYMBOLS = ["ResponsiveUIManager"];
 
@@ -37,9 +39,13 @@ const INPUT_PARSER = /(\d+)[^\d]+(\d+)/;
 
 const SHARED_L10N = new ViewHelpers.L10N("chrome://devtools/locale/shared.properties");
 
+function debug(msg) {
+  // dump(`RDM UI: ${msg}\n`);
+}
+
 var ActiveTabs = new Map();
 
-this.ResponsiveUIManager = {
+var Manager = {
   /**
    * Check if the a tab is in a responsive mode.
    * Leave the responsive mode if active,
@@ -61,12 +67,18 @@ this.ResponsiveUIManager = {
    *
    * @param aWindow the main window.
    * @param aTab the tab targeted.
+   * @returns {ResponsiveUI} the instance of ResponsiveUI for the current tab.
    */
-  runIfNeeded: function(aWindow, aTab) {
+  runIfNeeded: Task.async(function*(aWindow, aTab) {
+    let ui;
     if (!this.isActiveForTab(aTab)) {
-      new ResponsiveUI(aWindow, aTab);
+      ui = new ResponsiveUI(aWindow, aTab);
+      yield ui.inited;
+    } else {
+      ui = this.getResponsiveUIForTab(aTab);
     }
-  },
+    return ui;
+  }),
 
   /**
    * Returns true if responsive view is active for the provided tab.
@@ -92,30 +104,41 @@ this.ResponsiveUIManager = {
    * @param aCommand the command name.
    * @param aArgs command arguments.
    */
-  handleGcliCommand: function(aWindow, aTab, aCommand, aArgs) {
+  handleGcliCommand: Task.async(function*(aWindow, aTab, aCommand, aArgs) {
     switch (aCommand) {
       case "resize to":
-        this.runIfNeeded(aWindow, aTab);
-        ActiveTabs.get(aTab).setSize(aArgs.width, aArgs.height);
+        let ui = yield this.runIfNeeded(aWindow, aTab);
+        ui.setSize(aArgs.width, aArgs.height);
         break;
       case "resize on":
         this.runIfNeeded(aWindow, aTab);
         break;
       case "resize off":
         if (this.isActiveForTab(aTab)) {
-          ActiveTabs.get(aTab).close();
+          yield ActiveTabs.get(aTab).close();
         }
         break;
       case "resize toggle":
-          this.toggle(aWindow, aTab);
+        this.toggle(aWindow, aTab);
       default:
     }
-  }
+  })
 }
 
-EventEmitter.decorate(ResponsiveUIManager);
+EventEmitter.decorate(Manager);
 
-var presets = [
+// If the experimental HTML UI is enabled, delegate the ResponsiveUIManager API
+// over to that tool instead.  Performing this delegation here allows us to
+// contain the pref check to a single place.
+if (Services.prefs.getBoolPref("devtools.responsive.html.enabled")) {
+  let { ResponsiveUIManager } =
+    require("devtools/client/responsive.html/manager");
+  this.ResponsiveUIManager = ResponsiveUIManager;
+} else {
+  this.ResponsiveUIManager = Manager;
+}
+
+var defaultPresets = [
   // Phones
   {key: "320x480", width: 320, height: 480},    // iPhone, B2G, with <meta viewport>
   {key: "360x640", width: 360, height: 640},    // Android 4, phones, with <meta viewport>
@@ -144,59 +167,6 @@ function ResponsiveUI(aWindow, aTab)
   this.stack = this.container.querySelector(".browserStack");
   this._telemetry = new Telemetry();
 
-  let childOn = () => {
-    this.mm.removeMessageListener("ResponsiveMode:Start:Done", childOn);
-    ResponsiveUIManager.emit("on", { tab: this.tab });
-  }
-  this.mm.addMessageListener("ResponsiveMode:Start:Done", childOn);
-
-  let requiresFloatingScrollbars = !this.mainWindow.matchMedia("(-moz-overlay-scrollbars)").matches;
-  this.mm.loadFrameScript("resource://devtools/client/responsivedesign/responsivedesign-child.js", true);
-  this.mm.addMessageListener("ResponsiveMode:ChildScriptReady", () => {
-    this.mm.sendAsyncMessage("ResponsiveMode:Start", {
-      requiresFloatingScrollbars: requiresFloatingScrollbars
-    });
-  });
-
-  // Try to load presets from prefs
-  if (Services.prefs.prefHasUserValue("devtools.responsiveUI.presets")) {
-    try {
-      presets = JSON.parse(Services.prefs.getCharPref("devtools.responsiveUI.presets"));
-    } catch(e) {
-      // User pref is malformated.
-      Cu.reportError("Could not parse pref `devtools.responsiveUI.presets`: " + e);
-    }
-  }
-
-  this.customPreset = {key: "custom", custom: true};
-
-  if (Array.isArray(presets)) {
-    this.presets = [this.customPreset].concat(presets);
-  } else {
-    Cu.reportError("Presets value (devtools.responsiveUI.presets) is malformated.");
-    this.presets = [this.customPreset];
-  }
-
-  try {
-    let width = Services.prefs.getIntPref("devtools.responsiveUI.customWidth");
-    let height = Services.prefs.getIntPref("devtools.responsiveUI.customHeight");
-    this.customPreset.width = Math.min(MAX_WIDTH, width);
-    this.customPreset.height = Math.min(MAX_HEIGHT, height);
-
-    this.currentPresetKey = Services.prefs.getCharPref("devtools.responsiveUI.currentPreset");
-  } catch(e) {
-    // Default size. The first preset (custom) is the one that will be used.
-    let bbox = this.stack.getBoundingClientRect();
-
-    this.customPreset.width = bbox.width - 40; // horizontal padding of the container
-    this.customPreset.height = bbox.height - 80; // vertical padding + toolbar height
-
-    this.currentPresetKey = this.presets[1].key; // most common preset
-  }
-
-  this.container.setAttribute("responsivemode", "true");
-  this.stack.setAttribute("responsivemode", "true");
-
   // Let's bind some callbacks.
   this.bound_presetSelected = this.presetSelected.bind(this);
   this.bound_handleManualInput = this.handleManualInput.bind(this);
@@ -209,34 +179,15 @@ function ResponsiveUI(aWindow, aTab)
   this.bound_startResizing = this.startResizing.bind(this);
   this.bound_stopResizing = this.stopResizing.bind(this);
   this.bound_onDrag = this.onDrag.bind(this);
+  this.bound_changeUA = this.changeUA.bind(this);
+  this.bound_onContentResize = this.onContentResize.bind(this);
 
-  // Events
-  this.tab.addEventListener("TabClose", this);
-  this.tabContainer.addEventListener("TabSelect", this);
+  this.mm.addMessageListener("ResponsiveMode:OnContentResize",
+                             this.bound_onContentResize);
 
-  this.buildUI();
-  this.checkMenus();
+  ActiveTabs.set(this.tab, this);
 
-  try {
-    if (Services.prefs.getBoolPref("devtools.responsiveUI.rotate")) {
-      this.rotate();
-    }
-  } catch(e) {}
-
-  ActiveTabs.set(aTab, this);
-
-  this._telemetry.toolOpened("responsive");
-
-  // Touch events support
-  this.touchEnableBefore = false;
-  this.touchEventSimulator = new TouchEventSimulator(this.browser);
-
-  // Hook to display promotional Developer Edition doorhanger. Only displayed once.
-  showDoorhanger({
-    window: this.mainWindow,
-    type: "deveditionpromo",
-    anchor: this.chromeDoc.querySelector("#content")
-  });
+  this.inited = this.init();
 }
 
 ResponsiveUI.prototype = {
@@ -253,21 +204,147 @@ ResponsiveUI.prototype = {
     }
   },
 
+  init: Task.async(function*() {
+    debug("INIT BEGINS");
+    let ready = this.waitForMessage("ResponsiveMode:ChildScriptReady");
+    this.mm.loadFrameScript("resource://devtools/client/responsivedesign/responsivedesign-child.js", true);
+    yield ready;
+
+    let requiresFloatingScrollbars =
+      !this.mainWindow.matchMedia("(-moz-overlay-scrollbars)").matches;
+    let started = this.waitForMessage("ResponsiveMode:Start:Done");
+    debug("SEND START");
+    this.mm.sendAsyncMessage("ResponsiveMode:Start", {
+      requiresFloatingScrollbars,
+      // Tests expect events on resize to yield on various size changes
+      notifyOnResize: DevToolsUtils.testing,
+    });
+    yield started;
+
+    // Load Presets
+    this.loadPresets();
+
+    // Events
+    this.tab.addEventListener("TabClose", this);
+    this.tabContainer.addEventListener("TabSelect", this);
+
+    // Setup the UI
+    this.container.setAttribute("responsivemode", "true");
+    this.stack.setAttribute("responsivemode", "true");
+    this.buildUI();
+    this.checkMenus();
+
+    // Rotate the responsive mode if needed
+    try {
+      if (Services.prefs.getBoolPref("devtools.responsiveUI.rotate")) {
+        this.rotate();
+      }
+    } catch(e) {}
+
+    // Touch events support
+    this.touchEnableBefore = false;
+    this.touchEventSimulator = new TouchEventSimulator(this.browser);
+
+    yield this.connectToServer();
+    this.userAgentInput.hidden = false;
+
+    // Hook to display promotional Developer Edition doorhanger.
+    // Only displayed once.
+    showDoorhanger({
+      window: this.mainWindow,
+      type: "deveditionpromo",
+      anchor: this.chromeDoc.querySelector("#content")
+    });
+
+    // Notify that responsive mode is on.
+    this._telemetry.toolOpened("responsive");
+    ResponsiveUIManager.emit("on", { tab: this.tab });
+  }),
+
+  connectToServer: Task.async(function*() {
+    if (!DebuggerServer.initialized) {
+      DebuggerServer.init();
+      DebuggerServer.addBrowserActors();
+    }
+    this.client = new DebuggerClient(DebuggerServer.connectPipe());
+    yield this.client.connect();
+    let {tab} = yield this.client.getTab();
+    let [response, tabClient] = yield this.client.attachTab(tab.actor);
+    this.tabClient = tabClient;
+    if (!tabClient) {
+      Cu.reportError("Responsive Mode: failed to attach tab");
+    }
+  }),
+
+  loadPresets: function() {
+    // Try to load presets from prefs
+    let presets = defaultPresets;
+    if (Services.prefs.prefHasUserValue("devtools.responsiveUI.presets")) {
+      try {
+        presets = JSON.parse(Services.prefs.getCharPref("devtools.responsiveUI.presets"));
+      } catch(e) {
+        // User pref is malformated.
+        Cu.reportError("Could not parse pref `devtools.responsiveUI.presets`: " + e);
+      }
+    }
+
+    this.customPreset = {key: "custom", custom: true};
+
+    if (Array.isArray(presets)) {
+      this.presets = [this.customPreset].concat(presets);
+    } else {
+      Cu.reportError("Presets value (devtools.responsiveUI.presets) is malformated.");
+      this.presets = [this.customPreset];
+    }
+
+    try {
+      let width = Services.prefs.getIntPref("devtools.responsiveUI.customWidth");
+      let height = Services.prefs.getIntPref("devtools.responsiveUI.customHeight");
+      this.customPreset.width = Math.min(MAX_WIDTH, width);
+      this.customPreset.height = Math.min(MAX_HEIGHT, height);
+
+      this.currentPresetKey = Services.prefs.getCharPref("devtools.responsiveUI.currentPreset");
+    } catch(e) {
+      // Default size. The first preset (custom) is the one that will be used.
+      let bbox = this.stack.getBoundingClientRect();
+
+      this.customPreset.width = bbox.width - 40; // horizontal padding of the container
+      this.customPreset.height = bbox.height - 80; // vertical padding + toolbar height
+
+      this.currentPresetKey = this.presets[1].key; // most common preset
+    }
+  },
+
   /**
    * Destroy the nodes. Remove listeners. Reset the style.
    */
-  close: function RUI_close() {
-    if (this.closing)
+  close: Task.async(function*() {
+    debug("CLOSE BEGINS");
+    if (this.closing) {
+      debug("ALREADY CLOSING, ABORT");
       return;
+    }
     this.closing = true;
+
+    // If we're closing very fast (in tests), ensure init has finished.
+    debug("CLOSE: WAIT ON INITED");
+    yield this.inited;
+    debug("CLOSE: INITED DONE");
 
     this.unCheckMenus();
     // Reset style of the stack.
+    debug(`CURRENT SIZE: ${this.stack.getAttribute("style")}`);
     let style = "max-width: none;" +
                 "min-width: 0;" +
                 "max-height: none;" +
                 "min-height: 0;";
+    debug("RESET STACK SIZE");
     this.stack.setAttribute("style", style);
+
+    // Wait for resize message before stopping in the child when testing
+    if (DevToolsUtils.testing) {
+      yield this.waitForMessage("ResponsiveMode:OnContentResize");
+    }
 
     if (this.isResizing)
       this.stopResizing();
@@ -304,36 +381,41 @@ ResponsiveUI.prototype = {
     if (this.touchEventSimulator) {
       this.touchEventSimulator.stop();
     }
+
+    yield new Promise((resolve, reject) => {
+      this.client.close(resolve);
+      this.client = this.tabClient = null;
+    });
+
     this._telemetry.toolClosed("responsive");
-    let childOff = () => {
-      this.mm.removeMessageListener("ResponsiveMode:Stop:Done", childOff);
-      ResponsiveUIManager.emit("off", { tab: this.tab });
-    }
-    this.mm.addMessageListener("ResponsiveMode:Stop:Done", childOff);
+
+    let stopped = this.waitForMessage("ResponsiveMode:Stop:Done");
     this.tab.linkedBrowser.messageManager.sendAsyncMessage("ResponsiveMode:Stop");
+    yield stopped;
+
+    this.inited = null;
+    ResponsiveUIManager.emit("off", { tab: this.tab });
+  }),
+
+  waitForMessage(message) {
+    return new Promise(resolve => {
+      let listener = () => {
+        this.mm.removeMessageListener(message, listener);
+        resolve();
+      };
+      this.mm.addMessageListener(message, listener);
+    });
   },
 
   /**
-   * Notify when the content has been resized. Only used in tests.
+   * Emit an event when the content has been resized. Only used in tests.
    */
-  _test_notifyOnResize: function() {
-    let deferred = promise.defer();
-    let mm = this.mm;
-
-    this.bound_onContentResize = this.onContentResize.bind(this);
-
-    mm.addMessageListener("ResponsiveMode:OnContentResize", this.bound_onContentResize);
-
-    mm.sendAsyncMessage("ResponsiveMode:NotifyOnResize");
-    mm.addMessageListener("ResponsiveMode:NotifyOnResize:Done", function onListeningResize() {
-      mm.removeMessageListener("ResponsiveMode:NotifyOnResize:Done", onListeningResize);
-      deferred.resolve();
+  onContentResize: function(msg) {
+    ResponsiveUIManager.emit("contentResize", {
+      tab: this.tab,
+      width: msg.data.width,
+      height: msg.data.height,
     });
-    return deferred.promise;
-  },
-
-  onContentResize: function() {
-    ResponsiveUIManager.emit("contentResize", { tab: this.tab });
   },
 
   /**
@@ -456,6 +538,14 @@ ResponsiveUI.prototype = {
     this.toolbar.appendChild(this.touchbutton);
 
     this.toolbar.appendChild(this.screenshotbutton);
+
+    this.userAgentInput = this.chromeDoc.createElement("textbox");
+    this.userAgentInput.className = "devtools-responsiveui-textinput";
+    this.userAgentInput.setAttribute("placeholder",
+      this.strings.GetStringFromName("responsiveUI.userAgentPlaceholder"));
+    this.userAgentInput.addEventListener("blur", this.bound_changeUA, true);
+    this.userAgentInput.hidden = true;
+    this.toolbar.appendChild(this.userAgentInput);
 
     // Resizers
     let resizerTooltip = this.strings.GetStringFromName("responsiveUI.resizerTooltip");
@@ -852,6 +942,51 @@ ResponsiveUI.prototype = {
      }
    }),
 
+  waitForReload() {
+    let navigatedDeferred = promise.defer();
+    let onNavigated = (_, { state }) => {
+      if (state != "stop") {
+        return;
+      }
+      this.client.removeListener("tabNavigated", onNavigated);
+      navigatedDeferred.resolve();
+    };
+    this.client.addListener("tabNavigated", onNavigated);
+    return navigatedDeferred.promise;
+  },
+
+  /**
+   * Change the user agent string
+   */
+  changeUA: Task.async(function*() {
+    let value = this.userAgentInput.value;
+    if (value) {
+      this.userAgentInput.setAttribute("attention", "true");
+    } else {
+      this.userAgentInput.removeAttribute("attention");
+    }
+
+    // Changing the UA triggers an automatic reload.  Ensure we wait for this to
+    // complete before emitting the changed event, so that tests wait for the
+    // reload.
+    let reloaded = this.waitForReload();
+    yield this.tabClient.reconfigure({customUserAgent: value});
+    yield reloaded;
+    ResponsiveUIManager.emit("userAgentChanged", { tab: this.tab });
+  }),
+
+  /**
+   * Get the current width and height.
+   */
+  getSize() {
+    let width = Number(this.stack.style.minWidth.replace("px", ""));
+    let height = Number(this.stack.style.minHeight.replace("px", ""));
+    return {
+      width,
+      height,
+    };
+  },
+
   /**
    * Change the size of the browser.
    *
@@ -859,6 +994,7 @@ ResponsiveUI.prototype = {
    * @param aHeight height of the browser.
    */
   setSize: function RUI_setSize(aWidth, aHeight) {
+    debug(`SET SIZE TO ${aWidth} x ${aHeight}`);
     this.setWidth(aWidth);
     this.setHeight(aHeight);
   },
@@ -1027,6 +1163,6 @@ ResponsiveUI.prototype = {
   },
 }
 
-XPCOMUtils.defineLazyGetter(ResponsiveUI.prototype, "strings", function () {
+loader.lazyGetter(ResponsiveUI.prototype, "strings", function () {
   return Services.strings.createBundle("chrome://devtools/locale/responsiveUI.properties");
 });

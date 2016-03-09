@@ -1,3 +1,4 @@
+
 ; This Source Code Form is subject to the terms of the Mozilla Public
 ; License, v. 2.0. If a copy of the MPL was not distributed with this
 ; file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -18,8 +19,8 @@
 @BINPATH@/chrome/@AB_CD@@JAREXT@
 @BINPATH@/chrome/@AB_CD@.manifest
 @BINPATH@/@PREF_DIR@/mobile-l10n.js
-#ifdef MOZ_UPDATER
 @BINPATH@/update.locale
+#ifdef MOZ_UPDATER
 @BINPATH@/updater.ini
 #endif
 @BINPATH@/dictionaries/*
@@ -78,7 +79,6 @@
 [xpcom]
 @BINPATH@/package-name.txt
 @BINPATH@/classes.dex
-@BINPATH@/distribution/*
 
 [browser]
 ; [Base Browser Files]
@@ -128,7 +128,6 @@
 @BINPATH@/components/dom_html.xpt
 @BINPATH@/components/dom_offline.xpt
 @BINPATH@/components/dom_json.xpt
-@BINPATH@/components/dom_payment.xpt
 @BINPATH@/components/dom_power.xpt
 @BINPATH@/components/dom_push.xpt
 @BINPATH@/components/dom_quota.xpt
@@ -229,9 +228,8 @@
 @BINPATH@/components/toolkit_finalizationwitness.xpt
 @BINPATH@/components/toolkit_formautofill.xpt
 @BINPATH@/components/toolkit_osfile.xpt
-#ifdef NIGHTLY_BUILD
+@BINPATH@/components/toolkit_securityreporter.xpt
 @BINPATH@/components/toolkit_perfmonitoring.xpt
-#endif
 @BINPATH@/components/toolkit_xulstore.xpt
 @BINPATH@/components/toolkitprofile.xpt
 #ifdef MOZ_ENABLE_XREMOTE
@@ -438,6 +436,10 @@
 @BINPATH@/components/PrivateBrowsing.manifest
 @BINPATH@/components/PrivateBrowsingTrackingProtectionWhitelist.js
 
+; Security Reports
+@BINPATH@/components/SecurityReporter.manifest
+@BINPATH@/components/SecurityReporter.js
+
 ; [Browser Chrome Files]
 @BINPATH@/chrome/toolkit@JAREXT@
 @BINPATH@/chrome/toolkit.manifest
@@ -484,20 +486,6 @@
 @BINPATH@/res/html/*
 @BINPATH@/res/language.properties
 @BINPATH@/res/entityTables/*
-#ifdef NIGHTLY_BUILD
-@BINPATH@/res/accessiblecaret.png
-@BINPATH@/res/accessiblecaret@1.5x.png
-@BINPATH@/res/accessiblecaret@2.25x.png
-@BINPATH@/res/accessiblecaret@2x.png
-@BINPATH@/res/accessiblecaret_tilt_left.png
-@BINPATH@/res/accessiblecaret_tilt_left@1.5x.png
-@BINPATH@/res/accessiblecaret_tilt_left@2.25x.png
-@BINPATH@/res/accessiblecaret_tilt_left@2x.png
-@BINPATH@/res/accessiblecaret_tilt_right.png
-@BINPATH@/res/accessiblecaret_tilt_right@1.5x.png
-@BINPATH@/res/accessiblecaret_tilt_right@2.25x.png
-@BINPATH@/res/accessiblecaret_tilt_right@2x.png
-#endif
 
 #ifndef MOZ_ANDROID_EXCLUDE_FONTS
 @BINPATH@/res/fonts/*
@@ -550,13 +538,6 @@
 @BINPATH@/components/SiteSpecificUserAgent.js
 @BINPATH@/components/Snippets.js
 
-@BINPATH@/components/Payment.js
-@BINPATH@/components/PaymentFlowInfo.js
-@BINPATH@/components/PaymentProvider.js
-@BINPATH@/components/Payment.manifest
-@BINPATH@/components/PaymentsUI.js
-@BINPATH@/components/PaymentProviderStrategy.js
-
 @BINPATH@/components/XPIDialogService.js
 
 #ifdef ENABLE_MARIONETTE
@@ -566,7 +547,6 @@
 @BINPATH@/components/marionettecomponent.js
 #endif
 
-@BINPATH@/components/WebappsUpdateTimer.js
 @BINPATH@/components/DataStore.manifest
 @BINPATH@/components/DataStoreImpl.js
 @BINPATH@/components/dom_datastore.xpt

@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsPrintfCString.h"
 #include "MediaQueue.h"
 #include "DecodedAudioDataSink.h"
 #include "VideoUtils.h"
@@ -167,17 +168,14 @@ DecodedAudioDataSink::PopFrames(uint32_t aFrames)
 {
   class Chunk : public AudioStream::Chunk {
   public:
-    Chunk(AudioData* aBuffer, uint32_t aFrames, uint32_t aOffset)
-      : mBuffer(aBuffer)
-      , mFrames(aFrames)
-      , mData(aBuffer->mAudioData.get() + aBuffer->mChannels * aOffset) {
-      MOZ_ASSERT(aOffset + aFrames <= aBuffer->mFrames);
-    }
+    Chunk(AudioData* aBuffer, uint32_t aFrames, AudioDataValue* aData)
+      : mBuffer(aBuffer), mFrames(aFrames), mData(aData) {}
     Chunk() : mFrames(0), mData(nullptr) {}
     const AudioDataValue* Data() const { return mData; }
     uint32_t Frames() const { return mFrames; }
+    uint32_t Channels() const { return mBuffer ? mBuffer->mChannels: 0; }
+    uint32_t Rate() const { return mBuffer ? mBuffer->mRate : 0; }
     AudioDataValue* GetWritable() const { return mData; }
-
   private:
     const RefPtr<AudioData> mBuffer;
     const uint32_t mFrames;
@@ -186,23 +184,46 @@ DecodedAudioDataSink::PopFrames(uint32_t aFrames)
 
   class SilentChunk : public AudioStream::Chunk {
   public:
-    SilentChunk(uint32_t aFrames, uint32_t aChannels)
+    SilentChunk(uint32_t aFrames, uint32_t aChannels, uint32_t aRate)
       : mFrames(aFrames)
+      , mChannels(aChannels)
+      , mRate(aRate)
       , mData(MakeUnique<AudioDataValue[]>(aChannels * aFrames)) {
       memset(mData.get(), 0, aChannels * aFrames * sizeof(AudioDataValue));
     }
     const AudioDataValue* Data() const { return mData.get(); }
     uint32_t Frames() const { return mFrames; }
+    uint32_t Channels() const { return mChannels; }
+    uint32_t Rate() const { return mRate; }
     AudioDataValue* GetWritable() const { return mData.get(); }
   private:
     const uint32_t mFrames;
+    const uint32_t mChannels;
+    const uint32_t mRate;
     UniquePtr<AudioDataValue[]> mData;
   };
 
-  if (!mCurrentData) {
+  while (!mCurrentData) {
     // No data in the queue. Return an empty chunk.
     if (AudioQueue().GetSize() == 0) {
       return MakeUnique<Chunk>();
+    }
+
+    AudioData* a = AudioQueue().PeekFront()->As<AudioData>();
+
+    // Ignore the element with 0 frames and try next.
+    if (a->mFrames == 0) {
+      RefPtr<MediaData> releaseMe = AudioQueue().PopFront();
+      continue;
+    }
+
+    // Ignore invalid samples.
+    if (a->mRate != mInfo.mRate || a->mChannels != mInfo.mChannels) {
+      NS_WARNING(nsPrintfCString(
+        "mismatched sample format, data=%p rate=%u channels=%u frames=%u",
+        a->mAudioData.get(), a->mRate, a->mChannels, a->mFrames).get());
+      RefPtr<MediaData> releaseMe = AudioQueue().PopFront();
+      continue;
     }
 
     // See if there's a gap in the audio. If there is, push silence into the
@@ -229,35 +250,30 @@ DecodedAudioDataSink::PopFrames(uint32_t aFrames)
       missingFrames = std::min<int64_t>(UINT32_MAX, missingFrames.value());
       auto framesToPop = std::min<uint32_t>(missingFrames.value(), aFrames);
       mWritten += framesToPop;
-      return MakeUnique<SilentChunk>(framesToPop, mInfo.mChannels);
+      return MakeUnique<SilentChunk>(framesToPop, mInfo.mChannels, mInfo.mRate);
     }
 
-    mFramesPopped = 0;
     mCurrentData = dont_AddRef(AudioQueue().PopFront().take()->As<AudioData>());
+    mCursor = MakeUnique<AudioBufferCursor>(mCurrentData->mAudioData.get(),
+                                            mCurrentData->mChannels,
+                                            mCurrentData->mFrames);
+    MOZ_ASSERT(mCurrentData->mFrames > 0);
   }
 
-  auto framesToPop = std::min(aFrames, mCurrentData->mFrames - mFramesPopped);
+  auto framesToPop = std::min(aFrames, mCursor->Available());
 
   SINK_LOG_V("playing audio at time=%lld offset=%u length=%u",
-             mCurrentData->mTime, mFramesPopped, framesToPop);
+             mCurrentData->mTime, mCurrentData->mFrames - mCursor->Available(), framesToPop);
 
-  UniquePtr<AudioStream::Chunk> chunk;
-
-  if (mCurrentData->mRate == mInfo.mRate &&
-      mCurrentData->mChannels == mInfo.mChannels) {
-    chunk = MakeUnique<Chunk>(mCurrentData, framesToPop, mFramesPopped);
-  } else {
-    SINK_LOG_V("mismatched sample format mInfo=[%uHz/%u channels] audio=[%uHz/%u channels]",
-               mInfo.mRate, mInfo.mChannels, mCurrentData->mRate, mCurrentData->mChannels);
-    chunk = MakeUnique<SilentChunk>(framesToPop, mInfo.mChannels);
-  }
+  UniquePtr<AudioStream::Chunk> chunk =
+    MakeUnique<Chunk>(mCurrentData, framesToPop, mCursor->Ptr());
 
   mWritten += framesToPop;
-  mFramesPopped += framesToPop;
+  mCursor->Advance(framesToPop);
 
   // All frames are popped. Reset mCurrentData so we can pop new elements from
   // the audio queue in next calls to PopFrames().
-  if (mFramesPopped == mCurrentData->mFrames) {
+  if (mCursor->Available() == 0) {
     mCurrentData = nullptr;
   }
 
@@ -275,7 +291,10 @@ void
 DecodedAudioDataSink::Drained()
 {
   SINK_LOG("Drained");
-  mEndPromise.Resolve(true, __func__);
+  // FIXME : In OSX, the audio backend could trigger Drained() twice, then it
+  // cause the crash because the promise had already been resolve and free.
+  // You can fix it on the bug 1246108.
+  mEndPromise.ResolveIfExists(true, __func__);
 }
 
 } // namespace media

@@ -375,16 +375,18 @@ this.ContentSearch = {
       return Promise.resolve();
     }
     let browserData = this._suggestionDataForBrowser(msg.target, true);
-    FormHistory.update({
-      op: "bump",
-      fieldname: browserData.controller.formHistoryParam,
-      value: entry,
-    }, {
-      handleCompletion: () => {},
-      handleError: err => {
-        Cu.reportError("Error adding form history entry: " + err);
-      },
-    });
+    if (FormHistory.enabled) {
+      FormHistory.update({
+        op: "bump",
+        fieldname: browserData.controller.formHistoryParam,
+        value: entry,
+      }, {
+        handleCompletion: () => {},
+        handleError: err => {
+          Cu.reportError("Error adding form history entry: " + err);
+        },
+      });
+    }
     return Promise.resolve();
   },
 
@@ -485,16 +487,12 @@ this.ContentSearch = {
   _currentEngineObj: Task.async(function* () {
     let engine = Services.search.currentEngine;
     let favicon = engine.getIconURLBySize(16, 16);
-    let uri1x = engine.getIconURLBySize(65, 26);
-    let uri2x = engine.getIconURLBySize(130, 52);
     let placeholder = this._stringBundle.formatStringFromName(
       "searchWithEngine", [engine.name], 1);
     let obj = {
       name: engine.name,
       placeholder: placeholder,
       iconBuffer: yield this._arrayBufferFromDataURI(favicon),
-      logoBuffer: yield this._arrayBufferFromDataURI(uri1x),
-      logo2xBuffer: yield this._arrayBufferFromDataURI(uri2x),
     };
     return obj;
   }),

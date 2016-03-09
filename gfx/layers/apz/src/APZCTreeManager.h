@@ -17,7 +17,7 @@
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/layers/APZUtils.h"    // for HitTestResult
 #include "mozilla/layers/TouchCounter.h"// for TouchCounter
-#include "mozilla/Monitor.h"            // for Monitor
+#include "mozilla/Mutex.h"              // for Mutex
 #include "mozilla/TimeStamp.h"          // for mozilla::TimeStamp
 #include "mozilla/Vector.h"             // for mozilla::Vector
 #include "nsAutoPtr.h"                  // for nsRefPtr
@@ -39,6 +39,13 @@ enum AllowedTouchBehavior {
   PINCH_ZOOM =         1 << 2,
   DOUBLE_TAP_ZOOM =    1 << 3,
   UNKNOWN =            1 << 4
+};
+
+enum ZoomToRectBehavior : uint32_t {
+  DEFAULT_BEHAVIOR =   0,
+  DISABLE_ZOOM_OUT =   1 << 0,
+  PAN_INTO_VIEW_ONLY = 1 << 1,
+  ONLY_ZOOM_TO_DEFAULT_SCALE  = 1 << 2
 };
 
 class Layer;
@@ -205,9 +212,11 @@ public:
    * Kicks an animation to zoom to a rect. This may be either a zoom out or zoom
    * in. The actual animation is done on the compositor thread after being set
    * up. |aRect| must be given in CSS pixels, relative to the document.
+   * |aFlags| is a combination of the ZoomToRectBehavior enum values.
    */
   void ZoomToRect(const ScrollableLayerGuid& aGuid,
-                  const CSSRect& aRect);
+                  const CSSRect& aRect,
+                  const uint32_t aFlags = DEFAULT_BEHAVIOR);
 
   /**
    * If we have touch listeners, this should always be called when we know
@@ -252,6 +261,14 @@ public:
    * animation's responsibility to check this before advancing.
    */
   void CancelAnimation(const ScrollableLayerGuid &aGuid);
+
+  /**
+   * Adjusts the root APZC to compensate for a shift in the surface. See the
+   * documentation on AsyncPanZoomController::AdjustScrollForSurfaceShift for
+   * some more details. This is only currently needed due to surface shifts
+   * caused by the dynamic toolbar on Android.
+   */
+  void AdjustScrollForSurfaceShift(const ScreenPoint& aShift);
 
   /**
    * Calls Destroy() on all APZC instances attached to the tree, and resets the
@@ -442,6 +459,7 @@ private:
                                          HitTestResult* aOutHitResult);
   AsyncPanZoomController* FindRootApzcForLayersId(uint64_t aLayersId) const;
   AsyncPanZoomController* FindRootContentApzcForLayersId(uint64_t aLayersId) const;
+  AsyncPanZoomController* FindRootContentOrRootApzc() const;
   already_AddRefed<AsyncPanZoomController> GetMultitouchTarget(AsyncPanZoomController* aApzc1, AsyncPanZoomController* aApzc2) const;
   already_AddRefed<AsyncPanZoomController> CommonAncestor(AsyncPanZoomController* aApzc1, AsyncPanZoomController* aApzc2) const;
   already_AddRefed<AsyncPanZoomController> GetTouchInputBlockAPZC(const MultiTouchInput& aEvent,
@@ -517,7 +535,7 @@ private:
    * is considered part of the APZC tree management state.
    * Finally, the lock needs to be held when accessing mZoomConstraints.
    * IMPORTANT: See the note about lock ordering at the top of this file. */
-  mutable mozilla::Monitor mTreeLock;
+  mutable mozilla::Mutex mTreeLock;
   RefPtr<HitTestingTreeNode> mRootNode;
   /* Holds the zoom constraints for scrollable layers, as determined by the
    * the main-thread gecko code. */

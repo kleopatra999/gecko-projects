@@ -63,11 +63,10 @@ using mozilla::NegativeInfinity;
 using mozilla::PodZero;
 using mozilla::PodArrayZero;
 using mozilla::PositiveInfinity;
-using mozilla::ThreadLocal;
 using JS::GenericNaN;
 using JS::DoubleNaNValue;
 
-/* static */ ThreadLocal<PerThreadData*> js::TlsPerThreadData;
+/* static */ MOZ_THREAD_LOCAL(PerThreadData*) js::TlsPerThreadData;
 /* static */ Atomic<size_t> JSRuntime::liveRuntimesCount;
 
 namespace js {
@@ -142,6 +141,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     asyncCauseForNewActivations(this),
     asyncCallIsExplicit(false),
     entryMonitor(nullptr),
+    noExecuteDebuggerTop(nullptr),
     parentRuntime(parentRuntime),
 #ifdef DEBUG
     updateChildRuntimeCount(parentRuntime),
@@ -152,8 +152,10 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     handlingJitInterrupt_(false),
     interruptCallback(nullptr),
     exclusiveAccessLock(nullptr),
+#ifdef DEBUG
     exclusiveAccessOwner(nullptr),
     mainThreadHasExclusiveAccess(false),
+#endif
     numExclusiveThreads(0),
     numCompartments(0),
     localeCallbacks(nullptr),
@@ -167,6 +169,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     nativeStackBase(GetNativeStackBase()),
     cxCallback(nullptr),
     destroyCompartmentCallback(nullptr),
+    sizeOfIncludingThisCompartmentCallback(nullptr),
     destroyZoneCallback(nullptr),
     sweepZoneCallback(nullptr),
     compartmentNameCallback(nullptr),
@@ -192,7 +195,9 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     profilingScripts(false),
     suppressProfilerSampling(false),
     hadOutOfMemory(false),
+#ifdef DEBUG
     handlingInitFailure(false),
+#endif
     haveCreatedContext(false),
     allowRelazificationForTesting(false),
     data(nullptr),
@@ -200,7 +205,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     canUseSignalHandlers_(false),
     defaultFreeOp_(thisFromCtor()),
     debuggerMutations(0),
-    securityCallbacks(const_cast<JSSecurityCallbacks*>(&NullSecurityCallbacks)),
+    securityCallbacks(&NullSecurityCallbacks),
     DOMcallbacks(nullptr),
     destroyPrincipals(nullptr),
     readPrincipals(nullptr),
@@ -428,7 +433,9 @@ JSRuntime::~JSRuntime()
 
     // Avoid bogus asserts during teardown.
     MOZ_ASSERT(!numExclusiveThreads);
+#ifdef DEBUG
     mainThreadHasExclusiveAccess = true;
+#endif
 
     /*
      * Even though all objects in the compartment are dead, we may have keep
@@ -530,8 +537,6 @@ JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::Runtim
     for (ContextIter acx(this); !acx.done(); acx.next())
         rtSizes->contexts += acx->sizeOfIncludingThis(mallocSizeOf);
 
-    rtSizes->dtoa += mallocSizeOf(mainThread.dtoaState);
-
     rtSizes->temporary += tempLifoAlloc.sizeOfExcludingThis(mallocSizeOf);
 
     rtSizes->interpreterStack += interpreterStack_.sizeOfExcludingThis(mallocSizeOf);
@@ -581,7 +586,7 @@ InvokeInterruptCallback(JSContext* cx)
         // invoke the onStep handler.
         if (cx->compartment()->isDebuggee()) {
             ScriptFrameIter iter(cx);
-            if (iter.script()->stepModeEnabled()) {
+            if (!iter.done() && iter.script()->stepModeEnabled()) {
                 RootedValue rval(cx);
                 switch (Debugger::onSingleStep(cx, &rval)) {
                   case JSTRAP_ERROR:
@@ -711,9 +716,7 @@ JSRuntime::getDefaultLocale()
     if (defaultLocale)
         return defaultLocale;
 
-    char* locale;
-    char* lang;
-    char* p;
+    const char* locale;
 #ifdef HAVE_SETLOCALE
     locale = setlocale(LC_ALL, nullptr);
 #else
@@ -721,10 +724,13 @@ JSRuntime::getDefaultLocale()
 #endif
     // convert to a well-formed BCP 47 language tag
     if (!locale || !strcmp(locale, "C"))
-        locale = const_cast<char*>("und");
-    lang = JS_strdup(this, locale);
+        locale = "und";
+
+    char* lang = JS_strdup(this, locale);
     if (!lang)
         return nullptr;
+
+    char* p;
     if ((p = strchr(lang, '.')))
         *p = '\0';
     while ((p = strchr(lang, '_')))

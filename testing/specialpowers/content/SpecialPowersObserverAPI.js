@@ -5,6 +5,7 @@
 "use strict";
 
 Components.utils.import("resource://gre/modules/Services.jsm");
+Components.utils.import("resource://gre/modules/NetUtil.jsm");
 
 if (typeof(Ci) == 'undefined') {
   var Ci = Components.interfaces;
@@ -186,15 +187,12 @@ SpecialPowersObserverAPI.prototype = {
     // to evaluate http:// urls...
     var scriptableStream = Cc["@mozilla.org/scriptableinputstream;1"]
                              .getService(Ci.nsIScriptableInputStream);
-    var channel = Services.io.newChannel2(aUrl,
-                                          null,
-                                          null,
-                                          null,      // aLoadingNode
-                                          Services.scriptSecurityManager.getSystemPrincipal(),
-                                          null,      // aTriggeringPrincipal
-                                          Ci.nsILoadInfo.SEC_NORMAL,
-                                          Ci.nsIContentPolicy.TYPE_OTHER);
-    var input = channel.open();
+
+    var channel = NetUtil.newChannel({
+      uri: aUrl,
+      loadUsingSystemPrincipal: true
+    });
+    var input = channel.open2();
     scriptableStream.init(input);
 
     var str;
@@ -485,10 +483,9 @@ SpecialPowersObserverAPI.prototype = {
         let id = aMessage.json.id;
         let name = aMessage.json.name;
         let message = aMessage.json.message;
-        this._chromeScriptListeners
-            .filter(o => (o.name == name && o.id == id))
-            .forEach(o => o.listener(message));
-        return undefined;	// See comment at the beginning of this function.
+        return this._chromeScriptListeners
+                   .filter(o => (o.name == name && o.id == id))
+                   .map(o => o.listener(message));
       }
 
       case "SPImportInMainProcess": {
@@ -553,11 +550,26 @@ SpecialPowersObserverAPI.prototype = {
       }
 
       case "SPStartupExtension": {
+        let {ExtensionData} = Components.utils.import("resource://gre/modules/Extension.jsm", {});
+
         let id = aMessage.data.id;
         let extension = this._extensions.get(id);
-        extension.startup().then(() => {
+
+        // Make sure the extension passes the packaging checks when
+        // they're run on a bare archive rather than a running instance,
+        // as the add-on manager runs them.
+        let extensionData = new ExtensionData(extension.rootURI);
+        extensionData.readManifest().then(() => {
+          return extensionData.initAllLocales();
+        }).then(() => {
+          if (extensionData.errors.length) {
+            return Promise.reject("Extension contains packaging errors");
+          }
+          return extension.startup();
+        }).then(() => {
           this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionStarted", args: []});
         }).catch(e => {
+          dump(`Extension startup failed: ${e}\n${e.stack}`);
           this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionFailed", args: []});
         });
         return undefined;

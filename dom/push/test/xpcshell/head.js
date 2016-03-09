@@ -14,6 +14,11 @@ Cu.import('resource://gre/modules/Preferences.jsm');
 Cu.import('resource://gre/modules/PlacesUtils.jsm');
 Cu.import('resource://gre/modules/ObjectUtils.jsm');
 
+XPCOMUtils.defineLazyModuleGetter(this, 'PlacesTestUtils',
+                                  'resource://testing-common/PlacesTestUtils.jsm');
+XPCOMUtils.defineLazyServiceGetter(this, 'PushServiceComponent',
+                                   '@mozilla.org/push/Service;1', 'nsIPushService');
+
 const serviceExports = Cu.import('resource://gre/modules/PushService.jsm', {});
 const servicePrefs = new Preferences('dom.push.');
 
@@ -59,25 +64,6 @@ function after(times, func) {
       return func.apply(this, arguments);
     }
   };
-}
-
-/**
- * Updates the places database.
- *
- * @param {mozIPlaceInfo} place A place record to insert.
- * @returns {Promise} A promise that fulfills when the database is updated.
- */
-function addVisit(place) {
-  return new Promise((resolve, reject) => {
-    if (typeof place.uri == 'string') {
-      place.uri = Services.io.newURI(place.uri, null, null);
-    }
-    PlacesUtils.asyncHistory.updatePlaces(place, {
-      handleCompletion: resolve,
-      handleError: reject,
-      handleResult() {},
-    });
-  });
 }
 
 /**
@@ -169,23 +155,6 @@ function makeStub(target, stubs) {
 }
 
 /**
- * Disables `push` and `pushsubscriptionchange` service worker events for the
- * given scopes. These events cause crashes in xpcshell, so we disable them
- * for testing nsIPushNotificationService.
- *
- * @param {String[]} scopes A list of scope URLs.
- */
-function disableServiceWorkerEvents(...scopes) {
-  for (let scope of scopes) {
-    Services.perms.add(
-      Services.io.newURI(scope, null, null),
-      'desktop-notification',
-      Ci.nsIPermissionManager.DENY_ACTION
-    );
-  }
-}
-
-/**
  * Sets default PushService preferences. All pref names are prefixed with
  * `dom.push.`; any additional preferences will override the defaults.
  *
@@ -221,6 +190,8 @@ function setPrefs(prefs = {}) {
     'http2.reset_retry_count_after_ms': 60000,
     maxQuotaPerSubscription: 16,
     quotaUpdateDelay: 3000,
+    'testing.notifyWorkers': false,
+    'testing.notifyAllObservers': true,
   }, prefs);
   for (let pref in defaultPrefs) {
     servicePrefs.set(pref, defaultPrefs[pref]);
@@ -539,7 +510,7 @@ var tearDownServiceInParent = Task.async(function* (db) {
   record = yield db.getByIdentifiers({
     scope: 'https://example.net/scope/1',
     originAttributes: ChromeUtils.originAttributesToSuffix(
-      { appId: 1, inBrowser: true }),
+      { appId: 1, inIsolatedMozBrowser: true }),
   });
   ok(record.pushEndpoint.startsWith('https://example.org/push'),
     'Wrong push endpoint in app record');

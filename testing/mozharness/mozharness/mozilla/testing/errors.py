@@ -84,17 +84,11 @@ TinderBoxPrintRe = {
         'fail_group': "Failed",
         'known_fail_group': "Skipped",
     },
-    "webapprt_summary": _mochitest_summary,
 
     "harness_error": {
         'full_regex': re.compile(r"(?:TEST-UNEXPECTED-FAIL|PROCESS-CRASH) \| .* \| (application crashed|missing output line for total leaks!|negative leaks caught!|\d+ bytes leaked)"),
         'minimum_regex': re.compile(r'''(TEST-UNEXPECTED|PROCESS-CRASH)'''),
         'retry_regex': re.compile(r'''FAIL-SHOULD-RETRY''')
-    },
-    "valgrind_error": {
-        'substr': 'TEST-VALGRIND-ERROR',
-        'level': ERROR,
-        'explanation': 'Valgrind detected memory errors during the run'
     },
 }
 

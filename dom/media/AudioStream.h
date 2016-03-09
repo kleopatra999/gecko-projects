@@ -67,9 +67,9 @@ private:
   // pointer is garanteed to always be valid.
   AudioStream* const mAudioStream;
   // Output rate in Hz (characteristic of the playback rate)
-  int mOutRate;
+  uint32_t mOutRate;
   // Input rate in Hz (characteristic of the media being played)
-  int mInRate;
+  uint32_t mInRate;
   // True if the we are timestretching, false if we are resampling.
   bool mPreservesPitch;
   // The history of frames sent to the audio engine in each DataCallback.
@@ -148,6 +148,66 @@ private:
   uint32_t mCount;
 };
 
+/*
+ * A bookkeeping class to track the read/write position of an audio buffer.
+ */
+class AudioBufferCursor {
+public:
+  AudioBufferCursor(AudioDataValue* aPtr, uint32_t aChannels, uint32_t aFrames)
+    : mPtr(aPtr), mChannels(aChannels), mFrames(aFrames) {}
+
+  // Advance the cursor to account for frames that are consumed.
+  uint32_t Advance(uint32_t aFrames) {
+    MOZ_ASSERT(mFrames >= aFrames);
+    mFrames -= aFrames;
+    mPtr += mChannels * aFrames;
+    return aFrames;
+  }
+
+  // The number of frames available for read/write in this buffer.
+  uint32_t Available() const { return mFrames; }
+
+  // Return a pointer where read/write should begin.
+  AudioDataValue* Ptr() const { return mPtr; }
+
+protected:
+  AudioDataValue* mPtr;
+  const uint32_t mChannels;
+  uint32_t mFrames;
+};
+
+/*
+ * A helper class to encapsulate pointer arithmetic and provide means to modify
+ * the underlying audio buffer.
+ */
+class AudioBufferWriter : private AudioBufferCursor {
+public:
+  AudioBufferWriter(AudioDataValue* aPtr, uint32_t aChannels, uint32_t aFrames)
+    : AudioBufferCursor(aPtr, aChannels, aFrames) {}
+
+  uint32_t WriteZeros(uint32_t aFrames) {
+    memset(mPtr, 0, sizeof(AudioDataValue) * mChannels * aFrames);
+    return Advance(aFrames);
+  }
+
+  uint32_t Write(const AudioDataValue* aPtr, uint32_t aFrames) {
+    memcpy(mPtr, aPtr, sizeof(AudioDataValue) * mChannels * aFrames);
+    return Advance(aFrames);
+  }
+
+  // Provide a write fuction to update the audio buffer with the following
+  // signature: uint32_t(const AudioDataValue* aPtr, uint32_t aFrames)
+  // aPtr: Pointer to the audio buffer.
+  // aFrames: The number of frames available in the buffer.
+  // return: The number of frames actually written by the function.
+  template <typename Function>
+  uint32_t Write(const Function& aFunction, uint32_t aFrames) {
+    return Advance(aFunction(mPtr, aFrames));
+  }
+
+  using AudioBufferCursor::Available;
+};
+
 // Access to a single instance of this class must be synchronized by
 // callers, or made from a single thread.  One exception is that access to
 // GetPosition, GetPositionInFrames, SetVolume, and Get{Rate,Channels},
@@ -165,6 +225,10 @@ public:
     virtual const AudioDataValue* Data() const = 0;
     // Return the number of frames in this chunk.
     virtual uint32_t Frames() const = 0;
+    // Return the number of audio channels.
+    virtual uint32_t Channels() const = 0;
+    // Return the sample rate of this chunk.
+    virtual uint32_t Rate() const = 0;
     // Return a writable pointer for downmixing.
     virtual AudioDataValue* GetWritable() const = 0;
     virtual ~Chunk() {}
@@ -188,7 +252,7 @@ public:
   // Initialize the audio stream. aNumChannels is the number of audio
   // channels (1 for mono, 2 for stereo, etc) and aRate is the sample rate
   // (22050Hz, 44100Hz, etc).
-  nsresult Init(int32_t aNumChannels, int32_t aRate,
+  nsresult Init(uint32_t aNumChannels, uint32_t aRate,
                 const dom::AudioChannel aAudioStreamChannel);
 
   // Closes the stream. All future use of the stream is an error.
@@ -220,9 +284,9 @@ public:
   // Returns true when the audio stream is paused.
   bool IsPaused();
 
-  int GetRate() { return mOutRate; }
-  int GetChannels() { return mChannels; }
-  int GetOutChannels() { return mOutChannels; }
+  uint32_t GetRate() { return mOutRate; }
+  uint32_t GetChannels() { return mChannels; }
+  uint32_t GetOutChannels() { return mOutChannels; }
 
   // Set playback rate as a multiple of the intrinsic playback rate. This is to
   // be called only with aPlaybackRate > 0.0.
@@ -244,9 +308,11 @@ protected:
 private:
   nsresult OpenCubeb(cubeb_stream_params &aParams);
 
-  static long DataCallback_S(cubeb_stream*, void* aThis, void* aBuffer, long aFrames)
+  static long DataCallback_S(cubeb_stream*, void* aThis,
+                             const void* /* aInputBuffer */, void* aOutputBuffer,
+                             long aFrames)
   {
-    return static_cast<AudioStream*>(aThis)->DataCallback(aBuffer, aFrames);
+    return static_cast<AudioStream*>(aThis)->DataCallback(aOutputBuffer, aFrames);
   }
 
   static void StateCallback_S(cubeb_stream*, void* aThis, cubeb_state aState)
@@ -261,10 +327,10 @@ private:
   nsresult EnsureTimeStretcherInitializedUnlocked();
 
   // Return true if downmixing succeeds otherwise false.
-  bool Downmix(AudioDataValue* aBuffer, uint32_t aFrames);
+  bool Downmix(Chunk* aChunk);
 
-  long GetUnprocessed(void* aBuffer, long aFrames);
-  long GetTimeStretched(void* aBuffer, long aFrames);
+  void GetUnprocessed(AudioBufferWriter& aWriter);
+  void GetTimeStretched(AudioBufferWriter& aWriter);
 
   void StartUnlocked();
 
@@ -272,11 +338,11 @@ private:
   Monitor mMonitor;
 
   // Input rate in Hz (characteristic of the media being played)
-  int mInRate;
+  uint32_t mInRate;
   // Output rate in Hz (characteristic of the playback rate)
-  int mOutRate;
-  int mChannels;
-  int mOutChannels;
+  uint32_t mOutRate;
+  uint32_t mChannels;
+  uint32_t mOutChannels;
 #if defined(__ANDROID__)
   dom::AudioChannel mAudioChannel;
 #endif
@@ -291,18 +357,6 @@ private:
 
   // Owning reference to a cubeb_stream.
   UniquePtr<cubeb_stream, CubebDestroyPolicy> mCubebStream;
-
-  uint32_t mBytesPerFrame;
-
-  uint32_t BytesToFrames(uint32_t aBytes) {
-    NS_ASSERTION(aBytes % mBytesPerFrame == 0,
-                 "Byte count not aligned on frames size.");
-    return aBytes / mBytesPerFrame;
-  }
-
-  uint32_t FramesToBytes(uint32_t aFrames) {
-    return aFrames * mBytesPerFrame;
-  }
 
   enum StreamState {
     INITIALIZED, // Initialized, playback has not begun.

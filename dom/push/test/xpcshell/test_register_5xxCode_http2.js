@@ -56,9 +56,6 @@ function run_test() {
     'http2.retryInterval': 1000,
     'http2.maxRetries': 2
   });
-  disableServiceWorkerEvents(
-    'https://example.com/retry5xxCode'
-  );
 
   run_next_test();
 }
@@ -84,7 +81,7 @@ add_task(function* test1() {
 
   let originAttributes = ChromeUtils.originAttributesToSuffix({
     appId: Ci.nsIScriptSecurityManager.NO_APP_ID,
-    inBrowser: false,
+    inIsolatedMozBrowser: false,
   });
   let newRecord = yield PushService.register({
     scope: 'https://example.com/retry5xxCode',

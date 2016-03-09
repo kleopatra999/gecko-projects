@@ -11,6 +11,8 @@
 //
 
 #include "nsSliderFrame.h"
+
+#include "gfxPrefs.h"
 #include "nsStyleContext.h"
 #include "nsPresContext.h"
 #include "nsIContent.h"
@@ -36,13 +38,16 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/layers/AsyncDragMetrics.h"
 #include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/ScrollInputMethods.h"
 #include <algorithm>
 
 using namespace mozilla;
 using mozilla::layers::AsyncDragMetrics;
 using mozilla::layers::InputAPZContext;
+using mozilla::layers::ScrollInputMethod;
 
 bool nsSliderFrame::gMiddlePref = false;
 int32_t nsSliderFrame::gSnapMultiplier;
@@ -513,6 +518,9 @@ nsSliderFrame::HandleEvent(nsPresContext* aPresContext,
         return NS_OK;
       }
 
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
+          (uint32_t) ScrollInputMethod::MainThreadScrollbarDrag);
+
       // take our current position and subtract the start location
       pos -= mDragStart;
       bool isMouseOutsideThumb = false;
@@ -578,6 +586,9 @@ nsSliderFrame::HandleEvent(nsPresContext* aPresContext,
     }
     nsSize thumbSize = thumbFrame->GetSize();
     nscoord thumbLength = isHorizontal ? thumbSize.width : thumbSize.height;
+
+    mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
+        (uint32_t) ScrollInputMethod::MainThreadScrollbarTrackClick);
 
     // set it
     nsWeakFrame weakFrame(this);
@@ -755,9 +766,12 @@ nsSliderFrame::CurrentPositionChanged()
   // set the rect
   thumbFrame->SetRect(newThumbRect);
 
-  // Request a repaint of the scrollbar
+  // Request a repaint of the scrollbar unless we have paint-skipping enabled
+  // and this is an APZ scroll.
   nsIScrollableFrame* scrollableFrame = do_QueryFrame(GetScrollbar()->GetParent());
-  if (!scrollableFrame || scrollableFrame->LastScrollOrigin() != nsGkAtoms::apz) {
+  if (!gfxPrefs::APZPaintSkipping() ||
+      !scrollableFrame ||
+      scrollableFrame->LastScrollOrigin() != nsGkAtoms::apz) {
     SchedulePaint();
   }
 
@@ -890,7 +904,9 @@ nsSliderFrame::SetInitialChildList(ChildListID     aListID,
                                    nsFrameList&    aChildList)
 {
   nsBoxFrame::SetInitialChildList(aListID, aChildList);
-  AddListener();
+  if (aListID == kPrincipalList) {
+    AddListener();
+  }
 }
 
 nsresult
@@ -964,7 +980,7 @@ nsSliderFrame::StartDrag(nsIDOMEvent* aEvent)
                             nsGkAtoms::_true, eCaseMatters))
     return NS_OK;
 
-  WidgetGUIEvent* event = aEvent->GetInternalNSEvent()->AsGUIEvent();
+  WidgetGUIEvent* event = aEvent->WidgetEventPtr()->AsGUIEvent();
 
   if (!ShouldScrollForEvent(event)) {
     return NS_OK;

@@ -14,9 +14,6 @@ function run_test() {
     requestTimeout: 1000,
     retryBaseInterval: 150
   });
-  disableServiceWorkerEvents(
-    'https://example.net/page/timeout'
-  );
   run_next_test();
 }
 
@@ -78,7 +75,7 @@ add_task(function* test_register_timeout() {
     PushService.register({
       scope: 'https://example.net/page/timeout',
       originAttributes: ChromeUtils.originAttributesToSuffix(
-        { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inBrowser: false }),
+        { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
     }),
     'Expected error for request timeout'
   );

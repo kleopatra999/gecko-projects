@@ -1,16 +1,18 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft= javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 
 const {Cc, Ci, Cu, Cr} = require("chrome");
+const Services = require("Services");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 loader.lazyRequireGetter(this, "NetworkHelper",
                          "devtools/shared/webconsole/network-helper");
-loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
 loader.lazyRequireGetter(this, "DevToolsUtils",
                          "devtools/shared/DevToolsUtils");
 loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
@@ -223,8 +225,10 @@ NetworkResponseListener.prototype = {
     // In the multi-process mode, the conversion happens on the child side while we can
     // only monitor the channel on the parent side. If the content is gzipped, we have
     // to unzip it ourself. For that we use the stream converter services.
+    // Do not do that for Service workers as they are run in the child process.
     let channel = this.request;
-    if (channel instanceof Ci.nsIEncodedChannel &&
+    if (!this.httpActivity.fromServiceWorker &&
+        channel instanceof Ci.nsIEncodedChannel &&
         channel.contentEncodings &&
         !channel.applyConversion) {
       let encodingHeader = channel.getResponseHeader("Content-Encoding");
@@ -384,7 +388,9 @@ NetworkResponseListener.prototype = {
 
     if (!response.mimeType || !NetworkHelper.isTextMimeType(response.mimeType)) {
       response.encoding = "base64";
-      response.text = btoa(response.text);
+      try {
+        response.text = btoa(response.text);
+      } catch (err) { }
     }
 
     if (response.mimeType && this.request.contentCharset) {
@@ -860,6 +866,7 @@ NetworkMonitor.prototype = {
     event.startedDateTime = (timestamp ? new Date(Math.round(timestamp / 1000)) : new Date()).toISOString();
     event.fromCache = fromCache;
     event.fromServiceWorker = fromServiceWorker;
+    httpActivity.fromServiceWorker = fromServiceWorker;
 
     if (extraStringData) {
       event.headersSize = extraStringData.length;

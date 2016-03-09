@@ -14,7 +14,6 @@
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMWindow.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIIOService.h"
 #include "nsIParentChannel.h"
@@ -222,12 +221,11 @@ nsChannelClassifier::NotifyTrackingProtectionDisabled(nsIChannel *aChannel)
         do_GetService(THIRDPARTYUTIL_CONTRACTID, &rv);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIDOMWindow> win;
+    nsCOMPtr<mozIDOMWindowProxy> win;
     rv = thirdPartyUtil->GetTopWindowForChannel(aChannel, getter_AddRefs(win));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsPIDOMWindow> pwin = do_QueryInterface(win, &rv);
-    NS_ENSURE_SUCCESS(rv, NS_OK);
+    auto* pwin = nsPIDOMWindowOuter::From(win);
     nsCOMPtr<nsIDocShell> docShell = pwin->GetDocShell();
     if (!docShell) {
       return NS_OK;
@@ -387,6 +385,17 @@ nsChannelClassifier::MarkEntryClassified(nsresult status)
         return;
     }
 
+    if (LOG_ENABLED()) {
+      nsAutoCString errorName;
+      mozilla::GetErrorName(status, errorName);
+      nsCOMPtr<nsIURI> uri;
+      mChannel->GetURI(getter_AddRefs(uri));
+      nsAutoCString spec;
+      uri->GetAsciiSpec(spec);
+      LOG(("nsChannelClassifier::MarkEntryClassified[%s] %s",
+           errorName.get(), spec.get()));
+    }
+
     nsCOMPtr<nsICachingChannel> cachingChannel = do_QueryInterface(mChannel);
     if (!cachingChannel) {
         return;
@@ -482,14 +491,13 @@ nsChannelClassifier::SetBlockedTrackingContent(nsIChannel *channel)
   }
 
   nsresult rv;
-  nsCOMPtr<nsIDOMWindow> win;
+  nsCOMPtr<mozIDOMWindowProxy> win;
   nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
     do_GetService(THIRDPARTYUTIL_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, NS_OK);
   rv = thirdPartyUtil->GetTopWindowForChannel(channel, getter_AddRefs(win));
   NS_ENSURE_SUCCESS(rv, NS_OK);
-  nsCOMPtr<nsPIDOMWindow> pwin = do_QueryInterface(win, &rv);
-  NS_ENSURE_SUCCESS(rv, NS_OK);
+  auto* pwin = nsPIDOMWindowOuter::From(win);
   nsCOMPtr<nsIDocShell> docShell = pwin->GetDocShell();
   if (!docShell) {
     return NS_OK;

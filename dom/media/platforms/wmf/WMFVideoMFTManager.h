@@ -41,6 +41,8 @@ public:
 
   void ConfigurationChanged(const TrackInfo& aConfig) override;
 
+  const char* GetDescriptionName() const override;
+
 private:
 
   bool InitializeDXVA(bool aForceD3D9);
@@ -88,6 +90,10 @@ private:
 
   const GUID& GetMFTGUID();
   const GUID& GetMediaSubtypeGUID();
+
+  uint32_t mNullOutputCount;
+  bool mGotValidOutputAfterNullOutput;
+  bool mGotExcessiveNullOutput;
 };
 
 } // namespace mozilla

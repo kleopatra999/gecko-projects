@@ -8,6 +8,7 @@
 #include <limits>
 #include "Intervals.h"
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/Logging.h"
 
 #if defined(MOZ_FMP4)
@@ -182,13 +183,20 @@ MoofParser::Metadata()
   MediaByteRange ftyp;
   MediaByteRange moov;
   ScanForMetadata(ftyp, moov);
-  if (!ftyp.Length() || !moov.Length() ||
-      ftyp.Length() > Box::kMAX_BOX_READ || moov.Length() > Box::kMAX_BOX_READ) {
-    // No ftyp or moov, or trying to read bigger-that-readable box (32MB).
+  CheckedInt<MediaByteBuffer::size_type> ftypLength = ftyp.Length();
+  CheckedInt<MediaByteBuffer::size_type> moovLength = moov.Length();
+  if (!ftypLength.isValid() || !moovLength.isValid()
+      || !ftypLength.value() || !moovLength.value()) {
+    // No ftyp or moov, or they cannot be used as array size.
+    return nullptr;
+  }
+  CheckedInt<MediaByteBuffer::size_type> totalLength = ftypLength + moovLength;
+  if (!totalLength.isValid()) {
+    // Addition overflow, or sum cannot be used as array size.
     return nullptr;
   }
   RefPtr<MediaByteBuffer> metadata = new MediaByteBuffer();
-  if (!metadata->SetLength(ftyp.Length() + moov.Length(), fallible)) {
+  if (!metadata->SetLength(totalLength.value(), fallible)) {
     // OOM
     return nullptr;
   }
@@ -196,13 +204,13 @@ MoofParser::Metadata()
   RefPtr<mp4_demuxer::BlockingStream> stream = new BlockingStream(mSource);
   size_t read;
   bool rv =
-    stream->ReadAt(ftyp.mStart, metadata->Elements(), ftyp.Length(), &read);
-  if (!rv || read != ftyp.Length()) {
+    stream->ReadAt(ftyp.mStart, metadata->Elements(), ftypLength.value(), &read);
+  if (!rv || read != ftypLength.value()) {
     return nullptr;
   }
   rv =
-    stream->ReadAt(moov.mStart, metadata->Elements() + ftyp.Length(), moov.Length(), &read);
-  if (!rv || read != moov.Length()) {
+    stream->ReadAt(moov.mStart, metadata->Elements() + ftypLength.value(), moovLength.value(), &read);
+  if (!rv || read != moovLength.value()) {
     return nullptr;
   }
   return metadata.forget();
@@ -693,9 +701,10 @@ Tfhd::Tfhd(Box& aBox, Trex& aTrex)
   mFlags = reader->ReadU32();
   size_t need = sizeof(uint32_t) /* trackid */;
   uint8_t flag[] = { 1, 2, 8, 0x10, 0x20, 0 };
+  uint8_t flagSize[] = { sizeof(uint64_t), sizeof(uint32_t), sizeof(uint32_t), sizeof(uint32_t), sizeof(uint32_t) };
   for (size_t i = 0; flag[i]; i++) {
     if (mFlags & flag[i]) {
-      need += sizeof(uint32_t);
+      need += flagSize[i];
     }
   }
   if (reader->Remaining() < need) {
@@ -703,9 +712,9 @@ Tfhd::Tfhd(Box& aBox, Trex& aTrex)
         (uint64_t)reader->Remaining(), (uint64_t)need);
     return;
   }
-  mBaseDataOffset =
-    mFlags & 1 ? reader->ReadU32() : aBox.Parent()->Parent()->Offset();
   mTrackId = reader->ReadU32();
+  mBaseDataOffset =
+    mFlags & 1 ? reader->ReadU64() : aBox.Parent()->Parent()->Offset();
   if (mFlags & 2) {
     mDefaultSampleDescriptionIndex = reader->ReadU32();
   }

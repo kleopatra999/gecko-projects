@@ -242,7 +242,9 @@ public class Prompt implements OnClickListener, OnCancelListener, OnItemClickLis
         try {
             if (mInputs != null) {
                 for (int i = 0; i < mInputs.length; i++) {
-                    result.put(mInputs[i].getId(), mInputs[i].getValue());
+                    if (mInputs[i] != null) {
+                        result.put(mInputs[i].getId(), mInputs[i].getValue());
+                    }
                 }
             }
         } catch(JSONException ex) { }
@@ -482,7 +484,7 @@ public class Prompt implements OnClickListener, OnCancelListener, OnItemClickLis
     /* Called any time we're closing the dialog to cleanup and notify listeners that the dialog
      * is closing.
      */
-    private void notifyClosing(final JSONObject aReturn) {
+    private void notifyClosing(JSONObject aReturn) {
         try {
             aReturn.put("guid", mGuid);
         } catch(JSONException ex) { }
@@ -495,12 +497,7 @@ public class Prompt implements OnClickListener, OnCancelListener, OnItemClickLis
         GeckoAppShell.sendEventToGecko(GeckoEvent.createNoOpEvent());
 
         if (mCallback != null) {
-            ThreadUtils.postToBackgroundThread(new Runnable() {
-                @Override
-                public void run() {
-                    mCallback.onPromptFinished(aReturn.toString());
-                }
-            });
+            mCallback.onPromptFinished(aReturn.toString());
         }
     }
 
@@ -549,6 +546,11 @@ public class Prompt implements OnClickListener, OnCancelListener, OnItemClickLis
     }
 
     public interface PromptCallback {
+
+        /**
+         * Called when the Prompt has been completed (i.e. when the user has selected an item or action in the Prompt).
+         * This callback is run on the UI thread.
+         */
         public void onPromptFinished(String jsonResult);
     }
 }

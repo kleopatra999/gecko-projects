@@ -251,7 +251,6 @@ protected:
   void* mImplData;
   int32_t mSerial;
   ImageFormat mFormat;
-  bool mSent;
 
   static mozilla::Atomic<int32_t> sSerialCounter;
 };
@@ -435,6 +434,7 @@ public:
    * You won't get meaningful painted/dropped counts when using this method.
    */
   void SetCurrentImageInTransaction(Image* aImage);
+  void SetCurrentImagesInTransaction(const nsTArray<NonOwningImage>& aImages);
 
   /**
    * Returns true if this ImageContainer uses the ImageBridge IPDL protocol.
@@ -635,7 +635,7 @@ public:
   }
 
 private:
-  nsAutoTArray<ImageContainer::OwningImage,4> mImages;
+  AutoTArray<ImageContainer::OwningImage,4> mImages;
 };
 
 struct PlanarYCbCrData {
@@ -825,6 +825,7 @@ public:
   virtual gfx::IntSize GetSize() override { return mSize; }
 
   SourceSurfaceImage(const gfx::IntSize& aSize, gfx::SourceSurface* aSourceSurface);
+  explicit SourceSurfaceImage(gfx::SourceSurface* aSourceSurface);
   ~SourceSurfaceImage();
 
 private:
@@ -858,17 +859,19 @@ public:
   {
     mOverlayId = aData.mOverlayId;
     mSize = aData.mSize;
+    mSidebandStream = GonkNativeHandle();
   }
 
   void SetData(const SidebandStreamData& aData)
   {
     mSidebandStream = aData.mStream;
     mSize = aData.mSize;
+    mOverlayId = INVALID_OVERLAY;
   }
 
   already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() { return nullptr; } ;
   int32_t GetOverlayId() { return mOverlayId; }
-  const GonkNativeHandle& GetSidebandStream() { return mSidebandStream; }
+  GonkNativeHandle& GetSidebandStream() { return mSidebandStream; }
 
   gfx::IntSize GetSize() { return mSize; }
 

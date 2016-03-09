@@ -9,7 +9,8 @@
 
 const {Cc, Ci, Cu} = require("chrome");
 const promise = require("promise");
-const {Tools} = require("devtools/client/main");
+const Services = require("Services");
+const {Tools} = require("devtools/client/definitions");
 const {setTimeout, clearTimeout} =
       Cu.import("resource://gre/modules/Timer.jsm", {});
 const {CssLogic} = require("devtools/shared/inspector/css-logic");
@@ -24,18 +25,16 @@ const {RuleEditor} =
       require("devtools/client/inspector/rules/views/rule-editor");
 const {createChild, promiseWarn} =
       require("devtools/client/inspector/shared/utils");
+const {gDevTools} = require("devtools/client/framework/devtools");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-loader.lazyGetter(this, "gDevTools", () =>
-  Cu.import("resource://devtools/client/framework/gDevTools.jsm", {}).gDevTools);
 loader.lazyRequireGetter(this, "overlays",
   "devtools/client/inspector/shared/style-inspector-overlays");
 loader.lazyRequireGetter(this, "EventEmitter",
   "devtools/shared/event-emitter");
 loader.lazyRequireGetter(this, "StyleInspectorMenu",
   "devtools/client/inspector/shared/style-inspector-menu");
-loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "clipboardHelper", function() {
   return Cc["@mozilla.org/widget/clipboardhelper;1"]
@@ -219,7 +218,7 @@ function CssRuleView(inspector, document, store, pageStyle) {
     autoSelect: true,
     theme: "auto"
   };
-  this.popup = new AutocompletePopup(this.styleWindow.parent.document, options);
+  this.popup = new AutocompletePopup(this.styleDocument, options);
 
   this._showEmpty();
 
@@ -958,16 +957,17 @@ CssRuleView.prototype = {
     let elementStyle = this._elementStyle;
     return this._elementStyle.populate().then(() => {
       if (this._elementStyle !== elementStyle || this.isDestroyed) {
-        return;
+        return null;
       }
 
       this._clearRules();
-      this._createEditors();
-
+      let onEditorsReady = this._createEditors();
       this.refreshPseudoClassPanel();
 
       // Notify anyone that cares that we refreshed.
-      this.emit("ruleview-refreshed");
+      return onEditorsReady.then(() => {
+        this.emit("ruleview-refreshed");
+      }, e => console.error(e));
     }).then(null, promiseWarn);
   },
 
@@ -1059,7 +1059,6 @@ CssRuleView.prototype = {
   createExpandableContainer: function(label, isPseudo = false) {
     let header = this.styleDocument.createElementNS(HTML_NS, "div");
     header.className = this._getRuleViewHeaderClassName(true);
-    header.classList.add("show-expandable-container");
     header.textContent = label;
 
     let twisty = this.styleDocument.createElementNS(HTML_NS, "span");
@@ -1071,20 +1070,21 @@ CssRuleView.prototype = {
 
     let container = this.styleDocument.createElementNS(HTML_NS, "div");
     container.classList.add("ruleview-expandable-container");
+    container.hidden = false;
     this.element.appendChild(container);
 
     header.addEventListener("dblclick", () => {
-      this._toggleContainerVisibility(twisty, header, isPseudo,
+      this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
     }, false);
 
     twisty.addEventListener("click", () => {
-      this._toggleContainerVisibility(twisty, header, isPseudo,
+      this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
     }, false);
 
     if (isPseudo) {
-      this._toggleContainerVisibility(twisty, header, isPseudo,
+      this._toggleContainerVisibility(twisty, container, isPseudo,
         this.showPseudoElements);
     }
 
@@ -1095,15 +1095,16 @@ CssRuleView.prototype = {
    * Toggle the visibility of an expandable container
    *
    * @param  {DOMNode}  twisty
-   *         clickable toggle DOM Node
-   * @param  {DOMNode}  header
-   *         expandable container header DOM Node
+   *         Clickable toggle DOM Node
+   * @param  {DOMNode}  container
+   *         Expandable container DOM Node
    * @param  {Boolean}  isPseudo
-   *         whether or not the container will hold pseudo element rules
+   *         Whether or not the container will hold pseudo element rules
    * @param  {Boolean}  showPseudo
-   *         whether or not pseudo element rules should be displayed
+   *         Whether or not pseudo element rules should be displayed
    */
-  _toggleContainerVisibility: function(twisty, header, isPseudo, showPseudo) {
+  _toggleContainerVisibility: function(twisty, container, isPseudo,
+      showPseudo) {
     let isOpen = twisty.getAttribute("open");
 
     if (isPseudo) {
@@ -1112,12 +1113,10 @@ CssRuleView.prototype = {
       Services.prefs.setBoolPref("devtools.inspector.show_pseudo_elements",
         this.showPseudoElements);
 
-      header.classList.toggle("show-expandable-container",
-        this.showPseudoElements);
-
+      container.hidden = !this.showPseudoElements;
       isOpen = !this.showPseudoElements;
     } else {
-      header.classList.toggle("show-expandable-container");
+      container.hidden = !container.hidden;
     }
 
     if (isOpen) {
@@ -1147,9 +1146,10 @@ CssRuleView.prototype = {
     let container = null;
 
     if (!this._elementStyle.rules) {
-      return;
+      return promise.resolve();
     }
 
+    let editorReadyPromises = [];
     for (let rule of this._elementStyle.rules) {
       if (rule.domRule.system) {
         continue;
@@ -1158,6 +1158,7 @@ CssRuleView.prototype = {
       // Initialize rule editor
       if (!rule.editor) {
         rule.editor = new RuleEditor(this, rule);
+        editorReadyPromises.push(rule.editor.once("source-link-updated"));
       }
 
       // Filter the rules and highlight any matches if there is a search input
@@ -1211,6 +1212,8 @@ CssRuleView.prototype = {
     } else {
       this.searchField.classList.remove("devtools-style-searchbox-no-match");
     }
+
+    return promise.all(editorReadyPromises);
   },
 
   /**
@@ -1689,8 +1692,8 @@ RuleViewTool.prototype = {
       let target = this.inspector.target;
       if (Tools.styleEditor.isTargetSupported(target)) {
         gDevTools.showToolbox(target, "styleeditor").then(function(toolbox) {
-          let sheet = source || href;
-          toolbox.getCurrentPanel().selectStyleSheet(sheet, line, column);
+          let url = source || href;
+          toolbox.getCurrentPanel().selectStyleSheet(url, line, column);
         });
       }
       return;

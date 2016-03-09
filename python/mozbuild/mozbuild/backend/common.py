@@ -37,7 +37,10 @@ from mozbuild.frontend.data import (
     XPIDLFile,
     WebIDLFile,
 )
-from mozbuild.jar import JarManifestParser
+from mozbuild.jar import (
+    DeprecatedJarManifest,
+    JarManifestParser,
+)
 from mozbuild.preprocessor import Preprocessor
 from mozpack.chrome.manifest import parse_manifest_line
 
@@ -209,6 +212,8 @@ class CommonBackend(BuildBackend):
                     topsrcdir=obj.topsrcdir)
 
         elif isinstance(obj, XPIDLFile):
+            # TODO bug 1240134 tracks not processing XPIDL files during
+            # artifact builds.
             self._idl_manager.register_idl(obj)
 
         elif isinstance(obj, ConfigFileSubstitution):
@@ -222,35 +227,71 @@ class CommonBackend(BuildBackend):
 
         # We should consider aggregating WebIDL types in emitter.py.
         elif isinstance(obj, WebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.sources.add(mozpath.join(obj.srcdir, obj.basename))
 
         elif isinstance(obj, GeneratedEventWebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.generated_events_sources.add(mozpath.join(
                 obj.srcdir, obj.basename))
 
         elif isinstance(obj, TestWebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.test_sources.add(mozpath.join(obj.srcdir,
                 obj.basename))
 
         elif isinstance(obj, PreprocessedTestWebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.preprocessed_test_sources.add(mozpath.join(
                 obj.srcdir, obj.basename))
 
         elif isinstance(obj, GeneratedWebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.generated_sources.add(mozpath.join(obj.srcdir,
                 obj.basename))
 
         elif isinstance(obj, PreprocessedWebIDLFile):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.preprocessed_sources.add(mozpath.join(
                 obj.srcdir, obj.basename))
 
         elif isinstance(obj, ExampleWebIDLInterface):
+            # WebIDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._webidls.example_interfaces.add(obj.name)
 
         elif isinstance(obj, IPDLFile):
+            # IPDL isn't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             self._ipdl_sources.add(mozpath.join(obj.srcdir, obj.basename))
 
         elif isinstance(obj, UnifiedSources):
+            # Unified sources aren't relevant to artifact builds.
+            if self.environment.is_artifact_build:
+                return True
+
             if obj.have_unified_mapping:
                 self._write_unified_files(obj.unified_source_mapping, obj.objdir)
             if hasattr(self, '_process_unified_sources'):
@@ -397,7 +438,11 @@ class CommonBackend(BuildBackend):
             BUILD_FASTER=1,
         )
         pp.out = JarManifestParser()
-        pp.do_include(obj.path.full_path)
+        try:
+            pp.do_include(obj.path.full_path)
+        except DeprecatedJarManifest as e:
+            raise DeprecatedJarManifest('Parsing error while processing %s: %s'
+                                        % (obj.path.full_path, e.message))
         self.backend_input_files |= pp.includes
 
         for jarinfo in pp.out:

@@ -33,6 +33,7 @@ function putRecord(channelID, scope, quota) {
     version: null,
     originAttributes: '',
     quota: quota,
+    systemRecord: quota == Infinity,
   });
 }
 
@@ -51,7 +52,7 @@ function makePushPermission(url, capability) {
 
 function promiseSubscriptionChanges(count) {
   let notifiedScopes = [];
-  let subChangePromise = promiseObserverNotification('push-subscription-change', (subject, data) => {
+  let subChangePromise = promiseObserverNotification(PushServiceComponent.subscriptionChangeTopic, (subject, data) => {
     notifiedScopes.push(data);
     return notifiedScopes.length == count;
   });

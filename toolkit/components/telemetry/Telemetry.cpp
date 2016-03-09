@@ -1222,22 +1222,28 @@ enum reflectStatus
 ReflectHistogramAndSamples(JSContext *cx, JS::Handle<JSObject*> obj, Histogram *h,
                            const Histogram::SampleSet &ss)
 {
+  mozilla::OffTheBooksMutexAutoLock locker(ss.mutex());
+
   // We don't want to reflect corrupt histograms.
-  if (h->FindCorruption(ss) != Histogram::NO_INCONSISTENCIES) {
+  if (h->FindCorruption(ss, locker) != Histogram::NO_INCONSISTENCIES) {
     return REFLECT_CORRUPT;
   }
 
-  if (!(JS_DefineProperty(cx, obj, "min", h->declared_min(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "max", h->declared_max(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "histogram_type", h->histogram_type(), JSPROP_ENUMERATE)
-        && JS_DefineProperty(cx, obj, "sum", double(ss.sum()), JSPROP_ENUMERATE))) {
+  if (!(JS_DefineProperty(cx, obj, "min",
+                          h->declared_min(), JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "max",
+                             h->declared_max(), JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "histogram_type",
+                             h->histogram_type(), JSPROP_ENUMERATE)
+        && JS_DefineProperty(cx, obj, "sum",
+                             double(ss.sum(locker)), JSPROP_ENUMERATE))) {
     return REFLECT_FAILURE;
   }
 
   if (h->histogram_type() != Histogram::HISTOGRAM) {
     // Export |sum_squares| as two separate 32-bit properties so that we
     // can accurately reconstruct it on the analysis side.
-    uint64_t sum_squares = ss.sum_squares();
+    uint64_t sum_squares = ss.sum_squares(locker);
     // Cast to avoid implicit truncation warnings.
     uint32_t lo = static_cast<uint32_t>(sum_squares);
     uint32_t hi = static_cast<uint32_t>(sum_squares >> 32);
@@ -1265,7 +1271,8 @@ ReflectHistogramAndSamples(JSContext *cx, JS::Handle<JSObject*> obj, Histogram *
     return REFLECT_FAILURE;
   }
   for (size_t i = 0; i < count; i++) {
-    if (!JS_DefineElement(cx, counts_array, i, ss.counts(i), JSPROP_ENUMERATE)) {
+    if (!JS_DefineElement(cx, counts_array, i,
+                          ss.counts(locker, i), JSPROP_ENUMERATE)) {
       return REFLECT_FAILURE;
     }
   }
@@ -1287,7 +1294,8 @@ IsEmpty(const Histogram *h)
   Histogram::SampleSet ss;
   h->SnapshotSample(&ss);
 
-  return ss.counts(0) == 0 && ss.sum() == 0;
+  mozilla::OffTheBooksMutexAutoLock locker(ss.mutex());
+  return ss.counts(locker, 0) == 0 && ss.sum(locker) == 0;
 }
 
 bool
@@ -1952,6 +1960,23 @@ mFailedLockCount(0)
   // histograms) using InitHistogramRecordingEnabled() will happen after instantiating
   // sTelemetry since it depends on the static GetKeyedHistogramById(...) - which
   // uses the singleton instance at sTelemetry.
+
+  // Some Telemetry histograms depend on the value of C++ constants and hardcode
+  // their values in Histograms.json.
+  // We add static asserts here for those values to match so that future changes
+  // don't go unnoticed.
+  // TODO: Compare explicitly with gHistograms[<histogram id>].bucketCount here
+  // once we can make gHistograms constexpr (requires VS2015).
+  static_assert((JS::gcreason::NUM_TELEMETRY_REASONS == 100),
+      "NUM_TELEMETRY_REASONS is assumed to be a fixed value in Histograms.json."
+      " If this was an intentional change, update this assert with its value "
+      "and update the n_values for the following in Histograms.json: "
+      "GC_MINOR_REASON, GC_MINOR_REASON_LONG, GC_REASON_2");
+  static_assert((mozilla::StartupTimeline::MAX_EVENT_ID == 16),
+      "MAX_EVENT_ID is assumed to be a fixed value in Histograms.json.  If this"
+      " was an intentional change, update this assert with its value and update"
+      " the n_values for the following in Histograms.json:"
+      " STARTUP_MEASUREMENT_ERRORS");
 }
 
 TelemetryImpl::~TelemetryImpl() {
@@ -2132,7 +2157,13 @@ TelemetryImpl::IdentifyCorruptHistograms(StatisticsRecorder::Histograms &hs)
 
     Histogram::SampleSet ss;
     h->SnapshotSample(&ss);
-    Histogram::Inconsistencies check = h->FindCorruption(ss);
+
+    Histogram::Inconsistencies check;
+    {
+      mozilla::OffTheBooksMutexAutoLock locker(ss.mutex());
+      check = h->FindCorruption(ss, locker);
+    }
+
     bool corrupt = (check != Histogram::NO_INCONSISTENCIES);
 
     if (corrupt) {
@@ -2335,7 +2366,7 @@ TelemetryImpl::CreateHistogramSnapshots(JSContext *cx,
       DebugOnly<nsresult> rv = GetHistogramByEnumId(Telemetry::ID(i), &h);
       MOZ_ASSERT(NS_SUCCEEDED(rv));
     }
-  };
+  }
 
   StatisticsRecorder::Histograms hs;
   StatisticsRecorder::GetHistograms(&hs);
@@ -3631,7 +3662,7 @@ void
 TelemetryImpl::RecordIceCandidates(const uint32_t iceCandidateBitmask,
                                    const bool success, const bool loop)
 {
-  if (!sTelemetry)
+  if (!sTelemetry || !sTelemetry->mCanRecordExtended)
     return;
 
   sTelemetry->mWebrtcTelemetry.RecordIceCandidateMask(iceCandidateBitmask, success, loop);

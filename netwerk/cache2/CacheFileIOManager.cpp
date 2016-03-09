@@ -663,7 +663,7 @@ public:
   {
     nsresult rv;
 
-    if (mHandle->IsClosed()) {
+    if (mHandle->IsClosed() || (mCallback && mCallback->IsKilled())) {
       rv = NS_ERROR_NOT_INITIALIZED;
     } else {
       rv = CacheFileIOManager::gInstance->ReadInternal(
@@ -713,7 +713,7 @@ public:
   {
     nsresult rv;
 
-    if (mHandle->IsClosed()) {
+    if (mHandle->IsClosed() || (mCallback && mCallback->IsKilled())) {
       // We usually get here only after the internal shutdown
       // (i.e. mShuttingDown == true).  Pretend write has succeeded
       // to avoid any past-shutdown file dooming.
@@ -886,7 +886,7 @@ public:
   {
     nsresult rv;
 
-    if (mHandle->IsClosed()) {
+    if (mHandle->IsClosed() || (mCallback && mCallback->IsKilled())) {
       rv = NS_ERROR_NOT_INITIALIZED;
     } else {
       rv = CacheFileIOManager::gInstance->TruncateSeekSetEOFInternal(
@@ -952,11 +952,11 @@ protected:
 class InitIndexEntryEvent : public nsRunnable {
 public:
   InitIndexEntryEvent(CacheFileHandle *aHandle, uint32_t aAppId,
-                      bool aAnonymous, bool aInBrowser, bool aPinning)
+                      bool aAnonymous, bool aInIsolatedMozBrowser, bool aPinning)
     : mHandle(aHandle)
     , mAppId(aAppId)
     , mAnonymous(aAnonymous)
-    , mInBrowser(aInBrowser)
+    , mInIsolatedMozBrowser(aInIsolatedMozBrowser)
     , mPinning(aPinning)
   {
     MOZ_COUNT_CTOR(InitIndexEntryEvent);
@@ -975,7 +975,7 @@ public:
       return NS_OK;
     }
 
-    CacheIndex::InitEntry(mHandle->Hash(), mAppId, mAnonymous, mInBrowser, mPinning);
+    CacheIndex::InitEntry(mHandle->Hash(), mAppId, mAnonymous, mInIsolatedMozBrowser, mPinning);
 
     // We cannot set the filesize before we init the entry. If we're opening
     // an existing entry file, frecency and expiration time will be set after
@@ -991,7 +991,7 @@ protected:
   RefPtr<CacheFileHandle> mHandle;
   uint32_t                  mAppId;
   bool                      mAnonymous;
-  bool                      mInBrowser;
+  bool                      mInIsolatedMozBrowser;
   bool                      mPinning;
 };
 
@@ -1158,6 +1158,8 @@ CacheFileIOManager::Shutdown()
     return NS_ERROR_NOT_INITIALIZED;
   }
 
+  gInstance->mShutdownDemanded = true;
+
   Telemetry::AutoTimer<Telemetry::NETWORK_DISK_CACHE_SHUTDOWN_V2> shutdownTimer;
 
   CacheIndex::PreShutdown();
@@ -1251,8 +1253,8 @@ CacheFileIOManager::ShutdownInternal()
   }
 
   // Assert the table is empty. When we are here, no new handles can be added
-  // and handles will no longer remove them self from this table and we don't 
-  // want to keep invalid handles here. Also, there is no lookup after this 
+  // and handles will no longer remove them self from this table and we don't
+  // want to keep invalid handles here. Also, there is no lookup after this
   // point to happen.
   MOZ_ASSERT(mHandles.HandleCount() == 0);
 
@@ -1917,7 +1919,7 @@ CacheFileIOManager::Write(CacheFileHandle *aHandle, int64_t aOffset,
   nsresult rv;
   RefPtr<CacheFileIOManager> ioMan = gInstance;
 
-  if (aHandle->IsClosed() || !ioMan) {
+  if (aHandle->IsClosed() || (aCallback && aCallback->IsKilled()) || !ioMan) {
     if (!aCallback) {
       // When no callback is provided, CacheFileIOManager is responsible for
       // releasing the buffer. We must release it even in case of failure.
@@ -2293,15 +2295,21 @@ CacheFileIOManager::ReleaseNSPRHandleInternal(CacheFileHandle *aHandle,
   found = mHandlesByLastUsed.RemoveElement(aHandle);
   MOZ_ASSERT(found);
 
-  if (aIgnoreShutdownLag || !IsPastShutdownIOLag()) {
-    PR_Close(aHandle->mFD);
-  } else {
+  // Leak invalid (w/o metadata) and doomed handles immediately after shutdown.
+  // Leak other handles when past the shutdown time maximum lag.
+  if (
+#ifndef DEBUG
+      ((aHandle->mInvalid || aHandle->mIsDoomed) && MOZ_UNLIKELY(mShutdownDemanded)) ||
+#endif
+      MOZ_UNLIKELY(!aIgnoreShutdownLag && IsPastShutdownIOLag())) {
     // Pretend this file has been validated (the metadata has been written)
     // to prevent removal I/O on this apparently used file.  The entry will
     // never be used, since it doesn't have correct metadata, thus we don't
     // need to worry about removing it.
     aHandle->mInvalid = false;
     LOG(("  past the shutdown I/O lag, leaking file handle"));
+  } else {
+    PR_Close(aHandle->mFD);
   }
 
   aHandle->mFD = nullptr;
@@ -2321,7 +2329,7 @@ CacheFileIOManager::TruncateSeekSetEOF(CacheFileHandle *aHandle,
   nsresult rv;
   RefPtr<CacheFileIOManager> ioMan = gInstance;
 
-  if (aHandle->IsClosed() || !ioMan) {
+  if (aHandle->IsClosed() || (aCallback && aCallback->IsKilled()) || !ioMan) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
@@ -3415,11 +3423,12 @@ nsresult
 CacheFileIOManager::InitIndexEntry(CacheFileHandle *aHandle,
                                    uint32_t         aAppId,
                                    bool             aAnonymous,
-                                   bool             aInBrowser,
+                                   bool             aInIsolatedMozBrowser,
                                    bool             aPinning)
 {
   LOG(("CacheFileIOManager::InitIndexEntry() [handle=%p, appId=%u, anonymous=%d"
-       ", inBrowser=%d, pinned=%d]", aHandle, aAppId, aAnonymous, aInBrowser, aPinning));
+       ", inIsolatedMozBrowser=%d, pinned=%d]", aHandle, aAppId, aAnonymous,
+       aInIsolatedMozBrowser, aPinning));
 
   nsresult rv;
   RefPtr<CacheFileIOManager> ioMan = gInstance;
@@ -3433,7 +3442,7 @@ CacheFileIOManager::InitIndexEntry(CacheFileHandle *aHandle,
   }
 
   RefPtr<InitIndexEntryEvent> ev =
-    new InitIndexEntryEvent(aHandle, aAppId, aAnonymous, aInBrowser, aPinning);
+    new InitIndexEntryEvent(aHandle, aAppId, aAnonymous, aInIsolatedMozBrowser, aPinning);
   rv = ioMan->mIOThread->Dispatch(ev, CacheIOThread::WRITE);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -3783,6 +3792,8 @@ CacheFileIOManager::CreateCacheTree()
 nsresult
 CacheFileIOManager::OpenNSPRHandle(CacheFileHandle *aHandle, bool aCreate)
 {
+  LOG(("CacheFileIOManager::OpenNSPRHandle BEGIN, handle=%p", aHandle));
+
   MOZ_ASSERT(CacheFileIOManager::IsOnIOThreadOrCeased());
   MOZ_ASSERT(!aHandle->mFD);
   MOZ_ASSERT(mHandlesByLastUsed.IndexOf(aHandle) == mHandlesByLastUsed.NoIndex);
@@ -3852,6 +3863,9 @@ CacheFileIOManager::OpenNSPRHandle(CacheFileHandle *aHandle, bool aCreate)
   }
 
   mHandlesByLastUsed.AppendElement(aHandle);
+
+  LOG(("CacheFileIOManager::OpenNSPRHandle END, handle=%p", aHandle));
+
   return NS_OK;
 }
 

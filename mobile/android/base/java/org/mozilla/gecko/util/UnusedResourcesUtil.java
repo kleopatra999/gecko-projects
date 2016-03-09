@@ -19,8 +19,6 @@ final class UnusedResourcesUtil {
 
     public static final int[] USED_IN_JS = {
             R.drawable.ab_search,
-            R.drawable.alert_app,
-            R.drawable.alert_app_animation,
             R.drawable.alert_camera,
             R.drawable.alert_download,
             R.drawable.alert_download_animation,
@@ -31,7 +29,6 @@ final class UnusedResourcesUtil {
             R.drawable.close,
             R.drawable.homepage_banner_firstrun,
             R.drawable.icon_openinapp,
-            R.drawable.network_offline,
             R.drawable.pause,
             R.drawable.phone,
             R.drawable.play,
@@ -47,8 +44,6 @@ final class UnusedResourcesUtil {
             R.xml.fxaccount_syncadapter,
             R.xml.search_widget_info,
             R.xml.searchable,
-            R.xml.sync_authenticator,
-            R.xml.sync_syncadapter,
     };
 
     public static final int[] USED_IN_SUGGESTEDSITES = {

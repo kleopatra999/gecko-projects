@@ -57,13 +57,15 @@ private:
 
   void SaveNetworkStats(bool aEnforce);
 
+  void CloseSocket();
+
   // lock protects access to mListener;
   // so mListener is not cleared while being used/locked.
   mozilla::Mutex                       mLock;
   PRFileDesc                           *mFD;
   mozilla::net::NetAddr                mAddr;
   uint32_t                             mAppId;
-  bool                                 mIsInBrowserElement;
+  bool                                 mIsInIsolatedMozBrowserElement;
   nsCOMPtr<nsIUDPSocketListener>       mListener;
   nsCOMPtr<nsIEventTarget>             mListenerTarget;
   bool                                 mAttached;

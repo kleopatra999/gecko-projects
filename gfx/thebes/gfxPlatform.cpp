@@ -16,6 +16,7 @@
 #include "mozilla/Services.h"
 #include "prprf.h"
 
+#include "gfxCrashReporterUtils.h"
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
 #include "gfxEnv.h"
@@ -195,14 +196,14 @@ public:
   explicit CrashStatsLogForwarder(const char* aKey);
   virtual void Log(const std::string& aString) override;
   virtual void CrashAction(LogReason aReason) override;
+  virtual bool UpdateStringsVector(const std::string& aString) override;
 
   virtual LoggingRecord LoggingRecordCopy() override;
 
   void SetCircularBufferSize(uint32_t aCapacity);
 
 private:
-  // Helpers for the Log()
-  bool UpdateStringsVector(const std::string& aString);
+  // Helper for the Log()
   void UpdateCrashReport();
 
 private:
@@ -270,8 +271,14 @@ CrashStatsLogForwarder::UpdateStringsVector(const std::string& aString)
 void CrashStatsLogForwarder::UpdateCrashReport()
 {
   std::stringstream message;
-  for(LoggingRecord::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
-    message << "|[" << Get<0>(*it) << "]" << Get<1>(*it) << " (t=" << Get<2>(*it) << ")";
+  if (XRE_IsParentProcess()) {
+    for(LoggingRecord::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
+      message << "|[" << Get<0>(*it) << "]" << Get<1>(*it) << " (t=" << Get<2>(*it) << ") ";
+    }
+  } else {
+    for(LoggingRecord::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
+      message << "|[C" << Get<0>(*it) << "]" << Get<1>(*it) << " (t=" << Get<2>(*it) << ") ";
+    }
   }
 
 #ifdef MOZ_CRASHREPORTER
@@ -286,12 +293,45 @@ void CrashStatsLogForwarder::UpdateCrashReport()
   }
 }
 
+class LogForwarderEvent : public nsRunnable
+{
+  virtual ~LogForwarderEvent() {}
+
+  NS_DECL_ISUPPORTS_INHERITED
+
+  explicit LogForwarderEvent(const nsCString& aMessage) : mMessage(aMessage) {}
+
+  NS_IMETHOD Run() override {
+    MOZ_ASSERT(NS_IsMainThread() && XRE_IsContentProcess());
+    dom::ContentChild* cc = dom::ContentChild::GetSingleton();
+    cc->SendGraphicsError(mMessage);
+    return NS_OK;
+  }
+
+protected:
+  nsCString mMessage;
+};
+
+NS_IMPL_ISUPPORTS_INHERITED0(LogForwarderEvent, nsRunnable);
+
 void CrashStatsLogForwarder::Log(const std::string& aString)
 {
   MutexAutoLock lock(mMutex);
 
   if (UpdateStringsVector(aString)) {
     UpdateCrashReport();
+  }
+
+  // Add it to the parent strings
+  if (!XRE_IsParentProcess()) {
+    nsCString stringToSend(aString.c_str());
+    if (NS_IsMainThread()) {
+      dom::ContentChild* cc = dom::ContentChild::GetSingleton();
+      cc->SendGraphicsError(stringToSend);
+    } else {
+      nsCOMPtr<nsIRunnable> r1 = new LogForwarderEvent(stringToSend);
+      NS_DispatchToMainThread(r1);
+    }
   }
 }
 
@@ -436,6 +476,7 @@ gfxPlatform::gfxPlatform()
   , mApzSupportCollector(this, &gfxPlatform::GetApzSupportInfo)
   , mCompositorBackend(layers::LayersBackend::LAYERS_NONE)
   , mScreenDepth(0)
+  , mDeviceCounter(0)
 {
     mAllowDownloadableFonts = UNINITIALIZED_VALUE;
     mFallbackUsesCmaps = UNINITIALIZED_VALUE;
@@ -518,6 +559,44 @@ gfxPlatform::Init()
 
     auto fwd = new CrashStatsLogForwarder("GraphicsCriticalError");
     fwd->SetCircularBufferSize(gfxPrefs::GfxLoggingCrashLength());
+
+    // Drop a note in the crash report if we end up forcing an option that could
+    // destabilize things.  New items should be appended at the end (of an existing
+    // or in a new section), so that we don't have to know the version to interpret
+    // these cryptic strings.
+    {
+      nsAutoCString forcedPrefs;
+      // D2D prefs
+      forcedPrefs.AppendPrintf("FP(D%d%d%d",
+                               gfxPrefs::Direct2DDisabled(),
+                               gfxPrefs::Direct2DForceEnabled(),
+                               gfxPrefs::DirectWriteFontRenderingForceEnabled());
+      // Layers prefs
+      forcedPrefs.AppendPrintf("-L%d%d%d%d%d%d",
+                               gfxPrefs::LayersAMDSwitchableGfxEnabled(),
+                               gfxPrefs::LayersAccelerationDisabled(),
+                               gfxPrefs::LayersAccelerationForceEnabled(),
+                               gfxPrefs::LayersD3D11DisableWARP(),
+                               gfxPrefs::LayersD3D11ForceWARP(),
+                               gfxPrefs::LayersOffMainThreadCompositionForceEnabled());
+      // WebGL prefs
+      forcedPrefs.AppendPrintf("-W%d%d%d%d%d%d%d%d",
+                               gfxPrefs::WebGLANGLEForceD3D11(),
+                               gfxPrefs::WebGLANGLEForceWARP(),
+                               gfxPrefs::WebGLDisabled(),
+                               gfxPrefs::WebGLDisableANGLE(),
+                               gfxPrefs::WebGLDXGLEnabled(),
+                               gfxPrefs::WebGLForceEnabled(),
+                               gfxPrefs::WebGLForceLayersReadback(),
+                               gfxPrefs::WebGLForceMSAA());
+      // Prefs that don't fit into any of the other sections
+      forcedPrefs.AppendPrintf("-T%d%d%d%d) ",
+                               gfxPrefs::AndroidRGB16Force(),
+                               gfxPrefs::CanvasAzureAccelerated(),
+                               gfxPrefs::DisableGralloc(),
+                               gfxPrefs::ForceShmemTiles());
+      ScopedGfxFeatureReporter::AppNote(forcedPrefs);
+    }
 
     mozilla::gfx::Config cfg;
     cfg.mLogForwarder = fwd;
@@ -814,24 +893,6 @@ gfxPlatform::CreateDrawTargetForSurface(gfxASurface *aSurface, const IntSize& aS
   return drawTarget.forget();
 }
 
-// This is a temporary function used by ContentClient to build a DrawTarget
-// around the gfxASurface. This should eventually be replaced by plumbing
-// the DrawTarget through directly
-already_AddRefed<DrawTarget>
-gfxPlatform::CreateDrawTargetForUpdateSurface(gfxASurface *aSurface, const IntSize& aSize)
-{
-#ifdef XP_MACOSX
-  // this is a bit of a hack that assumes that the buffer associated with the CGContext
-  // will live around long enough that nothing bad will happen.
-  if (aSurface->GetType() == gfxSurfaceType::Quartz) {
-    return Factory::CreateDrawTargetForCairoCGContext(static_cast<gfxQuartzSurface*>(aSurface)->GetCGContext(), aSize);
-  }
-#endif
-  MOZ_CRASH("GFX: unused function");
-  return nullptr;
-}
-
-
 cairo_user_data_key_t kSourceSurface;
 
 /**
@@ -906,11 +967,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     // readback of aSurface's surface into memory if, for example, aSurface
     // wraps an xlib cairo surface (which can be important to avoid a major
     // slowdown).
-    NativeSurface surf;
-    surf.mFormat = format;
-    surf.mType = NativeSurfaceType::CAIRO_CONTEXT;
-    surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = aSurface->GetSize();
+    //
     // We return here regardless of whether CreateSourceSurfaceFromNativeSurface
     // succeeds or not since we don't expect to be able to do any better below
     // if it fails.
@@ -923,7 +980,8 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     // strong reference back to srcBuffer, creating a reference loop and a
     // memory leak. Not caching is fine since wrapping is cheap enough (no
     // copying) so we can just wrap again next time we're called.
-    return aTarget->CreateSourceSurfaceFromNativeSurface(surf);
+    return Factory::CreateSourceSurfaceForCairoSurface(aSurface->CairoSurface(),
+                                                       aSurface->GetSize(), format);
   }
 
   RefPtr<SourceSurface> srcBuffer;
@@ -964,18 +1022,8 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     // readback), and the OptimizeSourceSurface may well copy again and upload
     // to the GPU. So, while this code path is rarely hit, hitting it may be
     // very slow.
-    NativeSurface surf;
-    surf.mFormat = format;
-    surf.mType = NativeSurfaceType::CAIRO_CONTEXT;
-    surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = aSurface->GetSize();
-    RefPtr<DrawTarget> drawTarget =
-      Factory::CreateDrawTarget(BackendType::CAIRO, IntSize(1, 1), format);
-    if (!drawTarget) {
-      gfxWarning() << "gfxPlatform::GetSourceSurfaceForSurface failed in CreateDrawTarget";
-      return nullptr;
-    }
-    srcBuffer = drawTarget->CreateSourceSurfaceFromNativeSurface(surf);
+    srcBuffer = Factory::CreateSourceSurfaceForCairoSurface(aSurface->CairoSurface(),
+                                                            aSurface->GetSize(), format);
     if (srcBuffer) {
       srcBuffer = aTarget->OptimizeSourceSurface(srcBuffer);
     }
@@ -1142,22 +1190,24 @@ gfxPlatform::SupportsAzureContentForDrawTarget(DrawTarget* aTarget)
   return SupportsAzureContentForType(aTarget->GetBackendType());
 }
 
-bool
-gfxPlatform::UseAcceleratedSkiaCanvas()
+bool gfxPlatform::UseAcceleratedCanvas()
 {
-  return gfxPrefs::CanvasAzureAccelerated() &&
-         mPreferredCanvasBackend == BackendType::SKIA;
-}
-
-bool gfxPlatform::HaveChoiceOfHWAndSWCanvas()
-{
-  return mPreferredCanvasBackend == BackendType::SKIA;
+  // Allow acceleration on Skia if the preference is set, unless it's blocked
+  if (mPreferredCanvasBackend == BackendType::SKIA && gfxPrefs::CanvasAzureAccelerated()) {
+    nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
+    int32_t status;
+    return !gfxInfo ||
+      (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_CANVAS2D_ACCELERATION,
+                                              &status)) &&
+       status == nsIGfxInfo::FEATURE_STATUS_OK);
+  }
+  return false;
 }
 
 void
 gfxPlatform::InitializeSkiaCacheLimits()
 {
-  if (UseAcceleratedSkiaCanvas()) {
+  if (UseAcceleratedCanvas()) {
 #ifdef USE_SKIA_GPU
     bool usingDynamicCache = gfxPrefs::CanvasSkiaGLDynamicCache();
     int cacheItemLimit = gfxPrefs::CanvasSkiaGLCacheItems();
@@ -1189,7 +1239,7 @@ SkiaGLGlue*
 gfxPlatform::GetSkiaGLGlue()
 {
 #ifdef USE_SKIA_GPU
-  if (!gfxPlatform::GetPlatform()->UseAcceleratedSkiaCanvas()) {
+  if (!UseAcceleratedCanvas()) {
     gfxCriticalNote << "Accelerated Skia canvas is disabled";
     return nullptr;
   }
@@ -1978,8 +2028,8 @@ InitLayersAccelerationPrefs()
 #endif
         NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING,
                                                &status))) {
-      if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
-        sLayersSupportsHardwareVideoDecoding = true;
+        if (status == nsIGfxInfo::FEATURE_STATUS_OK || gfxPrefs::HardwareVideoDecodingForceEnabled()) {
+           sLayersSupportsHardwareVideoDecoding = true;
       }
     }
 
@@ -2097,8 +2147,7 @@ gfxPlatform::UsesOffMainThreadCompositing()
     result =
       sPrefBrowserTabsRemoteAutostart ||
       gfxPrefs::LayersOffMainThreadCompositionEnabled() ||
-      gfxPrefs::LayersOffMainThreadCompositionForceEnabled() ||
-      gfxPrefs::LayersOffMainThreadCompositionTestingEnabled();
+      gfxPrefs::LayersOffMainThreadCompositionForceEnabled();
 #if defined(MOZ_WIDGET_GTK)
     // Linux users who chose OpenGL are being grandfathered in to OMTC
     result |= gfxPrefs::LayersAccelerationForceEnabled();
@@ -2314,4 +2363,10 @@ bool
 gfxPlatform::SupportsApzDragInput() const
 {
   return gfxPrefs::APZDragEnabled();
+}
+
+void
+gfxPlatform::BumpDeviceCounter()
+{
+  mDeviceCounter++;
 }

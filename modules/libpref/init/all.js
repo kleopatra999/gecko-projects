@@ -112,9 +112,6 @@ pref("offline-apps.quota.warn",        51200);
 // cache compression turned off for now - see bug #715198
 pref("browser.cache.compression_level", 0);
 
-// Whether or not MozAbortablePromise is enabled.
-pref("dom.abortablepromise.enabled", false);
-
 // Whether or not testing features are enabled.
 pref("dom.quotaManager.testing", false);
 
@@ -132,9 +129,6 @@ pref("dom.indexedDB.logging.profiler-marks", false);
 // Whether or not File Handle is enabled.
 pref("dom.fileHandle.enabled", true);
 
-// Whether or not the Permissions API is enabled.
-pref("dom.permissions.enabled", true);
-
 // Whether or not selection events are enabled
 #ifdef NIGHTLY_BUILD
 pref("dom.select_events.enabled", true);
@@ -145,15 +139,9 @@ pref("dom.select_events.enabled", false);
 // Whether or not Web Workers are enabled.
 pref("dom.workers.enabled", true);
 // The number of workers per domain allowed to run concurrently.
-pref("dom.workers.maxPerDomain", 20);
+pref("dom.workers.maxPerDomain", 50);
 
 pref("dom.serviceWorkers.enabled", false);
-
-// Allow service workers to intercept network requests using the fetch event
-pref("dom.serviceWorkers.interception.enabled", false);
-
-// Allow service workers to intercept opaque (cross origin) responses
-pref("dom.serviceWorkers.interception.opaque.enabled", true);
 
 // The amount of time (milliseconds) service workers keep running after each event.
 pref("dom.serviceWorkers.idle_timeout", 30000);
@@ -209,6 +197,12 @@ pref("dom.url.getters_decode_hash", false);
 // significantly increase the number of compartments in the system.
 pref("dom.compartment_per_addon", true);
 
+#ifdef NIGHTLY_BUILD
+pref("dom.document.scrollingElement.enabled", true);
+#else
+pref("dom.document.scrollingElement.enabled", false);
+#endif
+
 // Fastback caching - if this pref is negative, then we calculate the number
 // of content viewers to cache based on the amount of available memory.
 pref("browser.sessionhistory.max_total_viewers", -1);
@@ -217,6 +211,9 @@ pref("ui.use_native_colors", true);
 pref("ui.click_hold_context_menus", false);
 // Duration of timeout of incremental search in menus (ms).  0 means infinite.
 pref("ui.menu.incremental_search.timeout", 1000);
+// If true, all popups won't hide automatically on blur
+pref("ui.popup.disable_autohide", false);
+
 pref("browser.display.use_document_fonts",  1);  // 0 = never, 1 = quick, 2 = always
 // 0 = default: always, except in high contrast mode
 // 1 = always
@@ -306,6 +303,7 @@ pref("media.play-stand-alone", true);
 pref("media.block-play-until-visible", false);
 
 pref("media.hardware-video-decoding.enabled", true);
+pref("media.hardware-video-decoding.force-enabled", false);
 
 pref("media.decoder.heuristic.dormant.enabled", true);
 pref("media.decoder.heuristic.dormant.timeout", 60000);
@@ -325,9 +323,17 @@ pref("media.wmf.enabled", true);
 pref("media.wmf.decoder.thread-count", -1);
 pref("media.wmf.low-latency.enabled", false);
 pref("media.wmf.skip-blacklist", false);
+pref("media.windows-media-foundation.allow-d3d11-dxva", true);
 #endif
 #if defined(MOZ_FFMPEG)
+#if defined(XP_MACOSX)
+pref("media.ffmpeg.enabled", false);
+#else
 pref("media.ffmpeg.enabled", true);
+#endif
+#endif
+#if defined(MOZ_FFVPX)
+pref("media.ffvpx.enabled", true);
 #endif
 pref("media.gmp.decoder.enabled", false);
 pref("media.gmp.decoder.aac", 0);
@@ -338,6 +344,7 @@ pref("media.raw.enabled", true);
 pref("media.ogg.enabled", true);
 pref("media.opus.enabled", true);
 pref("media.wave.enabled", true);
+pref("media.wave.decoder.enabled", true);
 pref("media.webm.enabled", true);
 #if defined(MOZ_FMP4) && defined(MOZ_WMF)
 pref("media.webm.intel_decoder.enabled", false);
@@ -378,12 +385,8 @@ pref("media.navigator.video.h264.level", 12); // 0x42E00C - level 1.2
 pref("media.navigator.video.h264.max_br", 700); // 8x10
 pref("media.navigator.video.h264.max_mbps", 11880); // CIF@30fps
 pref("media.peerconnection.video.h264_enabled", false);
+pref("media.peerconnection.video.vp9_enabled", false);
 pref("media.getusermedia.aec", 4);
-// Gonk typically captures at QVGA, and so min resolution is QQVGA or
-// 160x120; 100Kbps is plenty for that.
-pref("media.peerconnection.video.min_bitrate", 100);
-pref("media.peerconnection.video.start_bitrate", 220);
-pref("media.peerconnection.video.max_bitrate", 1000);
 #else
 pref("media.navigator.video.default_width",0);  // adaptive default
 pref("media.navigator.video.default_height",0); // adaptive default
@@ -397,14 +400,18 @@ pref("media.navigator.video.h264.max_mbps", 0);
 pref("media.peerconnection.video.h264_enabled", false);
 pref("media.getusermedia.aec", 1);
 pref("media.getusermedia.browser.enabled", true);
+#endif
+// Gonk typically captures at QVGA, and so min resolution is QQVGA or
+// 160x120; 100Kbps is plenty for that.
 // Desktop is typically VGA capture or more; and qm_select will not drop resolution
 // below 1/2 in each dimension (or so), so QVGA (320x200) is the lowest here usually.
-pref("media.peerconnection.video.min_bitrate", 200);
-pref("media.peerconnection.video.start_bitrate", 300);
-pref("media.peerconnection.video.max_bitrate", 2000);
-#endif
+pref("media.peerconnection.video.min_bitrate", 0);
+pref("media.peerconnection.video.start_bitrate", 0);
+pref("media.peerconnection.video.max_bitrate", 0);
+pref("media.peerconnection.video.min_bitrate_estimate", 0);
 pref("media.navigator.audio.fake_frequency", 1000);
 pref("media.navigator.permission.disabled", false);
+pref("media.peerconnection.simulcast", true);
 pref("media.peerconnection.default_iceservers", "[]");
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 pref("media.peerconnection.ice.tcp", false);
@@ -435,27 +442,33 @@ pref("media.getusermedia.aec_delay_agnostic", true);
 pref("media.getusermedia.noise", 1);
 pref("media.getusermedia.agc_enabled", false);
 pref("media.getusermedia.agc", 1);
-// Adjustments for OS-specific input delay (lower bound)
-// Adjustments for OS-specific AudioStream+cubeb+output delay (lower bound)
+// capture_delay: Adjustments for OS-specific input delay (lower bound)
+// playout_delay: Adjustments for OS-specific AudioStream+cubeb+output delay (lower bound)
+// full_duplex: enable cubeb full-duplex capture/playback
 #if defined(XP_MACOSX)
 pref("media.peerconnection.capture_delay", 50);
 pref("media.getusermedia.playout_delay", 10);
+pref("media.navigator.audio.full_duplex", false);
 #elif defined(XP_WIN)
 pref("media.peerconnection.capture_delay", 50);
 pref("media.getusermedia.playout_delay", 40);
+pref("media.navigator.audio.full_duplex", false);
 #elif defined(ANDROID)
 pref("media.peerconnection.capture_delay", 100);
 pref("media.getusermedia.playout_delay", 100);
+pref("media.navigator.audio.full_duplex", false);
 // Whether to enable Webrtc Hardware acceleration support
 pref("media.navigator.hardware.vp8_encode.acceleration_enabled", false);
 pref("media.navigator.hardware.vp8_decode.acceleration_enabled", false);
 #elif defined(XP_LINUX)
 pref("media.peerconnection.capture_delay", 70);
 pref("media.getusermedia.playout_delay", 50);
+pref("media.navigator.audio.full_duplex", false);
 #else
 // *BSD, others - merely a guess for now
 pref("media.peerconnection.capture_delay", 50);
 pref("media.getusermedia.playout_delay", 50);
+pref("media.navigator.audio.full_duplex", false);
 #endif
 #endif
 
@@ -464,10 +477,10 @@ pref("media.getusermedia.screensharing.enabled", true);
 #endif
 
 #ifdef RELEASE_BUILD
-pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com,*.mypurecloud.com,*.mypurecloud.com.au,spreed.me,*.spreed.me,*.spreed.com,air.mozilla.org,*.circuit.com,*.yourcircuit.com,circuit.siemens.com,yourcircuit.siemens.com,circuitsandbox.net,*.unify.com,tandi.circuitsandbox.net");
+pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com,*.mypurecloud.com,*.mypurecloud.com.au,spreed.me,*.spreed.me,*.spreed.com,air.mozilla.org,*.circuit.com,*.yourcircuit.com,circuit.siemens.com,yourcircuit.siemens.com,circuitsandbox.net,*.unify.com,tandi.circuitsandbox.net,*.ericsson.net,*.cct.ericsson.net,*.opentok.com,*.conf.meetecho.com,meet.jit.si,*.meet.jit.si,web.stage.speakeasyapp.net,web.speakeasyapp.net,*.hipchat.me,*.beta-wspbx.com,*.wspbx.com,*.unifiedcloudit.com,*.smartboxuc.com,*.smartbox-uc.com,*.panterranetworks.com,pexipdemo.com,*.pexipdemo.com,pex.me,*.pex.me,*.rd.pexip.com,1click.io,*.1click.io,*.fuze.com,*.fuzemeeting.com,*.thinkingphones.com,gotomeeting.com,*.gotomeeting.com,gotowebinar.com,*.gotowebinar.com,gototraining.com,*.gototraining.com,citrix.com,*.citrix.com,expertcity.com,*.expertcity.com,citrixonline.com,*.citrixonline.com,g2m.me,*.g2m.me,gotomeet.me,*.gotomeet.me,gotomeet.at,*.gotomeet.at");
 #else
  // temporary value, not intended for release - bug 1049087
-pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com,*.mypurecloud.com,*.mypurecloud.com.au,spreed.me,*.spreed.me,*.spreed.com,air.mozilla.org,*.circuit.com,*.yourcircuit.com,circuit.siemens.com,yourcircuit.siemens.com,circuitsandbox.net,*.unify.com,tandi.circuitsandbox.net");
+pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com,*.mypurecloud.com,*.mypurecloud.com.au,spreed.me,*.spreed.me,*.spreed.com,air.mozilla.org,*.circuit.com,*.yourcircuit.com,circuit.siemens.com,yourcircuit.siemens.com,circuitsandbox.net,*.unify.com,tandi.circuitsandbox.net,*.ericsson.net,*.cct.ericsson.net,*.opentok.com,*.conf.meetecho.com,meet.jit.si,*.meet.jit.si,web.stage.speakeasyapp.net,web.speakeasyapp.net,*.hipchat.me,*.beta-wspbx.com,*.wspbx.com,*.unifiedcloudit.com,*.smartboxuc.com,*.smartbox-uc.com,*.panterranetworks.com,pexipdemo.com,*.pexipdemo.com,pex.me,*.pex.me,*.rd.pexip.com,1click.io,*.1click.io,*.fuze.com,*.fuzemeeting.com,*.thinkingphones.com,gotomeeting.com,*.gotomeeting.com,gotowebinar.com,*.gotowebinar.com,gototraining.com,*.gototraining.com,citrix.com,*.citrix.com,expertcity.com,*.expertcity.com,citrixonline.com,*.citrixonline.com,g2m.me,*.g2m.me,gotomeet.me,*.gotomeet.me,gotomeet.at,*.gotomeet.at");
 #endif
 // OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
 pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
@@ -486,12 +499,16 @@ pref("media.mediasource.enabled", true);
 
 pref("media.mediasource.mp4.enabled", true);
 
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
+#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GONK)
 pref("media.mediasource.webm.enabled", false);
 #else
 pref("media.mediasource.webm.enabled", true);
 #endif
 pref("media.mediasource.webm.audio.enabled", true);
+
+pref("media.benchmark.vp9.threshold", 150);
+pref("media.benchmark.frames", 300);
+pref("media.benchmark.timeout", 1000);
 
 #ifdef MOZ_WEBSPEECH
 pref("media.webspeech.recognition.enable", false);
@@ -550,6 +567,7 @@ pref("apz.content_response_timeout", 300);
 pref("apz.drag.enabled", false);
 pref("apz.danger_zone_x", 50);
 pref("apz.danger_zone_y", 100);
+pref("apz.displayport_expiry_ms", 15000);
 pref("apz.enlarge_displayport_when_clipped", false);
 pref("apz.fling_accel_base_mult", "1.0");
 pref("apz.fling_accel_interval_ms", 500);
@@ -560,7 +578,6 @@ pref("apz.fling_curve_function_x2", "1.0");
 pref("apz.fling_curve_function_y2", "1.0");
 pref("apz.fling_curve_threshold_inches_per_ms", "-1.0");
 pref("apz.fling_friction", "0.002");
-pref("apz.fling_repaint_interval", 16);
 pref("apz.fling_stop_on_tap_threshold", "0.05");
 pref("apz.fling_stopped_threshold", "0.01");
 pref("apz.highlight_checkerboarded_areas", false);
@@ -575,7 +592,7 @@ pref("apz.overscroll.spring_stiffness", "0.0018");
 pref("apz.overscroll.stop_distance_threshold", "5.0");
 pref("apz.overscroll.stop_velocity_threshold", "0.01");
 pref("apz.overscroll.stretch_factor", "0.35");
-pref("apz.pan_repaint_interval", 16);
+pref("apz.paint_skipping.enabled", true);
 
 // Whether to print the APZC tree for debugging
 pref("apz.printtree", false);
@@ -585,7 +602,6 @@ pref("apz.record_checkerboarding", true);
 #else
 pref("apz.record_checkerboarding", false);
 #endif
-pref("apz.smooth_scroll_repaint_interval", 16);
 pref("apz.test.logging_enabled", false);
 pref("apz.touch_start_tolerance", "0.1");
 pref("apz.touch_move_tolerance", "0.03");
@@ -593,9 +609,9 @@ pref("apz.velocity_bias", "1.0");
 pref("apz.velocity_relevance_time_ms", 150);
 pref("apz.x_skate_highmem_adjust", "0.0");
 pref("apz.y_skate_highmem_adjust", "0.0");
-pref("apz.x_skate_size_multiplier", "2.5");
+pref("apz.x_skate_size_multiplier", "1.25");
 pref("apz.y_skate_size_multiplier", "3.5");
-pref("apz.x_stationary_size_multiplier", "3.0");
+pref("apz.x_stationary_size_multiplier", "1.5");
 pref("apz.y_stationary_size_multiplier", "3.5");
 pref("apz.zoom_animation_duration_ms", 250);
 
@@ -603,11 +619,7 @@ pref("apz.zoom_animation_duration_ms", 250);
 // Mobile prefs
 pref("apz.allow_zooming", true);
 pref("apz.enlarge_displayport_when_clipped", true);
-pref("apz.fling_repaint_interval", 75);
-pref("apz.smooth_scroll_repaint_interval", 75);
-pref("apz.x_skate_size_multiplier", "1.25");
 pref("apz.y_skate_size_multiplier", "1.5");
-pref("apz.x_stationary_size_multiplier", "1.5");
 pref("apz.y_stationary_size_multiplier", "1.8");
 #endif
 
@@ -691,8 +703,8 @@ pref("gfx.font_rendering.opentype_svg.enabled", true);
 #ifdef XP_WIN
 // comma separated list of backends to use in order of preference
 // e.g., pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
-pref("gfx.canvas.azure.backends", "direct2d1.1,direct2d,skia,cairo");
-pref("gfx.content.azure.backends", "direct2d1.1,direct2d,cairo");
+pref("gfx.canvas.azure.backends", "direct2d1.1,skia,cairo");
+pref("gfx.content.azure.backends", "direct2d1.1,cairo");
 #else
 #ifdef XP_MACOSX
 pref("gfx.content.azure.backends", "cg");
@@ -716,6 +728,9 @@ pref("gfx.work-around-driver-bugs", true);
 pref("gfx.prefer-mesa-llvmpipe", false);
 
 pref("gfx.draw-color-bars", false);
+
+pref("gfx.logging.texture-usage.enabled", false);
+pref("gfx.logging.peak-texture-usage.enabled", false);
 
 pref("accessibility.browsewithcaret", false);
 pref("accessibility.warn_on_browsewithcaret", true);
@@ -892,9 +907,9 @@ pref("devtools.gcli.hideIntro", false);
 pref("devtools.gcli.eagerHelper", 2);
 
 // Alias to the script URLs for inject command.
-pref("devtools.gcli.jquerySrc", "https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js");
-pref("devtools.gcli.lodashSrc", "https://cdnjs.cloudflare.com/ajax/libs/lodash.js/2.4.1/lodash.min.js");
-pref("devtools.gcli.underscoreSrc", "https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.7.0/underscore-min.js");
+pref("devtools.gcli.jquerySrc", "https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.1/jquery.min.js");
+pref("devtools.gcli.lodashSrc", "https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.6.1/lodash.min.js");
+pref("devtools.gcli.underscoreSrc", "https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js");
 
 // Set imgur upload client ID
 pref("devtools.gcli.imgurClientID", '0df414e888d7240');
@@ -907,9 +922,8 @@ pref("devtools.commands.dir", "");
 // Allows setting the performance marks for which telemetry metrics will be recorded.
 pref("devtools.telemetry.supported_performance_marks", "contentInteractive,navigationInteractive,navigationLoaded,visuallyLoaded,fullyLoaded,mediaEnumerated,scanEnd");
 
-// Deprecation warnings after DevTools file migration.  Bug 1204127 tracks
-// enabling this.
-pref("devtools.migration.warnings", false);
+// Deprecation warnings after DevTools file migration.
+pref("devtools.migration.warnings", true);
 
 // view source
 pref("view_source.syntax_highlight", true);
@@ -1013,7 +1027,11 @@ pref("print.print_edge_right", 0);
 pref("print.print_edge_bottom", 0);
 
 // Print via the parent process. This is only used when e10s is enabled.
+#if defined(XP_WIN)
+pref("print.print_via_parent", true);
+#else
 pref("print.print_via_parent", false);
+#endif
 
 // Pref used by the spellchecker extension to control the
 // maximum number of misspelled words that will be underlined
@@ -1130,6 +1148,7 @@ pref("javascript.options.strict.debug",     false);
 pref("javascript.options.baselinejit",      true);
 pref("javascript.options.ion",              true);
 pref("javascript.options.asmjs",            true);
+pref("javascript.options.wasm",             false);
 pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
 #if !defined(RELEASE_BUILD) && !defined(ANDROID) && !defined(MOZ_B2G) && !defined(XP_IOS)
@@ -1184,6 +1203,9 @@ pref("javascript.options.shared_memory", true);
 #else
 pref("javascript.options.shared_memory", false);
 #endif
+
+pref("javascript.options.throw_on_debuggee_would_run", false);
+pref("javascript.options.dump_stack_on_debuggee_would_run", false);
 
 // advanced prefs
 pref("advanced.mailftp",                    false);
@@ -1316,7 +1338,7 @@ pref("network.http.max-persistent-connections-per-proxy", 32);
 pref("network.http.request.max-start-delay", 10);
 
 // If a connection is reset, we will retry it max-attempts times.
-pref("network.http.request.max-attempts", 3);
+pref("network.http.request.max-attempts", 6);
 
 // Headers
 pref("network.http.accept.default", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
@@ -1481,6 +1503,10 @@ pref("network.ftp.control.qos", 0);
 
 // The max time to spend on xpcom events between two polls in ms.
 pref("network.sts.max_time_for_events_between_two_polls", 100);
+
+// During shutdown we limit PR_Close calls. If time exceeds this pref (in ms)
+// let sockets just leak.
+pref("network.sts.max_time_for_pr_close_during_shutdown", 5000);
 // </http>
 
 // 2147483647 == PR_INT32_MAX == ~2 GB
@@ -1846,7 +1872,6 @@ pref("network.cookie.cookieBehavior",       0); // Keep the old default of accep
 #endif
 pref("network.cookie.thirdparty.sessionOnly", false);
 pref("network.cookie.lifetimePolicy",       0); // 0-accept, 1-dontUse 2-acceptForSession, 3-acceptForNDays
-pref("network.cookie.alwaysAcceptSessionCookies", false);
 pref("network.cookie.prefsMigrated",        false);
 pref("network.cookie.lifetime.days",        90); // Ignored unless network.cookie.lifetimePolicy is 3.
 
@@ -1860,6 +1885,9 @@ pref("network.proxy.autoconfig_retry_interval_max", 300);  // 5 minutes
 
 // Use the HSTS preload list by default
 pref("network.stricttransportsecurity.preloadlist", true);
+
+// Use JS mDNS as a fallback
+pref("network.mdns.use_js_fallback", false);
 
 pref("converter.html2txt.structs",          true); // Output structured phrases (strong, em, code, sub, sup, b, i, u)
 pref("converter.html2txt.header_strategy",  1); // 0 = no indention; 1 = indention, increased with header level; 2 = numbering and slight indention
@@ -2007,6 +2035,10 @@ pref("security.cert_pinning.enforcement_level", 0);
 // for tests.
 pref("security.cert_pinning.process_headers_from_non_builtin_roots", false);
 
+// If set to true, allow view-source URIs to be opened from URIs that share
+// their protocol with the inner URI of the view-source URI
+pref("security.view-source.reachable-from-inner-protocol", false);
+
 // Modifier key prefs: default to Windows settings,
 // menu access key = alt, accelerator key = control.
 // Use 17 for Ctrl, 18 for Alt, 224 for Meta, 91 for Win, 0 for none. Mac settings in macprefs.js
@@ -2037,6 +2069,14 @@ pref("clipboard.autocopy", false);
 
 // Clipboard only supports text/plain
 pref("clipboard.plainTextOnly", false);
+
+#ifdef XP_WIN
+// Setting false you can disable 4th button and/or 5th button of your mouse.
+// 4th button is typically mapped to "Back" and 5th button is typically mapped
+// to "Forward" button.
+pref("mousebutton.4th.enabled", true);
+pref("mousebutton.5th.enabled", true);
+#endif
 
 // mouse wheel scroll transaction period of time (in milliseconds)
 pref("mousewheel.transaction.timeout", 1500);
@@ -2307,8 +2347,8 @@ pref("layout.css.convertFromNode.enabled", false);
 pref("layout.css.convertFromNode.enabled", true);
 #endif
 
-// Is support for CSS "text-align: true X" enabled?
-pref("layout.css.text-align-true-value.enabled", false);
+// Is support for CSS "text-align: unsafe X" enabled?
+pref("layout.css.text-align-unsafe-value.enabled", false);
 
 // Is support for CSS "float: inline-{start,end}" and
 // "clear: inline-{start,end}" enabled?
@@ -2492,6 +2532,9 @@ pref("layout.spammy_warnings.enabled", false);
 pref("layout.float-fragments-inside-column.enabled", true);
 
 // Is support for the Web Animations API enabled?
+// Before enabling this by default, make sure also CSSPseudoElement interface
+// has been spec'ed properly, or we should add a separate pref for
+// CSSPseudoElement interface. See Bug 1174575 for further details.
 #ifdef RELEASE_BUILD
 pref("dom.animations-api.core.enabled", false);
 #else
@@ -2600,16 +2643,16 @@ pref("dom.ipc.plugins.reportCrashURL", true);
 // Defaults to 30 seconds.
 pref("dom.ipc.plugins.unloadTimeoutSecs", 30);
 
-// Asynchronous plugin initialization should only be enabled on non-e10s
-// channels until some remaining bugs are resolved.
-#ifdef E10S_TESTING_ONLY
+// Asynchronous plugin initialization is on hold.
 pref("dom.ipc.plugins.asyncInit.enabled", false);
-#else
-pref("dom.ipc.plugins.asyncInit.enabled", true);
-#endif
 
+#ifdef RELEASE_BUILD
+// Allow the AsyncDrawing mode to be used for plugins.
+pref("dom.ipc.plugins.asyncdrawing.enabled", false);
+#else
 // Allow the AsyncDrawing mode to be used for plugins.
 pref("dom.ipc.plugins.asyncdrawing.enabled", true);
+#endif
 
 pref("dom.ipc.processCount", 1);
 
@@ -2975,7 +3018,7 @@ pref("font.name.sans-serif.zh-CN", "Microsoft YaHei");
 pref("font.name.monospace.zh-CN", "SimSun");
 pref("font.name.cursive.zh-CN", "KaiTi");
 pref("font.name-list.serif.zh-CN", "MS Song, SimSun, SimSun-ExtB");
-pref("font.name-list.sans-serif.zh-CN", "Microsoft YaHei, SimHei, Arial Unicode MS");
+pref("font.name-list.sans-serif.zh-CN", "Microsoft YaHei, SimHei");
 pref("font.name-list.monospace.zh-CN", "MS Song, SimSun, SimSun-ExtB");
 
 // Per Taiwanese users' demand. They don't want to use TC fonts for
@@ -3004,25 +3047,25 @@ pref("font.name-list.sans-serif.x-devanagari", "Nirmala UI, Mangal");
 pref("font.name-list.monospace.x-devanagari", "Mangal, Nirmala UI");
 
 pref("font.name.serif.x-tamil", "Latha");
-pref("font.name.sans-serif.x-tamil", "Code2000");
+pref("font.name.sans-serif.x-tamil", "Arial");
 pref("font.name.monospace.x-tamil", "Latha");
-pref("font.name-list.serif.x-tamil", "Latha, Code2000");
-pref("font.name-list.monospace.x-tamil", "Latha, Code2000");
+pref("font.name-list.serif.x-tamil", "Latha");
+pref("font.name-list.monospace.x-tamil", "Latha");
 
 # http://www.alanwood.net/unicode/fonts.html
 
 pref("font.name.serif.x-armn", "Sylfaen");
 pref("font.name.sans-serif.x-armn", "Arial AMU");
 pref("font.name.monospace.x-armn", "Arial AMU");
-pref("font.name-list.serif.x-armn", "Sylfaen,Arial Unicode MS, Code2000");
-pref("font.name-list.monospace.x-armn", "Arial AMU, Arial Unicode MS, Code2000");
+pref("font.name-list.serif.x-armn", "Sylfaen");
+pref("font.name-list.monospace.x-armn", "Arial AMU");
 
 pref("font.name.serif.x-beng", "Vrinda");
 pref("font.name.sans-serif.x-beng", "Vrinda");
 pref("font.name.monospace.x-beng", "Mitra Mono");
-pref("font.name-list.serif.x-beng", "Vrinda, Akaash, Likhan, Ekushey Punarbhaba, Code2000, Arial Unicode MS");
-pref("font.name-list.sans-serif.x-beng", "Vrinda, Akaash, Likhan, Ekushey Punarbhaba, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-beng", "Likhan, Mukti Narrow, Code2000, Arial Unicode MS");
+pref("font.name-list.serif.x-beng", "Vrinda, Akaash, Likhan, Ekushey Punarbhaba");
+pref("font.name-list.sans-serif.x-beng", "Vrinda, Akaash, Likhan, Ekushey Punarbhaba");
+pref("font.name-list.monospace.x-beng", "Likhan, Mukti Narrow");
 
 pref("font.name.serif.x-cans", "Aboriginal Serif");
 pref("font.name.sans-serif.x-cans", "Aboriginal Sans");
@@ -3034,60 +3077,60 @@ pref("font.name.serif.x-ethi", "Visual Geez Unicode");
 pref("font.name.sans-serif.x-ethi", "GF Zemen Unicode");
 pref("font.name.cursive.x-ethi", "Visual Geez Unicode Title");
 pref("font.name.monospace.x-ethi", "Ethiopia Jiret");
-pref("font.name-list.serif.x-ethi", "Visual Geez Unicode, Visual Geez Unicode Agazian, Code2000");
-pref("font.name-list.monospace.x-ethi", "Ethiopia Jiret, Code2000");
+pref("font.name-list.serif.x-ethi", "Visual Geez Unicode, Visual Geez Unicode Agazian");
+pref("font.name-list.monospace.x-ethi", "Ethiopia Jiret");
 
 pref("font.name.serif.x-geor", "Sylfaen");
 pref("font.name.sans-serif.x-geor", "BPG Classic 99U");
-pref("font.name.monospace.x-geor", "Code2000");
+pref("font.name.monospace.x-geor", "BPG Classic 99U");
 pref("font.name-list.serif.x-geor", "Sylfaen, BPG Paata Khutsuri U, TITUS Cyberbit Basic");
-pref("font.name-list.monospace.x-geor", "BPG Classic 99U, Code2000, Arial Unicode MS");
+pref("font.name-list.monospace.x-geor", "BPG Classic 99U");
 
 pref("font.name.serif.x-gujr", "Shruti");
 pref("font.name.sans-serif.x-gujr", "Shruti");
-pref("font.name.monospace.x-gujr", "Code2000");
-pref("font.name-list.serif.x-gujr", "Shruti, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-gujr", "Code2000, Shruti, Arial Unicode MS");
+pref("font.name.monospace.x-gujr", "Shruti");
+pref("font.name-list.serif.x-gujr", "Shruti");
+pref("font.name-list.monospace.x-gujr", "Shruti");
 
 pref("font.name.serif.x-guru", "Raavi");
-pref("font.name.sans-serif.x-guru", "Code2000");
-pref("font.name.monospace.x-guru", "Code2000");
-pref("font.name-list.serif.x-guru", "Raavi, Saab, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-guru", "Code2000, Raavi, Saab, Arial Unicode MS");
+pref("font.name.sans-serif.x-guru", "Arial");
+pref("font.name.monospace.x-guru", "Raavi");
+pref("font.name-list.serif.x-guru", "Raavi, Saab");
+pref("font.name-list.monospace.x-guru", "Raavi, Saab");
 
 pref("font.name.serif.x-khmr", "PhnomPenh OT");
 pref("font.name.sans-serif.x-khmr", "Khmer OS");
-pref("font.name.monospace.x-khmr", "Code2000");
+pref("font.name.monospace.x-khmr", "Khmer OS");
 pref("font.name-list.serif.x-khmr", "PhnomPenh OT,.Mondulkiri U GR 1.5, Khmer OS");
-pref("font.name-list.monospace.x-khmr", "Code2000, Khmer OS, Khmer OS System");
+pref("font.name-list.monospace.x-khmr", "Khmer OS, Khmer OS System");
 
 pref("font.name.serif.x-mlym", "Rachana_w01");
 pref("font.name.sans-serif.x-mlym", "Rachana_w01");
 pref("font.name.monospace.x-mlym", "Rachana_w01");
-pref("font.name-list.serif.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode, Code2000, Arial Unicode MS");
-pref("font.name-list.sans-serif.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode, Code2000, Arial Unicode MS");
+pref("font.name-list.serif.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode");
+pref("font.name-list.sans-serif.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode");
+pref("font.name-list.monospace.x-mlym", "AnjaliOldLipi, Kartika, ThoolikaUnicode");
 
 pref("font.name.serif.x-orya", "ori1Uni");
 pref("font.name.sans-serif.x-orya", "ori1Uni");
 pref("font.name.monospace.x-orya", "ori1Uni");
-pref("font.name-list.serif.x-orya", "Kalinga, ori1Uni, Code2000, Arial Unicode MS");
-pref("font.name-list.sans-serif.x-orya", "Kalinga, ori1Uni, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-orya", "Kalinga, ori1Uni, Code2000, Arial Unicode MS");
+pref("font.name-list.serif.x-orya", "Kalinga, ori1Uni");
+pref("font.name-list.sans-serif.x-orya", "Kalinga, ori1Uni");
+pref("font.name-list.monospace.x-orya", "Kalinga, ori1Uni");
 
 pref("font.name.serif.x-telu", "Gautami");
 pref("font.name.sans-serif.x-telu", "Gautami");
 pref("font.name.monospace.x-telu", "Gautami");
-pref("font.name-list.serif.x-telu", "Gautami, Akshar Unicode, Code2000, Arial Unicode MS");
-pref("font.name-list.sans-serif.x-telu", "Gautami, Akshar Unicode, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-telu", "Gautami, Akshar Unicode, Code2000, Arial Unicode MS");
+pref("font.name-list.serif.x-telu", "Gautami, Akshar Unicode");
+pref("font.name-list.sans-serif.x-telu", "Gautami, Akshar Unicode");
+pref("font.name-list.monospace.x-telu", "Gautami, Akshar Unicode");
 
 pref("font.name.serif.x-knda", "Tunga");
 pref("font.name.sans-serif.x-knda", "Tunga");
 pref("font.name.monospace.x-knda", "Tunga");
-pref("font.name-list.serif.x-knda", "Tunga, AksharUnicode, Code2000, Arial Unicode MS");
-pref("font.name-list.sans-serif.x-knda", "Tunga, AksharUnicode, Code2000, Arial Unicode MS");
-pref("font.name-list.monospace.x-knda", "Tunga, AksharUnicode, Code2000, Arial Unicode MS");
+pref("font.name-list.serif.x-knda", "Tunga, AksharUnicode");
+pref("font.name-list.sans-serif.x-knda", "Tunga, AksharUnicode");
+pref("font.name-list.monospace.x-knda", "Tunga, AksharUnicode");
 
 pref("font.name.serif.x-sinh", "Iskoola Pota");
 pref("font.name.sans-serif.x-sinh", "Iskoola Pota");
@@ -3192,6 +3235,9 @@ pref("plugin.scan.WindowsMediaPlayer", "7.0");
 // Locate plugins by the directories specified in the Windows registry for PLIDs
 // Which is currently HKLM\Software\MozillaPlugins\xxxPLIDxxx\Path
 pref("plugin.scan.plid.all", true);
+
+// Whether sending WM_MOUSEWHEEL and WM_MOUSEHWHEEL to plugins on Windows.
+pref("plugin.mousewheel.enabled", true);
 
 // Help Windows NT, 2000, and XP dialup a RAS connection
 // when a network address is unreachable.
@@ -4150,7 +4196,7 @@ pref("image.decode-immediately.enabled", false);
 pref("image.downscale-during-decode.enabled", true);
 
 // The default Accept header sent for images loaded over HTTP(S)
-pref("image.http.accept", "image/png,image/*;q=0.8,*/*;q=0.5");
+pref("image.http.accept", "*/*");
 
 // The threshold for inferring that changes to an <img> element's |src|
 // attribute by JavaScript represent an animation, in milliseconds. If the |src|
@@ -4333,6 +4379,7 @@ pref("layers.draw-tile-borders", false);
 pref("layers.draw-bigimage-borders", false);
 pref("layers.frame-counter", false);
 pref("layers.enable-tiles", false);
+pref("layers.single-tile.enabled", true);
 pref("layers.tiled-drawtarget.enabled", false);
 pref("layers.low-precision-buffer", false);
 pref("layers.progressive-paint", false);
@@ -4372,10 +4419,6 @@ pref("layers.tiled-drawtarget.enabled", true);
 pref("layers.tiles.edge-padding", true);
 #endif
 
-// same effect as layers.offmainthreadcomposition.enabled, but specifically for
-// use with tests.
-pref("layers.offmainthreadcomposition.testing.enabled", false);
-
 // Whether to animate simple opacity and transforms on the compositor
 pref("layers.offmainthreadcomposition.async-animations", true);
 
@@ -4396,7 +4439,7 @@ pref("gfx.apitrace.enabled",false);
 #ifdef MOZ_X11
 pref("gfx.content.use-native-pushlayer", true);
 #ifdef MOZ_WIDGET_GTK
-pref("gfx.xrender.enabled",true);
+pref("gfx.xrender.enabled",false);
 #endif
 #endif
 
@@ -4405,7 +4448,6 @@ pref("gfx.content.use-native-pushlayer", true);
 
 // Whether to disable the automatic detection and use of direct2d.
 pref("gfx.direct2d.disabled", false);
-pref("gfx.direct2d.use1_1", true);
 
 // Whether to attempt to enable Direct2D regardless of automatic detection or
 // blacklisting
@@ -4450,10 +4492,9 @@ pref("html5.flushtimer.initialdelay", 120);
 pref("html5.flushtimer.subsequentdelay", 120);
 
 // Push/Pop/Replace State prefs
-pref("browser.history.allowPushState", true);
-pref("browser.history.allowReplaceState", true);
-pref("browser.history.allowPopState", true);
 pref("browser.history.maxStateObjectSize", 655360);
+
+pref("browser.meta_refresh_when_inactive.disabled", false);
 
 // XPInstall prefs
 pref("xpinstall.whitelist.required", true);
@@ -4477,6 +4518,8 @@ pref("dom.webnotifications.serviceworker.enabled", true);
 
 // Alert animation effect, name is disableSlidingEffect for backwards-compat.
 pref("alerts.disableSlidingEffect", false);
+// Show favicons in web notifications.
+pref("alerts.showFavicons", false);
 
 // DOM full-screen API.
 pref("full-screen-api.enabled", false);
@@ -4485,6 +4528,8 @@ pref("full-screen-api.pointer-lock.enabled", true);
 // transition duration of fade-to-black and fade-from-black, unit: ms
 pref("full-screen-api.transition-duration.enter", "200 200");
 pref("full-screen-api.transition-duration.leave", "200 200");
+// timeout for black screen in fullscreen transition, unit: ms
+pref("full-screen-api.transition.timeout", 500);
 // time for the warning box stays on the screen before sliding out, unit: ms
 pref("full-screen-api.warning.timeout", 3000);
 // delay for the warning box to show when pointer stays on the top, unit: ms
@@ -4598,8 +4643,10 @@ pref("dom.mozPermissionSettings.enabled", false);
 
 // W3C touch events
 // 0 - disabled, 1 - enabled, 2 - autodetect
-// Enabling it for Windows is tracked by bug 736048.
-#if defined(XP_WIN) || defined(XP_MACOSX)
+// Autodetection is currently only supported on Windows and GTK3
+#if defined(XP_MACOSX)
+pref("dom.w3c_touch_events.enabled", 0);
+#elif defined(XP_WIN) && !defined(NIGHTLY_BUILD)
 pref("dom.w3c_touch_events.enabled", 0);
 #else
 pref("dom.w3c_touch_events.enabled", 2);
@@ -4740,6 +4787,11 @@ pref("dom.vr.oculus050.enabled", true);
 pref("dom.vr.cardboard.enabled", false);
 // 0 = never; 1 = only if real devices aren't there; 2 = always
 pref("dom.vr.add-test-devices", 0);
+// Pose prediction reduces latency effects by returning future predicted HMD
+// poses to callers of the WebVR API.  This currently only has an effect for
+// Oculus Rift on SDK 0.8 or greater.  It is disabled by default for now due to
+// frame uniformity issues with e10s.
+pref("dom.vr.poseprediction.enabled", false);
 // true = show the VR textures in our compositing output; false = don't.
 // true might have performance impact
 pref("gfx.vr.mirror-textures", false);
@@ -4910,6 +4962,12 @@ pref("layout.accessiblecaret.height", "36.0");
 pref("layout.accessiblecaret.margin-left", "-18.5");
 pref("layout.accessiblecaret.bar.width", "2.0");
 
+// Show the selection bars at the two ends of the selection highlight.
+pref("layout.accessiblecaret.bar.enabled", true);
+
+// Show the caret when long tapping on an empty content.
+pref("layout.accessiblecaret.caret_shown_when_long_tapping_on_empty_content", false);
+
 // Timeout in milliseconds to hide the accessiblecaret under cursor mode while
 // no one touches it. Set the value to 0 to disable this feature.
 pref("layout.accessiblecaret.timeout_ms", 3000);
@@ -4918,9 +4976,15 @@ pref("layout.accessiblecaret.timeout_ms", 3000);
 // or long tap events does not fired by APZ.
 pref("layout.accessiblecaret.use_long_tap_injector", true);
 
-// Selection change notifications generated by Javascript, or misc internal
-// events hide AccessibleCarets by default.
+// Use AccessibleCaret default behaviours.
 pref("layout.accessiblecaret.extendedvisibility", false);
+
+// By default, carets become tilt only when they are overlapping.
+pref("layout.accessiblecaret.always_tilt", false);
+
+// Selection change notifications generated by Javascript hide
+// AccessibleCarets and close UI interaction by default.
+pref("layout.accessiblecaret.allow_script_change_updates", false);
 
 // Optionally provide haptic feedback on longPress selection events.
 pref("layout.accessiblecaret.hapticfeedback", false);
@@ -5103,6 +5167,16 @@ pref("reader.has_used_toolbar", false);
 // Whether to use a vertical or horizontal toolbar.
 pref("reader.toolbar.vertical", true);
 
+#if !defined(ANDROID)
+pref("narrate.enabled", true);
+#else
+pref("narrate.enabled", false);
+#endif
+
+pref("narrate.test", false);
+pref("narrate.rate", 0);
+pref("narrate.voice", "automatic");
+
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
 // Whether to allow, on a Linux system that doesn't support the necessary sandboxing
 // features, loading Gecko Media Plugins unsandboxed.  However, EME CDMs will not be
@@ -5111,6 +5185,9 @@ pref("media.gmp.insecure.allow", false);
 #endif
 
 pref("dom.audiochannel.mutedByDefault", false);
+
+// Enable <details> and <summary> tags.
+pref("dom.details_element.enabled", false);
 
 // Secure Element API
 #ifdef MOZ_SECUREELEMENT
@@ -5157,3 +5234,5 @@ pref("dom.input.fallbackUploadDir", "");
 // Turn rewriting of youtube embeds on/off
 pref("plugins.rewrite_youtube_embeds", true);
 
+// Disable browser frames by default
+pref("dom.mozBrowserFramesEnabled", false);

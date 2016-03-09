@@ -1028,6 +1028,7 @@ nsNativeThemeGTK::GetExtraSizeForWidget(nsIFrame* aFrame, uint8_t aWidgetType,
         aExtra->left = left;
         break;
       }
+      return false;
     }
   case NS_THEME_FOCUS_OUTLINE:
     {
@@ -1054,6 +1055,7 @@ nsNativeThemeGTK::GetExtraSizeForWidget(nsIFrame* aFrame, uint8_t aWidgetType,
       } else {
         aExtra->bottom = extra;
       }
+      return false;
     }
   default:
     return false;
@@ -1271,6 +1273,7 @@ nsNativeThemeGTK::GetWidgetBorder(nsDeviceContext* aContext, nsIFrame* aFrame,
     // will need to fall through and use the default case as before.
     if (IsRegularMenuItem(aFrame))
       break;
+    MOZ_FALLTHROUGH;
   default:
     {
       GtkThemeWidgetType gtkWidgetType;
@@ -1558,8 +1561,9 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
   case NS_THEME_BUTTON_ARROW_NEXT:
   case NS_THEME_BUTTON_ARROW_PREVIOUS:
     {
-        moz_gtk_get_arrow_size(&aResult->width, &aResult->height);
-        *aIsOverridable = false;
+      moz_gtk_get_arrow_size(MOZ_GTK_TOOLBARBUTTON_ARROW,
+                             &aResult->width, &aResult->height);
+      *aIsOverridable = false;
     }
     break;
   case NS_THEME_CHECKBOX_CONTAINER:
@@ -1571,12 +1575,20 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
   case NS_THEME_TOOLBAR_BUTTON:
   case NS_THEME_TREEVIEW_HEADER_CELL:
     {
-      // Just include our border, and let the box code augment the size.
+      if (aWidgetType == NS_THEME_DROPDOWN) {
+        // Include the arrow size.
+        moz_gtk_get_arrow_size(MOZ_GTK_DROPDOWN,
+                               &aResult->width, &aResult->height);
+      }
+      // else the minimum size is missing consideration of container
+      // descendants; the value returned here will not be helpful, but the
+      // box model may consider border and padding with child minimum sizes.
+
       nsIntMargin border;
       nsNativeThemeGTK::GetWidgetBorder(aFrame->PresContext()->DeviceContext(),
                                         aFrame, aWidgetType, &border);
-      aResult->width = border.left + border.right;
-      aResult->height = border.top + border.bottom;
+      aResult->width += border.left + border.right;
+      aResult->height += border.top + border.bottom;
     }
     break;
   case NS_THEME_TOOLBAR_SEPARATOR:
@@ -1713,7 +1725,7 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     if (aFrame && aFrame->GetWritingMode().IsVertical()) {
       return false;
     }
-    // fall through
+    MOZ_FALLTHROUGH;
 
   case NS_THEME_BUTTON:
   case NS_THEME_BUTTON_FOCUS:

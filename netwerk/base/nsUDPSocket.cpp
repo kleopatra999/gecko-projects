@@ -252,7 +252,7 @@ nsUDPSocket::nsUDPSocket()
   : mLock("nsUDPSocket.mLock")
   , mFD(nullptr)
   , mAppId(NECKO_UNKNOWN_APP_ID)
-  , mIsInBrowserElement(false)
+  , mIsInIsolatedMozBrowserElement(false)
   , mAttached(false)
   , mByteReadCount(0)
   , mByteWriteCount(0)
@@ -273,11 +273,7 @@ nsUDPSocket::nsUDPSocket()
 
 nsUDPSocket::~nsUDPSocket()
 {
-  if (mFD) {
-    PR_Close(mFD);
-    mFD = nullptr;
-  }
-
+  CloseSocket();
   MOZ_COUNT_DTOR(nsUDPSocket);
 }
 
@@ -464,9 +460,9 @@ nsUDPSocket::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
 
   PRNetAddr prClientAddr;
   uint32_t count;
-  // Bug 1165423 - using 8k here because the packet could be larger
-  // than the MTU with fragmentation
-  char buff[8 * 1024];
+  // Bug 1252755 - use 9216 bytes to allign with nICEr and transportlayer to
+  // support the maximum size of jumbo frames
+  char buff[9216];
   count = PR_RecvFrom(mFD, buff, sizeof(buff), 0, &prClientAddr, PR_INTERVAL_NO_WAIT);
 
   if (count < 1) {
@@ -520,23 +516,22 @@ nsUDPSocket::OnSocketDetached(PRFileDesc *fd)
   if (mFD)
   {
     NS_ASSERTION(mFD == fd, "wrong file descriptor");
-    PR_Close(mFD);
-    mFD = nullptr;
+    CloseSocket();
   }
   SaveNetworkStats(true);
 
   if (mListener)
   {
     // need to atomically clear mListener.  see our Close() method.
-    nsCOMPtr<nsIUDPSocketListener> listener;
+    RefPtr<nsIUDPSocketListener> listener = nullptr;
     {
       MutexAutoLock lock(mLock);
-      mListener.swap(listener);
+      listener = mListener.forget();
     }
 
     if (listener) {
       listener->OnStopListening(this, mCondition);
-      NS_ProxyRelease(mListenerTarget, listener);
+      NS_ProxyRelease(mListenerTarget, listener.forget());
     }
   }
 }
@@ -608,7 +603,7 @@ nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
       return rv;
     }
 
-    rv = aPrincipal->GetIsInBrowserElement(&mIsInBrowserElement);
+    rv = aPrincipal->GetIsInIsolatedMozBrowserElement(&mIsInIsolatedMozBrowserElement);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -676,6 +671,41 @@ fail:
 }
 
 NS_IMETHODIMP
+nsUDPSocket::Connect(const NetAddr *aAddr)
+{
+  UDPSOCKET_LOG(("nsUDPSocket::Connect [this=%p]\n", this));
+
+  NS_ENSURE_ARG(aAddr);
+
+  bool onSTSThread = false;
+  mSts->IsOnCurrentThread(&onSTSThread);
+  NS_ASSERTION(onSTSThread, "NOT ON STS THREAD");
+  if (!onSTSThread) {
+    return NS_ERROR_FAILURE;
+  }
+
+  PRNetAddr prAddr;
+  NetAddrToPRNetAddr(aAddr, &prAddr);
+
+  if (PR_Connect(mFD, &prAddr, PR_INTERVAL_NO_WAIT) != PR_SUCCESS) {
+    NS_WARNING("Cannot PR_Connect");
+    return NS_ERROR_FAILURE;
+  }
+
+  // get the resulting socket address, which may have been updated.
+  PRNetAddr addr;
+  if (PR_GetSockName(mFD, &addr) != PR_SUCCESS)
+  {
+    NS_WARNING("cannot get socket name");
+    return NS_ERROR_FAILURE;
+  }
+
+  PRNetAddrToNetAddr(&addr, &mAddr);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsUDPSocket::Close()
 {
   {
@@ -684,13 +714,10 @@ nsUDPSocket::Close()
     // has been set.  otherwise, we should just close the socket here...
     if (!mListener)
     {
-      if (mFD)
-      {
-        // Here we want to go directly with closing the socket since some tests
-        // expects this happen synchronously.
-        PR_Close(mFD);
-        mFD = nullptr;
-      }
+      // Here we want to go directly with closing the socket since some tests
+      // expects this happen synchronously.
+      CloseSocket();
+
       SaveNetworkStats(true);
       return NS_OK;
     }
@@ -736,7 +763,7 @@ nsUDPSocket::SaveNetworkStats(bool aEnforce)
     // Create the event to save the network statistics.
     // the event is then dispathed to the main thread.
     RefPtr<nsRunnable> event =
-      new SaveNetworkStatsEvent(mAppId, mIsInBrowserElement, mActiveNetworkInfo,
+      new SaveNetworkStatsEvent(mAppId, mIsInIsolatedMozBrowserElement, mActiveNetworkInfo,
                                 mByteReadCount, mByteWriteCount, false);
     NS_DispatchToMainThread(event);
 
@@ -745,6 +772,55 @@ nsUDPSocket::SaveNetworkStats(bool aEnforce)
     mByteWriteCount = 0;
   }
 #endif
+}
+
+void
+nsUDPSocket::CloseSocket()
+{
+  if (mFD) {
+    if (gIOService->IsNetTearingDown() &&
+        ((PR_IntervalNow() - gIOService->NetTearingDownStarted()) >
+         gSocketTransportService->MaxTimeForPrClosePref())) {
+      // If shutdown last to long, let the socket leak and do not close it.
+      UDPSOCKET_LOG(("Intentional leak"));
+    } else {
+
+      PRIntervalTime closeStarted = 0;
+      if (gSocketTransportService->IsTelemetryEnabled()) {
+        closeStarted = PR_IntervalNow();
+      }
+
+      PR_Close(mFD);
+
+      if (gSocketTransportService->IsTelemetryEnabled()) {
+        PRIntervalTime now = PR_IntervalNow();
+        if (gIOService->IsNetTearingDown()) {
+          Telemetry::Accumulate(Telemetry::PRCLOSE_UDP_BLOCKING_TIME_SHUTDOWN,
+                                PR_IntervalToMilliseconds(now - closeStarted));
+
+        } else if (PR_IntervalToSeconds(now - gIOService->LastConnectivityChange())
+                   < 60) {
+          Telemetry::Accumulate(Telemetry::PRCLOSE_UDP_BLOCKING_TIME_CONNECTIVITY_CHANGE,
+                                PR_IntervalToMilliseconds(now - closeStarted));
+
+        } else if (PR_IntervalToSeconds(now - gIOService->LastNetworkLinkChange())
+                   < 60) {
+          Telemetry::Accumulate(Telemetry::PRCLOSE_UDP_BLOCKING_TIME_LINK_CHANGE,
+                                PR_IntervalToMilliseconds(now - closeStarted));
+
+        } else if (PR_IntervalToSeconds(now - gIOService->LastOfflineStateChange())
+                   < 60) {
+          Telemetry::Accumulate(Telemetry::PRCLOSE_UDP_BLOCKING_TIME_OFFLINE,
+                                PR_IntervalToMilliseconds(now - closeStarted));
+
+        } else {
+          Telemetry::Accumulate(Telemetry::PRCLOSE_UDP_BLOCKING_TIME_NORMAL,
+                                PR_IntervalToMilliseconds(now - closeStarted));
+        }
+      }
+    }
+    mFD = nullptr;
+  }
 }
 
 NS_IMETHODIMP
@@ -1389,6 +1465,33 @@ nsUDPSocket::SetMulticastLoopback(bool aLoopback)
 
   opt.option = PR_SockOpt_McastLoopback;
   opt.value.mcast_loopback = aLoopback;
+
+  nsresult rv = SetSocketOption(opt);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsUDPSocket::GetRecvBufferSize(int* size)
+{
+  // Bug 1252759 - missing support for GetSocketOption
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+nsUDPSocket::SetRecvBufferSize(int size)
+{
+  if (NS_WARN_IF(!mFD)) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  PRSocketOptionData opt;
+
+  opt.option = PR_SockOpt_RecvBufferSize;
+  opt.value.recv_buffer_size = size;
 
   nsresult rv = SetSocketOption(opt);
   if (NS_WARN_IF(NS_FAILED(rv))) {

@@ -36,6 +36,7 @@
 #include "MediaStatistics.h"
 #include "MediaStreamGraph.h"
 #include "TimeUnits.h"
+#include "SeekTarget.h"
 
 class nsIStreamListener;
 class nsIPrincipal;
@@ -52,51 +53,6 @@ enum class MediaEventType : int8_t;
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
-
-// Stores the seek target; the time to seek to, and whether an Accurate,
-// or "Fast" (nearest keyframe) seek was requested.
-struct SeekTarget {
-  enum Type {
-    Invalid,
-    PrevSyncPoint,
-    Accurate
-  };
-  SeekTarget()
-    : mTime(-1.0)
-    , mType(SeekTarget::Invalid)
-    , mEventVisibility(MediaDecoderEventVisibility::Observable)
-  {
-  }
-  SeekTarget(int64_t aTimeUsecs,
-             Type aType,
-             MediaDecoderEventVisibility aEventVisibility =
-               MediaDecoderEventVisibility::Observable)
-    : mTime(aTimeUsecs)
-    , mType(aType)
-    , mEventVisibility(aEventVisibility)
-  {
-  }
-  SeekTarget(const SeekTarget& aOther)
-    : mTime(aOther.mTime)
-    , mType(aOther.mType)
-    , mEventVisibility(aOther.mEventVisibility)
-  {
-  }
-  bool IsValid() const {
-    return mType != SeekTarget::Invalid;
-  }
-  void Reset() {
-    mTime = -1;
-    mType = SeekTarget::Invalid;
-  }
-  // Seek target time in microseconds.
-  int64_t mTime;
-  // Whether we should seek "Fast", or "Accurate".
-  // "Fast" seeks to the seek point preceeding mTime, whereas
-  // "Accurate" seeks as close as possible to mTime.
-  Type mType;
-  MediaDecoderEventVisibility mEventVisibility;
-};
 
 class MediaDecoder : public AbstractMediaDecoder
 {
@@ -277,6 +233,10 @@ public:
   // has shutdown.
   // Call on the main thread only.
   virtual bool IsEndedOrShutdown() const;
+
+  // Return true if the MediaDecoderOwner's error attribute is not null.
+  // If the MediaDecoder is shutting down, OwnerHasError will return true.
+  bool OwnerHasError() const;
 
 protected:
   // Updates the media duration. This is called while the media is being
@@ -530,6 +490,10 @@ private:
   virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus() { return mNextFrameStatus; }
   virtual MediaDecoderOwner::NextFrameStatus NextFrameBufferedStatus();
 
+  // Returns a string describing the state of the media player internal
+  // data. Used for debugging purposes.
+  virtual void GetMozDebugReaderData(nsAString& aString) {}
+
 protected:
   virtual ~MediaDecoder();
 
@@ -773,6 +737,9 @@ protected:
   // start playing back again.
   Mirror<int64_t> mPlaybackPosition;
 
+  // Used to distiguish whether the audio is producing sound.
+  Mirror<bool> mIsAudioDataAudible;
+
   // Volume of playback.  0.0 = muted. 1.0 = full volume.
   Canonical<double> mVolume;
 
@@ -868,6 +835,9 @@ public:
   }
 
 private:
+  // Notify owner when the audible state changed
+  void NotifyAudibleStateChanged();
+
   /* Functions called by ResourceCallback */
 
   // A media stream is assumed to be infinite if the metadata doesn't

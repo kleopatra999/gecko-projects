@@ -2,49 +2,95 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+"use strict";
+
 const { DOM: dom, createClass, PropTypes } = require("devtools/client/shared/vendor/react");
 const { getSourceNames } = require("devtools/client/shared/source-utils");
+const { L10N } = require("resource://devtools/client/shared/widgets/ViewHelpers.jsm").ViewHelpers;
+const l10n = new L10N("chrome://devtools/locale/components.properties");
 
-const Frame = module.exports = createClass({
-  displayName: "Frame",
-
+module.exports = createClass({
   propTypes: {
-    // SavedFrame
-    frame: PropTypes.object.isRequired,
+    // SavedFrame, or an object containing all the required properties.
+    frame: PropTypes.shape({
+      functionDisplayName: PropTypes.string,
+      source: PropTypes.string.isRequired,
+      line: PropTypes.number,
+      column: PropTypes.number,
+    }).isRequired,
     // Clicking on the frame link -- probably should link to the debugger.
     onClick: PropTypes.func.isRequired,
-    // Tooltip to display when hovering over the link to the frame;
-    // Something like "View source in debugger -> http://foo.com/file.js:100:2".
-    onClickTooltipString: PropTypes.string.isRequired,
-    // Source to display when cannot determine a good display name.
-    // Something like "(unknown)".
-    unknownSourceString: PropTypes.string.isRequired,
+    // Option to display a function name before the source link.
+    showFunctionName: PropTypes.bool,
+    // Option to display a host name after the source link.
+    showHost: PropTypes.bool,
   },
 
-  render() {
-    let { onClick, frame, onClickTooltipString, unknownSourceString } = this.props;
-    const { short, long, host } = getSourceNames(frame.source, unknownSourceString);
+  getDefaultProps() {
+    return {
+      showFunctionName: false,
+      showHost: false,
+    };
+  },
 
-    let func = frame.functionDisplayName || "";
-    let tooltip = `${func} (${long}:${frame.line}:${frame.column})`;
+  displayName: "Frame",
+
+  render() {
+    let { onClick, frame, showFunctionName, showHost } = this.props;
+    const { short, long, host } = getSourceNames(frame.source);
+
+    let tooltip = long;
+    // Exclude all falsy values, including `0`, as even
+    // a number 0 for line doesn't make sense, and should not be displayed.
+    if (frame.line) {
+      tooltip += `:${frame.line}`;
+      // Intentionally exclude 0
+      if (frame.column) {
+        tooltip += `:${frame.column}`;
+      }
+    }
+
+    let onClickTooltipString = l10n.getFormatStr("frame.viewsourceindebugger", tooltip);
+    let attributes = {
+      "data-url": long,
+      className: "frame-link",
+      title: tooltip,
+    };
 
     let fields = [
-      dom.span({ className: "frame-link-function-display-name" }, func),
       dom.a({
         className: "frame-link-filename",
         onClick,
         title: onClickTooltipString
-      }, short),
-      dom.span({ className: "frame-link-colon" }, ":"),
-      dom.span({ className: "frame-link-line" }, frame.line),
-      dom.span({ className: "frame-link-colon" }, ":"),
-      dom.span({ className: "frame-link-column" }, frame.column)
+      }, short)
     ];
 
-    if (host) {
+    // Intentionally exclude 0
+    if (frame.line) {
+      fields.push(dom.span({ className: "frame-link-colon" }, ":"));
+      fields.push(dom.span({ className: "frame-link-line" }, frame.line));
+      // Intentionally exclude 0
+      if (frame.column) {
+        fields.push(dom.span({ className: "frame-link-colon" }, ":"));
+        fields.push(dom.span({ className: "frame-link-column" }, frame.column));
+        // Add `data-column` attribute for testing
+        attributes["data-column"] = frame.column;
+      }
+
+      // Add `data-line` attribute for testing
+      attributes["data-line"] = frame.line;
+    }
+
+    if (showFunctionName && frame.functionDisplayName) {
+      fields.unshift(
+        dom.span({ className: "frame-link-function-display-name" }, frame.functionDisplayName)
+      );
+    }
+
+    if (showHost && host) {
       fields.push(dom.span({ className: "frame-link-host" }, host));
     }
 
-    return dom.span({ className: "frame-link", title: tooltip }, ...fields);
+    return dom.span(attributes, ...fields);
   }
 });

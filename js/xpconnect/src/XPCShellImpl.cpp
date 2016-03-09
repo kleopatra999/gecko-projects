@@ -98,6 +98,20 @@ private:
     nsCOMPtr<nsIFile> mAppFile;
 };
 
+#ifdef XP_WIN
+class MOZ_STACK_CLASS AutoAudioSession
+{
+public:
+    AutoAudioSession() {
+        widget::StartAudioSession();
+    }
+
+    ~AutoAudioSession() {
+        widget::StopAudioSession();
+    }
+};
+#endif
+
 static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect;1";
 
 #define EXITCODE_RUNTIME_ERROR 3
@@ -547,13 +561,13 @@ Btoa(JSContext* cx, unsigned argc, Value* vp)
   return xpc::Base64Encode(cx, args[0], args.rval());
 }
 
-static PersistentRootedValue sScriptedInterruptCallback;
+static PersistentRootedValue *sScriptedInterruptCallback = nullptr;
 
 static bool
 XPCShellInterruptCallback(JSContext* cx)
 {
-    MOZ_ASSERT(sScriptedInterruptCallback.initialized());
-    RootedValue callback(cx, sScriptedInterruptCallback);
+    MOZ_ASSERT(sScriptedInterruptCallback->initialized());
+    RootedValue callback(cx, *sScriptedInterruptCallback);
 
     // If no interrupt callback was set by script, no-op.
     if (callback.isUndefined())
@@ -575,7 +589,7 @@ XPCShellInterruptCallback(JSContext* cx)
 static bool
 SetInterruptCallback(JSContext* cx, unsigned argc, Value* vp)
 {
-    MOZ_ASSERT(sScriptedInterruptCallback.initialized());
+    MOZ_ASSERT(sScriptedInterruptCallback->initialized());
 
     // Sanity-check args.
     JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
@@ -586,7 +600,7 @@ SetInterruptCallback(JSContext* cx, unsigned argc, Value* vp)
 
     // Allow callers to remove the interrupt callback by passing undefined.
     if (args[0].isUndefined()) {
-        sScriptedInterruptCallback = UndefinedValue();
+        *sScriptedInterruptCallback = UndefinedValue();
         return true;
     }
 
@@ -596,7 +610,7 @@ SetInterruptCallback(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    sScriptedInterruptCallback = args[0];
+    *sScriptedInterruptCallback = args[0];
 
     return true;
 }
@@ -795,7 +809,7 @@ typedef enum JSShellErrNum {
 
 static const JSErrorFormatString jsShell_ErrorFormatString[JSShellErr_Limit] = {
 #define MSG_DEF(name, number, count, exception, format) \
-    { format, count } ,
+    { #name, format, count } ,
 #include "jsshell.msg"
 #undef MSG_DEF
 };
@@ -970,7 +984,8 @@ ProcessArgsForCompartment(JSContext* cx, char** argv, int argc)
             break;
         case 'I':
             RuntimeOptionsRef(cx).toggleIon()
-                                 .toggleAsmJS();
+                                 .toggleAsmJS()
+                                 .toggleWasm();
             break;
         }
     }
@@ -1419,7 +1434,8 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
         // Override the default XPConnect interrupt callback. We could store the
         // old one and restore it before shutting down, but there's not really a
         // reason to bother.
-        sScriptedInterruptCallback.init(rt, UndefinedValue());
+        sScriptedInterruptCallback = new PersistentRootedValue;
+        sScriptedInterruptCallback->init(rt, UndefinedValue());
         JS_SetInterruptCallback(rt, XPCShellInterruptCallback);
 
         AutoJSAPI jsapi;
@@ -1501,7 +1517,7 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
 #ifdef XP_WIN
         // Plugin may require audio session if installed plugin can initialize
         // asynchronized.
-        widget::StartAudioSession();
+        AutoAudioSession audioSession;
 #endif
 
         {
@@ -1571,9 +1587,6 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
             JS_GC(rt);
         }
         JS_GC(rt);
-#ifdef XP_WIN
-        widget::StopAudioSession();
-#endif
     } // this scopes the nsCOMPtrs
 
     if (!XRE_ShutdownTestShell())

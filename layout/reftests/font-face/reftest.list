@@ -94,9 +94,6 @@ HTTP(..) == ahem-metrics-1.html ahem-metrics-1-ref.html
 HTTP(..) == ex-unit-1.html ex-unit-1-ref.html
 HTTP(..) == ex-unit-1-dynamic.html ex-unit-1-ref.html
 
-# bug 493976 - for some reason the Arabic tests below cause Tinderbox timeouts
-# HTTP(..) == src-format-arabic.html src-format-arabic-ot-ref.html
-
 == local-1.html local-1-ref.html
 == local-styled-1.html local-styled-1-ref.html
 
@@ -145,8 +142,8 @@ HTTP(..) == bug533251.html bug533251-ref.html
 HTTP(..) == font-familiy-whitespace-1.html font-familiy-whitespace-1-ref.html
 HTTP(..) != font-familiy-whitespace-1.html font-familiy-whitespace-1-notref.html
 
-skip-if(B2G||Mulet) HTTP(..) == ivs-1.html ivs-1-ref.html # bug 773482 # Initial mulet triage: parity with B2G/B2G Desktop
-skip-if(B2G||Mulet) HTTP(..) == cjkcisvs-1.html cjkcisvs-1-ref.html # Initial mulet triage: parity with B2G/B2G Desktop
+skip-if(B2G||Mulet||Android) HTTP(..) == ivs-1.html ivs-1-ref.html # bug 773482 # Initial mulet triage: parity with B2G/B2G Desktop # Android bug 1250229
+skip-if(B2G||Mulet||Android) HTTP(..) == cjkcisvs-1.html cjkcisvs-1-ref.html # Initial mulet triage: parity with B2G/B2G Desktop # Android bug 1250229
 
 skip-if(B2G||Mulet) HTTP(..) == missing-names.html missing-names-ref.html # bug 773482 # Initial mulet triage: parity with B2G/B2G Desktop
 
@@ -182,5 +179,5 @@ HTTP(..) == reflow-sanity-delay-1-metrics.html reflow-sanity-1-ref.html
 
 # font-display
 pref(layout.css.font-display.enabled,true) HTTP(..) == font-display-1.html font-display-1-ref.html # normal font load (~500ms)
-pref(layout.css.font-display.enabled,true) HTTP(..) == font-display-2.html font-display-2-ref.html # font load takes 4500ms
+pref(layout.css.font-display.enabled,true) fuzzy-if(OSX==1010,3,5) HTTP(..) == font-display-2.html font-display-2-ref.html # font load takes 4500ms
 

@@ -131,7 +131,9 @@ HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs)
                        a.loadInfo(), a.synthesizedResponseHead(),
                        a.synthesizedSecurityInfoSerialization(),
                        a.cacheKey(), a.schedulingContextID(), a.preflightArgs(),
-                       a.initialRwin(), a.suspendAfterSynthesizeResponse());
+                       a.initialRwin(), a.blockAuthPrompt(),
+                       a.suspendAfterSynthesizeResponse(),
+                       a.allowStaleCacheContent());
   }
   case HttpChannelCreationArgs::THttpChannelConnectArgs:
   {
@@ -197,14 +199,10 @@ HttpChannelParent::GetInterface(const nsIID& aIID, void **result)
   if (mTabParent && aIID.Equals(NS_GET_IID(nsIPrompt))) {
     nsCOMPtr<Element> frameElement = mTabParent->GetOwnerElement();
     if (frameElement) {
+      nsCOMPtr<nsPIDOMWindowOuter> win =frameElement->OwnerDoc()->GetWindow();
+      NS_ENSURE_TRUE(win, NS_ERROR_UNEXPECTED);
+
       nsresult rv;
-      nsCOMPtr<nsIDOMWindow> win =
-        do_QueryInterface(frameElement->OwnerDoc()->GetWindow(), &rv);
-
-      if (NS_WARN_IF(!NS_SUCCEEDED(rv))) {
-        return rv;
-      }
-
       nsCOMPtr<nsIWindowWatcher> wwatch =
         do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
 
@@ -264,7 +262,9 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const nsCString&           aSchedulingContextID,
                                  const OptionalCorsPreflightArgs& aCorsPreflightArgs,
                                  const uint32_t&            aInitialRwin,
-                                 const bool&                aSuspendAfterSynthesizeResponse)
+                                 const bool&                aBlockAuthPrompt,
+                                 const bool&                aSuspendAfterSynthesizeResponse,
+                                 const bool&                aAllowStaleCacheContent)
 {
   nsCOMPtr<nsIURI> uri = DeserializeURI(aURI);
   if (!uri) {
@@ -413,6 +413,8 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
 
   mChannel->SetCacheKey(cacheKey);
 
+  mChannel->SetAllowStaleCacheContent(aAllowStaleCacheContent);
+
   if (priority != nsISupportsPriority::PRIORITY_NORMAL) {
     mChannel->SetPriority(priority);
   }
@@ -426,6 +428,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
   mChannel->SetAllowSpdy(allowSpdy);
   mChannel->SetAllowAltSvc(allowAltSvc);
   mChannel->SetInitialRwin(aInitialRwin);
+  mChannel->SetBlockAuthPrompt(aBlockAuthPrompt);
 
   nsCOMPtr<nsIApplicationCacheChannel> appCacheChan =
     do_QueryObject(mChannel);
@@ -1122,6 +1125,9 @@ HttpChannelParent::OnStopRequest(nsIRequest *aRequest,
   // decodedBodySize can be computed in the child process so it doesn't need
   // to be passed down.
   mChannel->GetProtocolVersion(timing.protocolVersion);
+
+  mChannel->GetCacheReadStart(&timing.cacheReadStart);
+  mChannel->GetCacheReadEnd(&timing.cacheReadEnd);
 
   if (mIPCClosed || !SendOnStopRequest(aStatusCode, timing))
     return NS_ERROR_UNEXPECTED;

@@ -11,6 +11,7 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 #include "nsMemory.h"
+#include "GeckoProfiler.h"
 
 #include "nsLocalFile.h"
 #include "nsIDirectoryEnumerator.h"
@@ -480,6 +481,7 @@ ConvertWinError(DWORD aWinErr)
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
     case ERROR_INVALID_DRIVE:
+    case ERROR_NOT_READY:
       rv = NS_ERROR_FILE_NOT_FOUND;
       break;
     case ERROR_ACCESS_DENIED:
@@ -1070,6 +1072,7 @@ nsLocalFile::ResolveAndStat()
     return NS_OK;
   }
 
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   // we can't resolve/stat anything that isn't a valid NSPR addressable path
   if (mWorkingPath.IsEmpty()) {
     return NS_ERROR_FILE_INVALID_PATH;

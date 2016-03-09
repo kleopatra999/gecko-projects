@@ -14,15 +14,15 @@ function ViewedArrayBufferIfReified(tarray) {
 }
 
 function IsDetachedBuffer(buffer) {
-    // Typed arrays whose buffers are null use inline storage and can't have
-    // been neutered.
+    // A typed array with a null buffer has never had its buffer exposed to
+    // become detached.
     if (buffer === null)
         return false;
 
     assert(IsArrayBuffer(buffer) || IsSharedArrayBuffer(buffer),
            "non-ArrayBuffer passed to IsDetachedBuffer");
 
-    // Typed arrays whose buffers map shared memory can't have been neutered.
+    // Shared array buffers are not detachable.
     //
     // This check is more expensive than desirable, but IsDetachedBuffer is
     // only hot for non-shared memory in SetFromNonTypedArray, so there is an
@@ -32,7 +32,7 @@ function IsDetachedBuffer(buffer) {
 	return false;
 
     var flags = UnsafeGetInt32FromReservedSlot(buffer, JS_ARRAYBUFFER_FLAGS_SLOT);
-    return (flags & JS_ARRAYBUFFER_NEUTERED_FLAG) !== 0;
+    return (flags & JS_ARRAYBUFFER_DETACHED_FLAG) !== 0;
 }
 
 function GetAttachedArrayBuffer(tarray) {
@@ -100,8 +100,9 @@ function TypedArrayCopyWithin(target, start, end = undefined) {
     // Steps 15-17.
     //
     // Note that getting or setting a typed array element must throw if the
-    // typed array is neutered, so the intrinsic below checks for neutering.
-    // This happens *only* if a get/set occurs, i.e. when |count > 0|.
+    // underlying buffer is detached, so the intrinsic below checks for
+    // detachment.  This happens *only* if a get/set occurs, i.e. when
+    // |count > 0|.
     //
     // Also note that this copies elements effectively by memmove, *not* in
     // step 17's specified order.  This is unobservable, but it would be if we
@@ -413,8 +414,8 @@ function TypedArrayIndexOf(searchElement, fromIndex = 0) {
     if (len === 0)
         return -1;
 
-    // Steps 7-8.
-    var n = ToInteger(fromIndex);
+    // Steps 7-8.  Add zero to convert -0 to +0, per ES6 5.2.
+    var n = ToInteger(fromIndex) + 0;
 
     // Step 9.
     if (n >= len)
@@ -530,8 +531,8 @@ function TypedArrayLastIndexOf(searchElement, fromIndex = undefined) {
     if (len === 0)
         return -1;
 
-    // Steps 7-8.
-    var n = fromIndex === undefined ? len - 1 : ToInteger(fromIndex);
+    // Steps 7-8.  Add zero to convert -0 to +0, per ES6 5.2.
+    var n = fromIndex === undefined ? len - 1 : ToInteger(fromIndex) + 0;
 
     // Steps 9-10.
     var k = n >= 0 ? std_Math_min(n, len - 1) : len + n;
@@ -939,112 +940,6 @@ function TypedArraySome(callbackfn, thisArg = undefined) {
     return false;
 }
 
-// For sorting small arrays
-function InsertionSort(array, from, to, comparefn) {
-    var item, swap;
-    for (var i = from + 1; i <= to; i++) {
-        item = array[i];
-        for (var j = i - 1; j >= from; j--) {
-            swap = array[j];
-            if (comparefn(swap, item) <= 0)
-                break
-            array[j + 1] = swap;
-        }
-        array[j + 1] = item;
-    }
-}
-
-function SwapArrayElements(array, i, j) {
-    var swap = array[i];
-    array[i] = array[j];
-    array[j] = swap;
-}
-
-// Rearranges the elements in array[from:to + 1] and returns an index j such that:
-// - from < j < to
-// - each element in array[from:j] is less than or equal to array[j]
-// - each element in array[j + 1:to + 1] greater than or equal to array[j].
-function Partition(array, from, to, comparefn) {
-    assert(to - from >= 3,
-           "Partition will not work with less than three elements");
-
-    var median_i = (from + to) >> 1;
-
-    var i = from + 1;
-    var j = to;
-
-    SwapArrayElements(array, median_i, i);
-
-    // Median of three pivot selection
-    if (comparefn(array[from], array[to]) > 0)
-        SwapArrayElements(array, from, to);
-
-    if (comparefn(array[i], array[to]) > 0)
-        SwapArrayElements(array, i, to);
-
-    if (comparefn(array[from], array[i]) > 0)
-        SwapArrayElements(array, from, i);
-
-    var pivot_i = i;
-
-    // Hoare partition method
-    for(;;) {
-        do i++; while (comparefn(array[i], array[pivot_i]) < 0);
-        do j--; while (comparefn(array[j], array[pivot_i]) > 0);
-        if (i > j)
-            break;
-        SwapArrayElements(array, i, j);
-    }
-
-    SwapArrayElements(array, pivot_i, j);
-    return j;
-}
-
-// In-place QuickSort
-function QuickSort(array, len, comparefn) {
-    // Managing the stack ourselves seems to provide a small performance boost
-    var stack = new List();
-    var top = 0;
-
-    var start = 0;
-    var end   = len - 1;
-
-    var pivot_i, i, j, l_len, r_len;
-
-    for (;;) {
-        // Insertion sort for the first N elements where N is some value
-        // determined by performance testing.
-        if (end - start <= 23) {
-            InsertionSort(array, start, end, comparefn);
-            if (top < 1)
-                break;
-            end   = stack[--top];
-            start = stack[--top];
-        } else {
-            pivot_i = Partition(array, start, end, comparefn);
-
-            // Calculate the left and right sub-array lengths and save
-            // stack space by directly modifying start/end so that
-            // we sort the longest of the two during the next iteration.
-            // This reduces the maximum stack size to log2(len)
-            l_len = (pivot_i - 1) - start;
-            r_len = end - (pivot_i + 1);
-
-            if (r_len > l_len) {
-                stack[top++] = start;
-                stack[top++] = pivot_i - 1;
-                start = pivot_i + 1;
-            } else {
-                stack[top++] = pivot_i + 1;
-                stack[top++] = end;
-                end = pivot_i - 1;
-            }
-
-        }
-    }
-    return array;
-}
-
 // ES6 draft 20151210 22.2.3.26
 // Cases are ordered according to likelihood of occurrence
 // as opposed to the ordering in the spec.
@@ -1093,7 +988,22 @@ function TypedArraySort(comparefn) {
 
     if (comparefn === undefined) {
         comparefn = TypedArrayCompare;
-    } else {
+        // CountingSort doesn't invoke the comparefn
+        if (IsUint8TypedArray(obj)) {
+            return CountingSort(obj, len, false /* signed */);
+        } else if (IsInt8TypedArray(obj)) {
+            return CountingSort(obj, len, true /* signed */);
+        } else if (IsUint16TypedArray(obj)) {
+            return RadixSort(obj, len, 2 /* nbytes */, false /* signed */, false /* floating */, comparefn);
+        } else if (IsInt16TypedArray(obj)) {
+            return RadixSort(obj, len, 2 /* nbytes */, true /* signed */, false /* floating */, comparefn);
+        } else if (IsUint32TypedArray(obj)) {
+            return RadixSort(obj, len, 4 /* nbytes */, false /* signed */, false /* floating */, comparefn);
+        } else if (IsInt32TypedArray(obj)) {
+            return RadixSort(obj, len, 4 /* nbytes */, true /* signed */, false /* floating */, comparefn);
+        } else if (IsFloat32TypedArray(obj)) {
+            return RadixSort(obj, len, 4 /* nbytes */, true /* signed */, true /* floating */, comparefn);
+        }
         // To satisfy step 2 from TypedArray SortCompare described in 22.2.3.26
         // the user supplied comparefn is wrapped.
         var wrappedCompareFn = comparefn;

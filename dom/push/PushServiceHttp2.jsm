@@ -14,6 +14,7 @@ const {PushDB} = Cu.import("resource://gre/modules/PushDB.jsm");
 const {PushRecord} = Cu.import("resource://gre/modules/PushRecord.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/IndexedDBHelper.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
@@ -103,7 +104,7 @@ PushSubscriptionListener.prototype = {
   onPush: function(associatedChannel, pushChannel) {
     console.debug("PushSubscriptionListener: onPush()");
     var pushChannelListener = new PushChannelListener(this);
-    pushChannel.asyncOpen(pushChannelListener, pushChannel);
+    pushChannel.asyncOpen2(pushChannelListener);
   },
 
   disconnect: function() {
@@ -321,7 +322,7 @@ SubscriptionListener.prototype = {
       pushReceiptEndpoint: linkParserResult.pushReceiptEndpoint,
       scope: this._subInfo.record.scope,
       originAttributes: this._subInfo.record.originAttributes,
-      quota: this._subInfo.record.maxQuota,
+      systemRecord: this._subInfo.record.systemRecord,
       ctime: Date.now(),
     });
 
@@ -434,19 +435,8 @@ this.PushServiceHttp2 = {
   },
 
   _makeChannel: function(aUri) {
-
-    var ios = Cc["@mozilla.org/network/io-service;1"]
-                .getService(Ci.nsIIOService);
-
-    var chan = ios.newChannel2(aUri,
-                               null,
-                               null,
-                               null,      // aLoadingNode
-                               Services.scriptSecurityManager.getSystemPrincipal(),
-                               null,      // aTriggeringPrincipal
-                               Ci.nsILoadInfo.SEC_NORMAL,
-                               Ci.nsIContentPolicy.TYPE_OTHER)
-                 .QueryInterface(Ci.nsIHttpChannel);
+    var chan = NetUtil.newChannel({uri: aUri, loadUsingSystemPrincipal: true})
+                      .QueryInterface(Ci.nsIHttpChannel);
 
     var loadGroup = Cc["@mozilla.org/network/load-group;1"]
                       .createInstance(Ci.nsILoadGroup);
@@ -475,7 +465,7 @@ this.PushServiceHttp2 = {
           listener: null,
           countUnableToConnect: 0,
           lastStartListening: 0,
-          waitingForAlarm: false
+          retryTimerID: 0,
         };
         this._listenForMsgs(result.subscriptionUri);
         return result;
@@ -495,7 +485,7 @@ this.PushServiceHttp2 = {
 
       var chan = this._makeChannel(this._serverURI.spec);
       chan.requestMethod = "POST";
-      chan.asyncOpen(listener, null);
+      chan.asyncOpen2(listener);
     })
     .catch(err => {
       if ("retry" in err) {
@@ -511,7 +501,7 @@ this.PushServiceHttp2 = {
     return new Promise((resolve,reject) => {
       var chan = this._makeChannel(aUri);
       chan.requestMethod = "DELETE";
-      chan.asyncOpen(new PushServiceDelete(resolve, reject), null);
+      chan.asyncOpen2(new PushServiceDelete(resolve, reject));
     });
   },
 
@@ -545,10 +535,10 @@ this.PushServiceHttp2 = {
     chan.notificationCallbacks = listener;
 
     try {
-      chan.asyncOpen(listener, chan);
+      chan.asyncOpen2(listener);
     } catch (e) {
       console.error("listenForMsgs: Error connecting to push server.",
-        "asyncOpen failed", e);
+        "asyncOpen2 failed", e);
       conn.listener.disconnect();
       chan.cancel(Cr.NS_ERROR_ABORT);
       this._retryAfterBackoff(aSubscriptionUri, -1);
@@ -563,9 +553,7 @@ this.PushServiceHttp2 = {
 
   _ackMsgRecv: function(aAckUri) {
     console.debug("ackMsgRecv()", aAckUri);
-    // We can't do anything about it if it fails,
-    // so we don't listen for response.
-    this._deleteResource(aAckUri);
+    return this._deleteResource(aAckUri);
   },
 
   init: function(aOptions, aMainPushService, aServerURL) {
@@ -595,28 +583,20 @@ this.PushServiceHttp2 = {
 
     if (retryAfter !== -1) {
       // This is a 5xx response.
-      // To respect RetryAfter header, setTimeout is used. setAlarm sets a
-      // cumulative alarm so it will not always respect RetryAfter header.
       this._conns[aSubscriptionUri].countUnableToConnect++;
-      setTimeout(_ => this._listenForMsgs(aSubscriptionUri), retryAfter);
+      this._conns[aSubscriptionUri].retryTimerID =
+        setTimeout(_ => this._listenForMsgs(aSubscriptionUri), retryAfter);
       return;
     }
 
-    // we set just one alarm because most probably all connection will go over
-    // a single TCP connection.
     retryAfter = prefs.get("http2.retryInterval") *
       Math.pow(2, this._conns[aSubscriptionUri].countUnableToConnect);
 
     retryAfter = retryAfter * (0.8 + Math.random() * 0.4); // add +/-20%.
 
     this._conns[aSubscriptionUri].countUnableToConnect++;
-
-    if (retryAfter === 0) {
-      setTimeout(_ => this._listenForMsgs(aSubscriptionUri), 0);
-    } else {
-      this._conns[aSubscriptionUri].waitingForAlarm = true;
-      this._mainPushService.setAlarm(retryAfter);
-    }
+    this._conns[aSubscriptionUri].retryTimerID =
+      setTimeout(_ => this._listenForMsgs(aSubscriptionUri), retryAfter);
 
     console.debug("retryAfterBackoff: Retry in", retryAfter);
   },
@@ -638,7 +618,11 @@ this.PushServiceHttp2 = {
         }
         this._conns[subscriptionUri].listener = null;
         this._conns[subscriptionUri].channel = null;
-        this._conns[subscriptionUri].waitingForAlarm = false;
+
+        if (this._conns[subscriptionUri].retryTimerID > 0) {
+          clearTimeout(this._conns[subscriptionUri].retryTimerID);
+        }
+
         if (deleteInfo) {
           delete this._conns[subscriptionUri];
         }
@@ -667,24 +651,10 @@ this.PushServiceHttp2 = {
       this._conns[record.subscriptionUri] = {channel: null,
                                              listener: null,
                                              countUnableToConnect: 0,
-                                             waitingForAlarm: false};
+                                             retryTimerID: 0};
     }
     if (!this._conns[record.subscriptionUri].conn) {
-      this._conns[record.subscriptionUri].waitingForAlarm = false;
       this._listenForMsgs(record.subscriptionUri);
-    }
-  },
-
-  // Start listening if subscriptions present.
-  _startConnectionsWaitingForAlarm: function() {
-    console.debug("startConnectionsWaitingForAlarm()");
-    for (let subscriptionUri in this._conns) {
-      if ((this._conns[subscriptionUri]) &&
-          !this._conns[subscriptionUri].conn &&
-          this._conns[subscriptionUri].waitingForAlarm) {
-        this._conns[subscriptionUri].waitingForAlarm = false;
-        this._listenForMsgs(subscriptionUri);
-      }
     }
   },
 
@@ -736,12 +706,15 @@ this.PushServiceHttp2 = {
       .then(record => this._subscribeResource(record)
         .then(recordNew => {
           if (this._mainPushService) {
-            this._mainPushService.updateRegistrationAndNotifyApp(aSubscriptionUri,
-                                                                 recordNew);
+            this._mainPushService
+                .updateRegistrationAndNotifyApp(aSubscriptionUri, recordNew)
+                .catch(Cu.reportError);
           }
         }, error => {
           if (this._mainPushService) {
-            this._mainPushService.dropRegistrationAndNotifyApp(aSubscriptionUri);
+            this._mainPushService
+                .dropRegistrationAndNotifyApp(aSubscriptionUri)
+                .catch(Cu.reportError);
           }
         })
       );
@@ -793,10 +766,6 @@ this.PushServiceHttp2 = {
       console.error("pushChannelOnStop: Error receiving message",
         err);
     });
-  },
-
-  onAlarmFired: function() {
-    this._startConnectionsWaitingForAlarm();
   },
 };
 

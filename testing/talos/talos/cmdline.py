@@ -86,7 +86,8 @@ def create_parser(mach_interface=False):
     add_arg('--spsProfileEntries', dest="sps_profile_entries", type=int,
             help="How many samples to take with the profiler")
     add_arg('--extension', dest='extensions', action='append',
-            default=['${talos}/talos-powers', '${talos}/pageloader'],
+            default=['${talos}/talos-powers/talos-powers-signed.xpi',
+                     '${talos}/pageloader/pageloader-signed.xpi'],
             help="Extension to install while running")
     add_arg('--fast', action='store_true',
             help="Run tp tests as tp_fast")
@@ -111,8 +112,6 @@ def create_parser(mach_interface=False):
         add_arg('--develop', action='store_true', default=False,
                 help="useful for running tests on a developer machine."
                      " Doesn't upload to the graph servers.")
-    add_arg('--responsiveness', action='store_true',
-            help="turn on responsiveness collection")
     add_arg("--cycles", type=int,
             help="number of browser cycles to run")
     add_arg("--tpmanifest",

@@ -48,8 +48,8 @@ js::gcstats::ExplainInvocationKind(JSGCInvocationKind gckind)
          return "Shrinking";
 }
 
-const char*
-js::gcstats::ExplainReason(JS::gcreason::Reason reason)
+JS_PUBLIC_API(const char*)
+JS::gcreason::ExplainReason(JS::gcreason::Reason reason)
 {
     switch (reason) {
 #define SWITCH_REASON(name)                         \
@@ -751,6 +751,7 @@ Statistics::Statistics(JSRuntime* rt)
     activeDagSlot(PHASE_DAG_NONE),
     suspendedPhaseNestingDepth(0),
     sliceCallback(nullptr),
+    nurseryCollectionCallback(nullptr),
     aborted(false)
 {
     PodArrayZero(phaseTotals);
@@ -842,6 +843,14 @@ Statistics::setSliceCallback(JS::GCSliceCallback newCallback)
     return oldCallback;
 }
 
+JS::GCNurseryCollectionCallback
+Statistics::setNurseryCollectionCallback(JS::GCNurseryCollectionCallback newCallback)
+{
+    auto oldCallback = nurseryCollectionCallback;
+    nurseryCollectionCallback = newCallback;
+    return oldCallback;
+}
+
 int64_t
 Statistics::clearMaxGCPauseAccumulator()
 {
@@ -924,6 +933,10 @@ Statistics::endGC()
     int64_t markRootsTotal = SumPhase(PHASE_MARK_ROOTS, phaseTimes);
     runtime->addTelemetry(JS_TELEMETRY_GC_MARK_MS, t(markTotal));
     runtime->addTelemetry(JS_TELEMETRY_GC_SWEEP_MS, t(phaseTimes[PHASE_DAG_NONE][PHASE_SWEEP]));
+    if (runtime->gc.isCompactingGc()) {
+        runtime->addTelemetry(JS_TELEMETRY_GC_COMPACT_MS,
+                              t(phaseTimes[PHASE_DAG_NONE][PHASE_COMPACT]));
+    }
     runtime->addTelemetry(JS_TELEMETRY_GC_MARK_ROOTS_MS, t(markRootsTotal));
     runtime->addTelemetry(JS_TELEMETRY_GC_MARK_GRAY_MS, t(phaseTimes[PHASE_DAG_NONE][PHASE_SWEEP_MARK_GRAY]));
     runtime->addTelemetry(JS_TELEMETRY_GC_NON_INCREMENTAL, !!nonincrementalReason_);

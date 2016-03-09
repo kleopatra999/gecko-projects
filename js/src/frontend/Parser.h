@@ -143,6 +143,9 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
     DeclVector      vars_;              /* var/const definitions */
     DeclVector      bodyLevelLexicals_; /* lexical definitions at body-level */
 
+    typedef HashSet<JSAtom*, DefaultHasher<JSAtom*>, LifoAllocPolicy<Fallible>> DeclaredNameSet;
+    DeclaredNameSet bodyLevelLexicallyDeclaredNames_;
+
     bool checkLocalsOverflow(TokenStream& ts);
 
   public:
@@ -181,7 +184,8 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
      *    'pn' if they are in the scope of 'pn'.
      *  + Pre-existing placeholders in the scope of 'pn' have been removed.
      */
-    bool define(TokenStream& ts, HandlePropertyName name, Node pn, Definition::Kind);
+    bool define(TokenStream& ts, HandlePropertyName name, Node pn, Definition::Kind kind,
+                bool declaringVarInCatchBody = false);
 
     /*
      * Let definitions may shadow same-named definitions in enclosing scopes.
@@ -254,7 +258,7 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
     // The comments atop checkDestructuring explain the distinction between
     // assignment-like and declaration-like destructuring patterns, and why
     // they need to be treated differently.
-    bool            inDeclDestructuring:1;
+    bool inDeclDestructuring:1;
 
     ParseContext(Parser<ParseHandler>* prs, GenericParseContext* parent,
                  Node maybeFunction, SharedContext* sc, Directives* newDirectives)
@@ -269,6 +273,7 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
         args_(prs->context),
         vars_(prs->context),
         bodyLevelLexicals_(prs->context),
+        bodyLevelLexicallyDeclaredNames_(prs->alloc),
         parserPC(&prs->pc),
         oldpc(prs->pc),
         lexdeps(prs->context),
@@ -296,6 +301,16 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
         return sc->staticScope();
     }
 
+    bool isBodyLevelLexicallyDeclaredName(HandleAtom name) {
+        return bodyLevelLexicallyDeclaredNames_.has(name);
+    }
+
+    bool addBodyLevelLexicallyDeclaredName(TokenStream& ts, HandleAtom name) {
+        if (!bodyLevelLexicallyDeclaredNames_.put(name))
+            return ts.reportError(JSMSG_OUT_OF_MEMORY);
+        return true;
+    }
+
     // True if we are at the topmost level of a entire script or function body.
     // For example, while parsing this code we would encounter f1 and f2 at
     // body level, but we would not encounter f3 or f4 at body level:
@@ -307,11 +322,11 @@ struct MOZ_STACK_CLASS ParseContext : public GenericParseContext
         // 'eval' and non-syntactic scripts are always under an invisible
         // lexical scope, but since it is not syntactic, it should still be
         // considered at body level.
-        if (sc->staticScope()->is<StaticEvalObject>()) {
+        if (sc->staticScope()->is<StaticEvalScope>()) {
             bool bl = !stmt->enclosing;
             MOZ_ASSERT_IF(bl, stmt->type == StmtType::BLOCK);
             MOZ_ASSERT_IF(bl, stmt->staticScope
-                                  ->template as<StaticBlockObject>()
+                                  ->template as<StaticBlockScope>()
                                   .enclosingStaticScope() == sc->staticScope());
             return bl;
         }
@@ -359,6 +374,7 @@ enum PropListType { ObjectLiteral, ClassBody, DerivedClassBody };
 enum class PropertyType {
     Normal,
     Shorthand,
+    CoverInitializedName,
     Getter,
     GetterNoExpressionClosure,
     Setter,
@@ -389,15 +405,81 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
       public:
         AutoPushStmtInfoPC(Parser<ParseHandler>& parser, StmtType type);
         AutoPushStmtInfoPC(Parser<ParseHandler>& parser, StmtType type,
-                           NestedScopeObject& staticScope);
+                           NestedStaticScope& staticScope);
         ~AutoPushStmtInfoPC();
 
         bool generateBlockId();
-        bool makeInnermostLexicalScope(StaticBlockObject& blockObj);
+        bool makeInnermostLexicalScope(StaticBlockScope& blockScope);
 
         StmtInfoPC& operator*() { return stmt_; }
         StmtInfoPC* operator->() { return &stmt_; }
         operator StmtInfoPC*() { return &stmt_; }
+    };
+
+    /*
+     * A class for temporarily stashing errors while parsing continues.
+     *
+     * The ability to stash an error is useful for handling situations where we
+     * aren't able to verify that an error has occurred until later in the parse.
+     * For instance | ({x=1}) | is always parsed as an object literal with
+     * a SyntaxError, however, in the case where it is followed by '=>' we rewind
+     * and reparse it as a valid arrow function. Here a PossibleError would be
+     * set to 'pending' when the initial SyntaxError was encountered then 'resolved'
+     * just before rewinding the parser.
+     *
+     * When using PossibleError one should set a pending error at the location
+     * where an error occurs. From that point, the error may be resolved
+     * (invalidated) or left until the PossibleError is checked.
+     *
+     * Ex:
+     *   PossibleError possibleError(*this);
+     *   possibleError.setPending(ParseError, JSMSG_BAD_PROP_ID, false);
+     *   // A JSMSG_BAD_PROP_ID ParseError is reported, returns false.
+     *   possibleError.checkForExprErrors();
+     *
+     *   PossibleError possibleError(*this);
+     *   possibleError.setPending(ParseError, JSMSG_BAD_PROP_ID, false);
+     *   possibleError.setResolved();
+     *   // Returns true, no error is reported.
+     *   possibleError.checkForExprErrors();
+     *
+     *   PossibleError possibleError(*this);
+     *   // Returns true, no error is reported.
+     *   possibleError.checkForExprErrors();
+     */
+    class MOZ_STACK_CLASS PossibleError
+    {
+        enum ErrorState { None, Pending };
+        ErrorState state_;
+
+        // Error reporting fields.
+        uint32_t offset_;
+        unsigned errorNumber_;
+        ParseReportKind reportKind_;
+        Parser<ParseHandler>& parser_;
+        bool strict_;
+
+        public:
+          explicit PossibleError(Parser<ParseHandler>& parser);
+
+          // Set a pending error.
+          void setPending(ParseReportKind kind, unsigned errorNumber, bool strict);
+
+          // Resolve any pending error.
+          void setResolved();
+
+          // Return true if an error is pending without reporting
+          bool hasError();
+
+          // If there is a pending error report it and return false, otherwise return
+          // true.
+          bool checkForExprErrors();
+
+          // Pass pending errors between possible error instances. This is useful
+          // for extending the lifetime of a pending error beyond the scope of
+          // the PossibleError where it was initially set (keeping in mind that
+          // PossibleError is a MOZ_STACK_CLASS).
+          void transferErrorTo(PossibleError* other);
     };
 
   public:
@@ -660,7 +742,8 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     Node functionExpr(InvokedPrediction invoked = PredictUninvoked);
     Node statements(YieldHandling yieldHandling);
 
-    Node blockStatement(YieldHandling yieldHandling);
+    Node blockStatement(YieldHandling yieldHandling,
+                        unsigned errorNumber = JSMSG_CURLY_IN_COMPOUND);
     Node ifStatement(YieldHandling yieldHandling);
     Node doWhileStatement(YieldHandling yieldHandling);
     Node whileStatement(YieldHandling yieldHandling);
@@ -670,14 +753,14 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
                       ParseNodeKind* forHeadKind,
                       Node* forInitialPart,
                       mozilla::Maybe<AutoPushStmtInfoPC>& letStmt,
-                      MutableHandle<StaticBlockObject*> blockObj,
+                      MutableHandle<StaticBlockScope*> blockScope,
                       Node* forLetImpliedBlock,
                       Node* forInOrOfExpression);
     bool validateForInOrOfLHSExpression(Node target);
     Node expressionAfterForInOrOf(ParseNodeKind forHeadKind, YieldHandling yieldHandling);
 
     void assertCurrentLexicalStaticBlockIs(ParseContext<ParseHandler>* pc,
-                                           Handle<StaticBlockObject*> blockObj);
+                                           Handle<StaticBlockScope*> blockScope);
 
     Node switchStatement(YieldHandling yieldHandling);
     Node continueStatement(YieldHandling yieldHandling);
@@ -698,7 +781,7 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     // Declaration parsing.  The main entrypoint is Parser::declarationList,
     // with sub-functionality split out into the remaining methods.
 
-    // |blockObj| may be non-null only when |kind| corresponds to a lexical
+    // |blockScope| may be non-null only when |kind| corresponds to a lexical
     // declaration (that is, PNK_LET or PNK_CONST).
     //
     // The for* parameters, for normal declarations, should be null/ignored.
@@ -717,7 +800,7 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     // parsed into |*forInOrOfExpression|.
     Node declarationList(YieldHandling yieldHandling,
                          ParseNodeKind kind,
-                         StaticBlockObject* blockObj = nullptr,
+                         StaticBlockScope* blockScope = nullptr,
                          ParseNodeKind* forHeadKind = nullptr,
                          Node* forInOrOfExpression = nullptr);
 
@@ -749,7 +832,15 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
 
     Node expr(InHandling inHandling, YieldHandling yieldHandling,
               TripledotHandling tripledotHandling,
+              PossibleError* possibleError,
               InvokedPrediction invoked = PredictUninvoked);
+    Node expr(InHandling inHandling, YieldHandling yieldHandling,
+              TripledotHandling tripledotHandling,
+              InvokedPrediction invoked = PredictUninvoked);
+    Node assignExpr(InHandling inHandling, YieldHandling yieldHandling,
+                    TripledotHandling tripledotHandling,
+                    PossibleError* possibleError,
+                    InvokedPrediction invoked = PredictUninvoked);
     Node assignExpr(InHandling inHandling, YieldHandling yieldHandling,
                     TripledotHandling tripledotHandling,
                     InvokedPrediction invoked = PredictUninvoked);
@@ -757,16 +848,26 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     Node yieldExpression(InHandling inHandling);
     Node condExpr1(InHandling inHandling, YieldHandling yieldHandling,
                    TripledotHandling tripledotHandling,
+                   PossibleError* possibleError,
                    InvokedPrediction invoked = PredictUninvoked);
     Node orExpr1(InHandling inHandling, YieldHandling yieldHandling,
                  TripledotHandling tripledotHandling,
-                   InvokedPrediction invoked = PredictUninvoked);
+                 PossibleError* possibleError,
+                 InvokedPrediction invoked = PredictUninvoked);
     Node unaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+                   PossibleError* possibleError,
                    InvokedPrediction invoked = PredictUninvoked);
+    Node memberExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+                    PossibleError* possibleError, TokenKind tt,
+                    bool allowCallSyntax, InvokedPrediction invoked = PredictUninvoked);
     Node memberExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling, TokenKind tt,
                     bool allowCallSyntax, InvokedPrediction invoked = PredictUninvoked);
-    Node primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling, TokenKind tt,
+    Node primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+                     PossibleError* possibleError, TokenKind tt,
                      InvokedPrediction invoked = PredictUninvoked);
+    Node exprInParens(InHandling inHandling, YieldHandling yieldHandling,
+                      TripledotHandling tripledotHandling,
+                      PossibleError* possibleError);
     Node exprInParens(InHandling inHandling, YieldHandling yieldHandling,
                       TripledotHandling tripledotHandling);
 
@@ -838,7 +939,8 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
         ForInOrOfTarget
     };
 
-    bool checkAndMarkAsAssignmentLhs(Node pn, AssignmentFlavor flavor);
+    bool checkAndMarkAsAssignmentLhs(Node pn, AssignmentFlavor flavor,
+                                     PossibleError* possibleError=nullptr);
     bool matchInOrOf(bool* isForInp, bool* isForOfp);
 
     bool checkFunctionArguments();
@@ -884,8 +986,8 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     bool defineArg(Node funcpn, HandlePropertyName name,
                    bool disallowDuplicateArgs = false, Node* duplicatedArg = nullptr);
     Node pushLexicalScope(AutoPushStmtInfoPC& stmt);
-    Node pushLexicalScope(Handle<StaticBlockObject*> blockObj, AutoPushStmtInfoPC& stmt);
-    Node pushLetScope(Handle<StaticBlockObject*> blockObj, AutoPushStmtInfoPC& stmt);
+    Node pushLexicalScope(Handle<StaticBlockScope*> blockScope, AutoPushStmtInfoPC& stmt);
+    Node pushLetScope(Handle<StaticBlockScope*> blockScope, AutoPushStmtInfoPC& stmt);
     bool noteNameUse(HandlePropertyName name, Node pn);
     Node propertyName(YieldHandling yieldHandling, Node propList,
                       PropertyType* propType, MutableHandleAtom propAtom);
@@ -893,7 +995,7 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     Node arrayInitializer(YieldHandling yieldHandling);
     Node newRegExp();
 
-    Node objectLiteral(YieldHandling yieldHandling);
+    Node objectLiteral(YieldHandling yieldHandling, PossibleError* possibleError);
 
     enum PrepareLexicalKind {
         PrepareLet,

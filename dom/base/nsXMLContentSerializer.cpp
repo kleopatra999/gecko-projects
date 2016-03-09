@@ -19,10 +19,11 @@
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsIDocumentEncoder.h"
+#include "nsIParserService.h"
 #include "nsNameSpaceManager.h"
 #include "nsTextFragment.h"
 #include "nsString.h"
-#include "prprf.h"
+#include "mozilla/Snprintf.h"
 #include "nsUnicharUtils.h"
 #include "nsCRT.h"
 #include "nsContentUtils.h"
@@ -607,7 +608,7 @@ nsXMLContentSerializer::GenerateNewPrefix(nsAString& aPrefix)
 {
   aPrefix.Assign('a');
   char buf[128];
-  PR_snprintf(buf, sizeof(buf), "%d", mPrefixIndex++);
+  snprintf_literal(buf, "%d", mPrefixIndex++);
   AppendASCIItoUTF16(buf, aPrefix);
 }
 
@@ -1429,7 +1430,7 @@ nsXMLContentSerializer::AppendFormatedWrapped_WhitespaceSequence(
       case ' ':
       case '\t':
         sawBlankOrTab = true;
-        // no break
+        MOZ_FALLTHROUGH;
       case '\n':
         ++aPos;
         // do not increase mColPos,

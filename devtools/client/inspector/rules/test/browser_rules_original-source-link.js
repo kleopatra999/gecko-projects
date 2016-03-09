@@ -7,7 +7,7 @@
 // Test that the stylesheet links in the rule view are correct when source maps
 // are involved.
 
-const TESTCASE_URI = TEST_URL_ROOT + "doc_sourcemaps.html";
+const TESTCASE_URI = URL_ROOT + "doc_sourcemaps.html";
 const PREF = "devtools.styleeditor.source-maps-enabled";
 const SCSS_LOC = "doc_sourcemaps.scss:4";
 const CSS_LOC = "doc_sourcemaps.css:1";
@@ -78,8 +78,7 @@ function editorSelected(editor) {
 function verifyLinkText(text, view) {
   info("Verifying that the rule-view stylesheet link is " + text);
   let label = getRuleViewLinkByIndex(view, 1).querySelector("label");
-  return waitForSuccess(
-    () => label.getAttribute("value") == text,
-    "Link text changed to display correct location: " + text
-  );
+  return waitForSuccess(function*() {
+    return label.getAttribute("value") == text;
+  }, "Link text changed to display correct location: " + text);
 }

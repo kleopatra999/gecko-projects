@@ -1,10 +1,9 @@
 config = {
     "log_name": "beta_to_release",
     "version_files": [
-        "browser/config/version.txt",
-        "browser/config/version_display.txt",
-        "config/milestone.txt",
-        "b2g/confvars.sh",
+        {"file": "browser/config/version.txt", "suffix": ""},
+        {"file": "browser/config/version_display.txt", "suffix": ""},
+        {"file": "config/milestone.txt", "suffix": ""},
     ],
     "replacements": [
         # File, from, to
@@ -44,9 +43,7 @@ config = {
         "requests==2.8.1",
     ],
 
-    "post_merge_builders": [
-        "mozilla-release hg bundle",
-    ],
+    "post_merge_builders": [],
     "post_merge_nightly_branches": [
         # No nightlies on mozilla-release
     ],

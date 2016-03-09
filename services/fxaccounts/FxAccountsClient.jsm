@@ -92,7 +92,7 @@ this.FxAccountsClient.prototype = {
     return Credentials.setup(email, password).then((creds) => {
       let data = {
         authPW: CommonUtils.bytesAsHex(creds.authPW),
-        email: creds.emailUTF8,
+        email: email,
       };
       let keys = getKeys ? "?keys=true" : "";
 
@@ -193,7 +193,7 @@ this.FxAccountsClient.prototype = {
   signOut: function (sessionTokenHex, options = {}) {
     let path = "/session/destroy";
     if (options.service) {
-      path += "?service=" + options.service;
+      path += "?service=" + encodeURIComponent(options.service);
     }
     return this._request(path, "POST",
       deriveHawkCredentials(sessionTokenHex, "sessionToken"));
@@ -348,6 +348,131 @@ this.FxAccountsClient.prototype = {
     );
   },
 
+  /**
+   * Register a new device
+   *
+   * @method registerDevice
+   * @param  sessionTokenHex
+   *         Session token obtained from signIn
+   * @param  name
+   *         Device name
+   * @param  type
+   *         Device type (mobile|desktop)
+   * @param  [options]
+   *         Extra device options
+   * @param  [options.pushCallback]
+   *         `pushCallback` push endpoint callback
+   * @return Promise
+   *         Resolves to an object:
+   *         {
+   *           id: Device identifier
+   *           createdAt: Creation time (milliseconds since epoch)
+   *           name: Name of device
+   *           type: Type of device (mobile|desktop)
+   *         }
+   */
+  registerDevice(sessionTokenHex, name, type, options = {}) {
+    let path = "/account/device";
+
+    let creds = deriveHawkCredentials(sessionTokenHex, "sessionToken");
+    let body = { name, type };
+
+    if (options.pushCallback) {
+      body.pushCallback = options.pushCallback;
+    }
+
+    return this._request(path, "POST", creds, body);
+  },
+
+  /**
+   * Update the session or name for an existing device
+   *
+   * @method updateDevice
+   * @param  sessionTokenHex
+   *         Session token obtained from signIn
+   * @param  id
+   *         Device identifier
+   * @param  name
+   *         Device name
+   * @param  [options]
+   *         Extra device options
+   * @param  [options.pushCallback]
+   *         `pushCallback` push endpoint callback
+   * @return Promise
+   *         Resolves to an object:
+   *         {
+   *           id: Device identifier
+   *           name: Device name
+   *         }
+   */
+  updateDevice(sessionTokenHex, id, name, options = {}) {
+    let path = "/account/device";
+
+    let creds = deriveHawkCredentials(sessionTokenHex, "sessionToken");
+    let body = { id, name };
+    if (options.pushCallback) {
+      body.pushCallback = options.pushCallback;
+    }
+
+    return this._request(path, "POST", creds, body);
+  },
+
+  /**
+   * Delete a device and its associated session token, signing the user
+   * out of the server.
+   *
+   * @method signOutAndDestroyDevice
+   * @param  sessionTokenHex
+   *         Session token obtained from signIn
+   * @param  id
+   *         Device identifier
+   * @param  [options]
+   *         Options object
+   * @param  [options.service]
+   *         `service` query parameter
+   * @return Promise
+   *         Resolves to an empty object:
+   *         {}
+   */
+  signOutAndDestroyDevice(sessionTokenHex, id, options = {}) {
+    let path = "/account/device/destroy";
+
+    if (options.service) {
+      path += "?service=" + encodeURIComponent(options.service);
+    }
+
+    let creds = deriveHawkCredentials(sessionTokenHex, "sessionToken");
+    let body = { id };
+
+    return this._request(path, "POST", creds, body);
+  },
+
+  /**
+   * Get a list of currently registered devices
+   *
+   * @method getDeviceList
+   * @param  sessionTokenHex
+   *         Session token obtained from signIn
+   * @return Promise
+   *         Resolves to an array of objects:
+   *         [
+   *           {
+   *             id: Device id
+   *             isCurrentDevice: Boolean indicating whether the item
+   *                              represents the current device
+   *             name: Device name
+   *             type: Device type (mobile|desktop)
+   *           },
+   *           ...
+   *         ]
+   */
+  getDeviceList(sessionTokenHex) {
+    let path = "/account/devices";
+    let creds = deriveHawkCredentials(sessionTokenHex, "sessionToken");
+
+    return this._request(path, "GET", creds, {});
+  },
+
   _clearBackoff: function() {
       this.backoffError = null;
   },
@@ -410,8 +535,10 @@ this.FxAccountsClient.prototype = {
            );
         }
         if (isInvalidTokenError(error)) {
+          // Use the endpoint path as the key, ignoring query params and
+          // fragments.
           Services.telemetry.getKeyedHistogramById(
-            "FXA_HAWK_ERRORS").add(path);
+            "FXA_HAWK_ERRORS").add(path.replace(/[?#].*/, ''));
         }
         deferred.reject(error);
       }

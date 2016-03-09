@@ -7,6 +7,10 @@ Components.utils.import("resource://gre/modules/FileUtils.jsm");
 Components.utils.import("resource://gre/modules/Task.jsm");
 Components.utils.import("resource:///modules/ShellService.jsm");
 Components.utils.import("resource:///modules/TransientPrefs.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "OS",
+                                  "resource://gre/modules/osfile.jsm");
+
 #ifdef E10S_TESTING_ONLY
 XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
                                   "resource://gre/modules/UpdateUtils.jsm");
@@ -30,9 +34,9 @@ var gMainPane = {
     // In Windows 8 we launch the control panel since it's the only
     // way to get all file type association prefs. So we don't know
     // when the user will select the default.  We refresh here periodically
-    // in case the default changes.  On other Windows OS's defaults can also
+    // in case the default changes. On other Windows OS's defaults can also
     // be set while the prefs are open.
-    window.setInterval(this.updateSetDefaultBrowser, 1000);
+    window.setInterval(this.updateSetDefaultBrowser.bind(this), 1000);
 #endif
 #endif
 
@@ -83,42 +87,24 @@ var gMainPane = {
     setEventListener("e10sAutoStart", "command",
                      gMainPane.enableE10SChange);
     let e10sCheckbox = document.getElementById("e10sAutoStart");
-    e10sCheckbox.checked = Services.appinfo.browserTabsRemoteAutostart;
 
-    // If e10s is blocked for some reason unrelated to prefs, we want to disable
-    // the checkbox.
-    if (!Services.appinfo.browserTabsRemoteAutostart) {
-      let e10sBlockedReason = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
-      let appinfo = Services.appinfo.QueryInterface(Ci.nsIObserver);
-      appinfo.observe(e10sBlockedReason, "getE10SBlocked", "")
-      if (e10sBlockedReason.data) {
-        if (e10sBlockedReason.data == "Safe mode") {
-          // If the only reason we're disabled is because of safe mode, then
-          // we want to allow the user to un-toggle the pref.
-          // We're relying on the nsAppRunner code only specifying "Safe mode"
-          // as the reason if the pref is otherwise enabled, and there are no
-          // other reasons to block e10s.
-          // Update the checkbox to reflect the pref state.
-          e10sCheckbox.checked = true;
-        } else {
-          e10sCheckbox.disabled = true;
-          let updateChannel = UpdateUtils.UpdateChannel;
-          // only add this label on developer channels
-          if (updateChannel == "default" ||
-              updateChannel == "nightly" ||
-              updateChannel == "aurora") {
-            e10sCheckbox.label += " (disabled: " + e10sBlockedReason.data + ")";
-          }
-        }
-      }
+    let e10sPref = document.getElementById("browser.tabs.remote.autostart");
+    let e10sTempPref = document.getElementById("e10sTempPref");
+    let e10sForceEnable = document.getElementById("e10sForceEnable");
+
+    let preffedOn = e10sPref.value || e10sTempPref.value || e10sForceEnable.value;
+
+    if (preffedOn) {
+      // The checkbox is checked if e10s is preffed on and enabled.
+      e10sCheckbox.checked = Services.appinfo.browserTabsRemoteAutostart;
+
+      // but if it's force disabled, then the checkbox is disabled.
+      e10sCheckbox.disabled = !Services.appinfo.browserTabsRemoteAutostart;
     }
 
-    // If E10S is blocked because of safe mode, we want the checkbox to be
-    // enabled
 #endif
 
 #ifdef MOZ_DEV_EDITION
-    Cu.import("resource://gre/modules/osfile.jsm");
     let uAppData = OS.Constants.Path.userApplicationDataDir;
     let ignoreSeparateProfile = OS.Path.join(uAppData, "ignore-dev-edition-profile");
 
@@ -202,6 +188,16 @@ var gMainPane = {
         Cu.reportError("Failed to toggle separate profile mode: " + error);
       }
     }
+    function createOrRemoveSpecialDevEditionFile(onSuccess) {
+      let uAppData = OS.Constants.Path.userApplicationDataDir;
+      let ignoreSeparateProfile = OS.Path.join(uAppData, "ignore-dev-edition-profile");
+
+      if (separateProfileModeCheckbox.checked) {
+        OS.File.remove(ignoreSeparateProfile).then(onSuccess, revertCheckbox);
+      } else {
+        OS.File.writeAtomic(ignoreSeparateProfile, new Uint8Array()).then(onSuccess, revertCheckbox);
+      }
+    }
 
     const Cc = Components.classes, Ci = Components.interfaces;
     let separateProfileModeCheckbox = document.getElementById("separateProfileMode");
@@ -211,30 +207,43 @@ var gMainPane = {
                                         "featureEnableRequiresRestart" : "featureDisableRequiresRestart",
                                         [brandName]);
     let title = bundle.getFormattedString("shouldRestartTitle", [brandName]);
-    let shouldProceed = Services.prompt.confirm(window, title, msg)
-    if (shouldProceed) {
-      let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
-                         .createInstance(Ci.nsISupportsPRBool);
-      Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
-                                   "restart");
-      shouldProceed = !cancelQuit.data;
+    let check = {value: false};
+    let prompts = Services.prompt;
+    let flags = prompts.BUTTON_POS_0 * prompts.BUTTON_TITLE_IS_STRING +
+                  prompts.BUTTON_POS_1 * prompts.BUTTON_TITLE_CANCEL  +
+                  prompts.BUTTON_POS_2 * prompts.BUTTON_TITLE_IS_STRING;
+    let button0Title = bundle.getString("restartNowButton");
+    let button2Title = bundle.getString("restartLaterButton");
+    let button_index = prompts.confirmEx(window, title, msg, flags,
+                         button0Title, null, button2Title, null, check)
+    let RESTART_NOW_BUTTON_INDEX = 0;
+    let CANCEL_BUTTON_INDEX = 1;
+    let RESTART_LATER_BUTTON_INDEX = 2;
 
-      if (shouldProceed) {
-        Cu.import("resource://gre/modules/osfile.jsm");
-        let uAppData = OS.Constants.Path.userApplicationDataDir;
-        let ignoreSeparateProfile = OS.Path.join(uAppData, "ignore-dev-edition-profile");
-
-        if (separateProfileModeCheckbox.checked) {
-          OS.File.remove(ignoreSeparateProfile).then(quitApp, revertCheckbox);
-        } else {
-          OS.File.writeAtomic(ignoreSeparateProfile, new Uint8Array()).then(quitApp, revertCheckbox);
-        }
+    switch (button_index) {
+      case CANCEL_BUTTON_INDEX:
+        revertCheckbox();
         return;
-      }
-    }
+      case RESTART_NOW_BUTTON_INDEX:
+        let shouldProceed = false;
+        let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
+                           .createInstance(Ci.nsISupportsPRBool);
+        Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
+                                      "restart");
+        shouldProceed = !cancelQuit.data;
 
-    // Revert the checkbox in case we didn't quit
-    revertCheckbox();
+        if (shouldProceed) {
+          createOrRemoveSpecialDevEditionFile(quitApp);
+          return;
+        }
+
+        // Revert the checkbox in case we didn't quit
+        revertCheckbox();
+        return;
+      case RESTART_LATER_BUTTON_INDEX:
+        createOrRemoveSpecialDevEditionFile();
+        return;
+    }
   },
 
   onGetStarted: function (aEvent) {
@@ -712,8 +721,11 @@ var gMainPane = {
       return;
     }
     let setDefaultPane = document.getElementById("setDefaultPane");
-    let selectedIndex = shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
-    setDefaultPane.selectedIndex = selectedIndex;
+    let isDefault = shellSvc.isDefaultBrowser(false, true);
+    setDefaultPane.selectedIndex = isDefault ? 1 : 0;
+    let alwaysCheck = document.getElementById("alwaysCheckDefault");
+    alwaysCheck.disabled = alwaysCheck.disabled ||
+                           isDefault && alwaysCheck.checked;
   },
 
   /**
@@ -721,6 +733,9 @@ var gMainPane = {
    */
   setDefaultBrowser: function()
   {
+    let alwaysCheckPref = document.getElementById("browser.shell.checkDefaultBrowser");
+    alwaysCheckPref.value = true;
+
     let shellSvc = getShellService();
     if (!shellSvc)
       return;
@@ -730,8 +745,8 @@ var gMainPane = {
       Cu.reportError(ex);
       return;
     }
-    let selectedIndex =
-      shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
+
+    let selectedIndex = shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
     document.getElementById("setDefaultPane").selectedIndex = selectedIndex;
   }
 #endif

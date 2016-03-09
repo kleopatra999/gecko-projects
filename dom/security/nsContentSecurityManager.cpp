@@ -143,8 +143,17 @@ DoContentSecurityChecks(nsIURI* aURI, nsILoadInfo* aLoadInfo)
       break;
     }
 
-    case nsIContentPolicy::TYPE_IMAGE:
-    case nsIContentPolicy::TYPE_STYLESHEET:
+    case nsIContentPolicy::TYPE_IMAGE: {
+      MOZ_ASSERT(false, "contentPolicyType not supported yet");
+      break;
+    }
+
+    case nsIContentPolicy::TYPE_STYLESHEET: {
+      mimeTypeGuess = NS_LITERAL_CSTRING("text/css");
+      requestingContext = aLoadInfo->LoadingNode();
+      break;
+    }
+
     case nsIContentPolicy::TYPE_OBJECT:
     case nsIContentPolicy::TYPE_DOCUMENT: {
       MOZ_ASSERT(false, "contentPolicyType not supported yet");
@@ -220,7 +229,8 @@ DoContentSecurityChecks(nsIURI* aURI, nsILoadInfo* aLoadInfo)
     }
 
     case nsIContentPolicy::TYPE_FONT: {
-      MOZ_ASSERT(false, "contentPolicyType not supported yet");
+      mimeTypeGuess = EmptyCString();
+      requestingContext = aLoadInfo->LoadingNode();
       break;
     }
 
@@ -466,6 +476,13 @@ nsContentSecurityManager::CheckChannel(nsIChannel* aChannel)
     return NS_OK;
   }
 
+  // Allow the load if TriggeringPrincipal is the SystemPrincipal which
+  // is e.g. necessary to allow user user stylesheets to load XBL from
+  // external files.
+  if (nsContentUtils::IsSystemPrincipal(loadInfo->TriggeringPrincipal())) {
+    return NS_OK;
+  }
+
   // if none of the REQUIRE_SAME_ORIGIN flags are set, then SOP does not apply
   if ((securityMode == nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS) ||
       (securityMode == nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED)) {
@@ -518,8 +535,14 @@ nsContentSecurityManager::IsURIPotentiallyTrustworthy(nsIURI* aURI, bool* aIsTru
     return NS_OK;
   }
 
+  // According to the specification, the user agent may choose to extend the
+  // trust to other, vendor-specific URL schemes. We use this for "resource:",
+  // which is technically a substituting protocol handler that is not limited to
+  // local resource mapping, but in practice is never mapped remotely as this
+  // would violate assumptions a lot of code makes.
   if (scheme.EqualsLiteral("https") ||
       scheme.EqualsLiteral("file") ||
+      scheme.EqualsLiteral("resource") ||
       scheme.EqualsLiteral("app") ||
       scheme.EqualsLiteral("wss")) {
     *aIsTrustWorthy = true;

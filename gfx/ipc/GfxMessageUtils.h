@@ -367,10 +367,10 @@ struct RegionParamTraits
 
   static void Write(Message* msg, const paramType& param)
   {
-    Iter it(param);
-    while (const Rect* r = it.Next()) {
-      MOZ_RELEASE_ASSERT(!r->IsEmpty());
-      WriteParam(msg, *r);
+    for (auto iter = param.RectIter(); !iter.Done(); iter.Next()) {
+      const Rect& r = iter.Get();
+      MOZ_RELEASE_ASSERT(!r.IsEmpty());
+      WriteParam(msg, r);
     }
     // empty rects are sentinel values because nsRegions will never
     // contain them
@@ -666,7 +666,7 @@ struct ParamTraits<nsRect>
 
 template<>
 struct ParamTraits<nsRegion>
-  : RegionParamTraits<nsRegion, nsRect, nsRegionRectIterator>
+  : RegionParamTraits<nsRegion, nsRect, nsRegion::RectIterator>
 {};
 
 template <>
@@ -783,7 +783,6 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mParentBackend);
-    WriteParam(aMsg, aParam.mSupportedBlendModes.serialize());
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
@@ -792,14 +791,11 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
-    uint32_t supportedBlendModes = 0;
     bool result = ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
-                  ReadParam(aMsg, aIter, &supportedBlendModes) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
                   ReadParam(aMsg, aIter, &aResult->mSyncHandle);
-    aResult->mSupportedBlendModes.deserialize(supportedBlendModes);
     return result;
   }
 };

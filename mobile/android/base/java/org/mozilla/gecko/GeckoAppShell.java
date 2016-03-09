@@ -33,6 +33,7 @@ import java.util.StringTokenizer;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
+import android.annotation.SuppressLint;
 import android.content.ContentResolver;
 import org.mozilla.gecko.annotation.JNITarget;
 import org.mozilla.gecko.annotation.RobocopTarget;
@@ -48,6 +49,7 @@ import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.gfx.PanZoomController;
 import org.mozilla.gecko.mozglue.ContextUtils;
 import org.mozilla.gecko.overlays.ui.ShareDialog;
+import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.prompts.PromptService;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoRequest;
@@ -61,6 +63,7 @@ import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.ExternalIntentDuringPrivateBrowsingPromptFragment;
 
+import android.Manifest;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
@@ -474,6 +477,7 @@ public class GeckoAppShell
         return (location.hasAccuracy() && radius > 0) ? radius : 1001;
     }
 
+    @SuppressLint("MissingPermission") // Permissions are explicitly checked for in enableLocation()
     private static Location getLastKnownLocation(LocationManager lm) {
         Location lastKnownLocation = null;
         List<String> providers = lm.getAllProviders();
@@ -501,46 +505,52 @@ public class GeckoAppShell
     }
 
     @WrapForJNI
+    @SuppressLint("MissingPermission") // Permissions are explicitly checked for within this method
     public static void enableLocation(final boolean enable) {
-        ThreadUtils.postToUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    LocationManager lm = getLocationManager(getApplicationContext());
-                    if (lm == null) {
-                        return;
-                    }
-
-                    if (enable) {
-                        Location lastKnownLocation = getLastKnownLocation(lm);
-                        if (lastKnownLocation != null) {
-                            getGeckoInterface().getLocationListener().onLocationChanged(lastKnownLocation);
-                        }
-
-                        Criteria criteria = new Criteria();
-                        criteria.setSpeedRequired(false);
-                        criteria.setBearingRequired(false);
-                        criteria.setAltitudeRequired(false);
-                        if (locationHighAccuracyEnabled) {
-                            criteria.setAccuracy(Criteria.ACCURACY_FINE);
-                            criteria.setCostAllowed(true);
-                            criteria.setPowerRequirement(Criteria.POWER_HIGH);
-                        } else {
-                            criteria.setAccuracy(Criteria.ACCURACY_COARSE);
-                            criteria.setCostAllowed(false);
-                            criteria.setPowerRequirement(Criteria.POWER_LOW);
-                        }
-
-                        String provider = lm.getBestProvider(criteria, true);
-                        if (provider == null)
+        Permissions
+                .from((Activity) getContext())
+                .withPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+                .onUIThread()
+                .doNotPromptIf(!enable)
+                .run(new Runnable() {
+                    @Override
+                    public void run() {
+                        LocationManager lm = getLocationManager(getApplicationContext());
+                        if (lm == null) {
                             return;
+                        }
 
-                        Looper l = Looper.getMainLooper();
-                        lm.requestLocationUpdates(provider, 100, (float).5, getGeckoInterface().getLocationListener(), l);
-                    } else {
-                        lm.removeUpdates(getGeckoInterface().getLocationListener());
+                        if (enable) {
+                            Location lastKnownLocation = getLastKnownLocation(lm);
+                            if (lastKnownLocation != null) {
+                                getGeckoInterface().getLocationListener().onLocationChanged(lastKnownLocation);
+                            }
+
+                            Criteria criteria = new Criteria();
+                            criteria.setSpeedRequired(false);
+                            criteria.setBearingRequired(false);
+                            criteria.setAltitudeRequired(false);
+                            if (locationHighAccuracyEnabled) {
+                                criteria.setAccuracy(Criteria.ACCURACY_FINE);
+                                criteria.setCostAllowed(true);
+                                criteria.setPowerRequirement(Criteria.POWER_HIGH);
+                            } else {
+                                criteria.setAccuracy(Criteria.ACCURACY_COARSE);
+                                criteria.setCostAllowed(false);
+                                criteria.setPowerRequirement(Criteria.POWER_LOW);
+                            }
+
+                            String provider = lm.getBestProvider(criteria, true);
+                            if (provider == null)
+                                return;
+
+                            Looper l = Looper.getMainLooper();
+                            lm.requestLocationUpdates(provider, 100, (float) .5, getGeckoInterface().getLocationListener(), l);
+                        } else {
+                            lm.removeUpdates(getGeckoInterface().getLocationListener());
+                        }
                     }
-                }
-            });
+                });
     }
 
     private static LocationManager getLocationManager(Context context) {
@@ -814,6 +824,7 @@ public class GeckoAppShell
     // This is the entry point from nsIShellService.
     @WrapForJNI
     public static void createShortcut(final String aTitle, final String aURI) {
+        ThreadUtils.assertOnBackgroundThread();
         final BrowserDB db = GeckoProfile.get(getApplicationContext()).getDB();
 
         final ContentResolver cr = getContext().getContentResolver();
@@ -833,32 +844,19 @@ public class GeckoAppShell
         OnFaviconLoadedListener listener = new OnFaviconLoadedListener() {
             @Override
             public void onFaviconLoaded(String url, String faviconURL, Bitmap favicon) {
-                createShortcutWithBitmap(aTitle, url, favicon);
+                doCreateShortcut(aTitle, url, favicon);
             }
         };
 
-        if (touchIconURL != null) {
-            // We have the favicon data (base64) decoded on the background thread, callback here, then
-            // call the other createShortcut method with the decoded favicon.
-            // This is slightly contrived, but makes the images available to the favicon cache.
-            Favicons.getSizedFavicon(getApplicationContext(), aURI, touchIconURL, Integer.MAX_VALUE, 0, listener);
-        } else {
-            Favicons.getPreferredSizeFaviconForPage(getApplicationContext(), aURI, listener);
-        }
+        // Retrieve the icon while bypassing the cache. Homescreen icon creation is a one-off event, hence it isn't
+        // useful to cache these icons. (Android takes care of storing homescreen icons after a shortcut
+        // has been created.)
+        // The cache is also (currently) limited to 32dp, hence we explicitly need to avoid accessing those icons.
+        // If touchIconURL is null, then Favicons falls back to finding the best possible favicon for
+        // the site URI, hence we can use this call even when there is no touchIcon defined.
+        Favicons.getPreferredSizeFaviconForPage(getApplicationContext(), aURI, touchIconURL, listener);
     }
 
-    private static void createShortcutWithBitmap(final String aTitle, final String aURI, final Bitmap aBitmap) {
-        ThreadUtils.postToBackgroundThread(new Runnable() {
-            @Override
-            public void run() {
-                doCreateShortcut(aTitle, aURI, aBitmap);
-            }
-        });
-    }
-
-    /**
-     * Call this method only on the background thread.
-     */
     private static void doCreateShortcut(final String aTitle, final String aURI, final Bitmap aIcon) {
         // The intent to be launched by the shortcut.
         Intent shortcutIntent = new Intent();
@@ -1940,7 +1938,8 @@ public class GeckoAppShell
 
         // An awful hack to detect Tegra devices. Easiest way to do it without spinning up a EGL context.
         boolean isTegra = (new File("/system/lib/hw/gralloc.tegra.so")).exists() ||
-                          (new File("/system/lib/hw/gralloc.tegra3.so")).exists();
+                          (new File("/system/lib/hw/gralloc.tegra3.so")).exists() ||
+                          (new File("/sys/class/nvidia-gpu")).exists();
         if (isTegra) {
             // disable on KitKat (bug 957694)
             if (Versions.feature19Plus) {
@@ -2675,7 +2674,7 @@ public class GeckoAppShell
     private static final void showImageShareFailureSnackbar() {
         SnackbarHelper.showSnackbar((Activity) getContext(),
                 getApplicationContext().getString(R.string.share_image_failed),
-                Snackbar.LENGTH_SHORT
+                Snackbar.LENGTH_LONG
         );
     }
 
@@ -2839,10 +2838,5 @@ public class GeckoAppShell
                 getApplicationContext().getSystemService(Context.WINDOW_SERVICE);
         final Display disp = wm.getDefaultDisplay();
         return new Rect(0, 0, disp.getWidth(), disp.getHeight());
-    }
-
-    @JNITarget
-    static boolean isWebAppProcess() {
-        return GeckoProfile.get(getApplicationContext()).isWebAppProfile();
     }
 }

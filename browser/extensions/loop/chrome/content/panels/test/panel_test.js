@@ -12,7 +12,8 @@ describe("loop.panel", function() {
   var sandbox, notifications, requestStubs;
   var fakeXHR, fakeWindow, fakeEvent;
   var requests = [];
-  var roomData, roomData2, roomList, roomName;
+  var roomData, roomData2, roomData3, roomData4, roomData5, roomData6;
+  var roomList, roomName;
 
   beforeEach(function() {
     sandbox = LoopMochaUtils.createSandbox();
@@ -70,11 +71,12 @@ describe("loop.panel", function() {
       Confirm: sinon.stub(),
       GetHasEncryptionKey: function() { return true; },
       HangupAllChatWindows: function() {},
-      IsMultiProcessEnabled: sinon.stub(),
+      IsMultiProcessActive: sinon.stub(),
       LoginToFxA: sinon.stub(),
       LogoutFromFxA: sinon.stub(),
       NotifyUITour: sinon.stub(),
       OpenURL: sinon.stub(),
+      GettingStartedURL: sinon.stub().returns("http://fakeFTUUrl.com"),
       GetSelectedTabMetadata: sinon.stub().returns({}),
       GetUserProfile: function() { return null; }
     });
@@ -84,13 +86,17 @@ describe("loop.panel", function() {
       GetHasEncryptionKey: true,
       GetUserProfile: null,
       GetDoNotDisturb: false,
-      "GetLoopPref|gettingStarted.latestFTUVersion": 1,
+      "GetLoopPref|gettingStarted.latestFTUVersion": 2,
       "GetLoopPref|legal.ToS_url": "",
       "GetLoopPref|legal.privacy_url": "",
-      IsMultiProcessEnabled: false
+      "GetLoopPref|remote.autostart": false,
+      IsMultiProcessActive: false
     };
 
     roomName = "First Room Name";
+    // XXX Multiple rooms needed for some tests, could clean up this code to
+    // utilize a function that generates a given number of rooms for use in
+    // those tests
     roomData = {
       roomToken: "QzBbvGmIZWU",
       roomUrl: "http://sample/QzBbvGmIZWU",
@@ -127,6 +133,78 @@ describe("loop.panel", function() {
           displayName: "Bob",
             roomConnectionId: "781f212b-f1ea-4ce1-9105-7cfc36fb4ec7"
         }],
+      ctime: 1405517417
+    };
+
+    roomData3 = {
+      roomToken: "QzBbvlmIZWV",
+      roomUrl: "http://sample/QzBbvlmIZWV",
+      decryptedContext: {
+        roomName: "Second Room Name"
+      },
+      maxSize: 2,
+      participants: [{
+        displayName: "Bill",
+        account: "bill@example.com",
+        roomConnectionId: "2a1737a6-4a73-43b5-ae3e-906ec1e763cc"
+      }, {
+        displayName: "Bob",
+        roomConnectionId: "781f212b-f1ea-4ce1-9105-7cfc36fb4ec7"
+      }],
+      ctime: 1405517417
+    };
+
+    roomData4 = {
+      roomToken: "QzBbvlmIZWW",
+      roomUrl: "http://sample/QzBbvlmIZWW",
+      decryptedContext: {
+        roomName: "Second Room Name"
+      },
+      maxSize: 2,
+      participants: [{
+        displayName: "Bill",
+        account: "bill@example.com",
+        roomConnectionId: "2a1737a6-4a73-43b5-ae3e-906ec1e763cc"
+      }, {
+        displayName: "Bob",
+        roomConnectionId: "781f212b-f1ea-4ce1-9105-7cfc36fb4ec7"
+      }],
+      ctime: 1405517417
+    };
+
+    roomData5 = {
+      roomToken: "QzBbvlmIZWX",
+      roomUrl: "http://sample/QzBbvlmIZWX",
+      decryptedContext: {
+        roomName: "Second Room Name"
+      },
+      maxSize: 2,
+      participants: [{
+        displayName: "Bill",
+        account: "bill@example.com",
+        roomConnectionId: "2a1737a6-4a73-43b5-ae3e-906ec1e763cc"
+      }, {
+        displayName: "Bob",
+        roomConnectionId: "781f212b-f1ea-4ce1-9105-7cfc36fb4ec7"
+      }],
+      ctime: 1405517417
+    };
+
+    roomData6 = {
+      roomToken: "QzBbvlmIZWY",
+      roomUrl: "http://sample/QzBbvlmIZWY",
+      decryptedContext: {
+        roomName: "Second Room Name"
+      },
+      maxSize: 2,
+      participants: [{
+        displayName: "Bill",
+        account: "bill@example.com",
+        roomConnectionId: "2a1737a6-4a73-43b5-ae3e-906ec1e763cc"
+      }, {
+        displayName: "Bob",
+        roomConnectionId: "781f212b-f1ea-4ce1-9105-7cfc36fb4ec7"
+      }],
       ctime: 1405517417
     };
 
@@ -609,8 +687,9 @@ describe("loop.panel", function() {
         }
       });
 
-      it("should render a E10sNotSupported when multiprocess is enabled", function() {
-        loop.storedRequests.IsMultiProcessEnabled = true;
+      it("should render a E10sNotSupported when multiprocess is enabled and active", function() {
+        loop.storedRequests.IsMultiProcessActive = true;
+        loop.storedRequests["GetLoopPref|remote.autostart"] = false;
 
         var view = createTestPanelView();
 
@@ -749,6 +828,40 @@ describe("loop.panel", function() {
           TestUtils.Simulate.click(roomEntry.refs.roomEntry.getDOMNode());
           sinon.assert.calledOnce(openURLStub);
           sinon.assert.calledWithExactly(openURLStub, "http://testurl.com");
+        });
+
+        it("should open a new tab with the FTU Getting Started URL if the room context is blank", function() {
+          var roomDataNoURL = {
+            roomToken: "QzBbvGmIZWU",
+            roomUrl: "http://sample/QzBbvGmIZWU",
+            decryptedContext: {
+              roomName: roomName,
+              urls: [{
+                location: ""
+              }]
+            },
+            maxSize: 2,
+            participants: [{
+              displayName: "Alexis",
+              account: "alexis@example.com",
+              roomConnectionId: "2a1787a6-4a73-43b5-ae3e-906ec1e763cb"
+            }, {
+              displayName: "Adam",
+              roomConnectionId: "781f012b-f1ea-4ce1-9105-7cfc36fb4ec7"
+            }],
+            ctime: 1405517418
+          };
+          roomEntry = mountRoomEntry({
+            deleteRoom: sandbox.stub(),
+            isOpenedRoom: false,
+            room: new loop.store.Room(roomDataNoURL)
+          });
+          var ftuURL = requestStubs.GettingStartedURL() + "?noopenpanel=1";
+
+          TestUtils.Simulate.click(roomEntry.refs.roomEntry.getDOMNode());
+
+          sinon.assert.calledOnce(openURLStub);
+          sinon.assert.calledWithExactly(openURLStub, ftuURL);
         });
 
         it("should not open a new tab if the context is the same as the currently open tab", function() {
@@ -966,9 +1079,10 @@ describe("loop.panel", function() {
       sinon.assert.calledOnce(fakeWindow.close);
     });
 
-    it("should not render the room list view when no rooms available", function() {
+    it("should have room-list-empty element and not room-list element when no rooms", function() {
       var view = createTestComponent();
       var node = view.getDOMNode();
+      expect(node.querySelectorAll(".room-list-empty").length).to.eql(1);
       expect(node.querySelectorAll(".room-list").length).to.eql(0);
     });
 
@@ -987,6 +1101,52 @@ describe("loop.panel", function() {
       var node = view.getDOMNode();
       expect(node.querySelectorAll(".room-opened").length).to.eql(0);
       expect(node.querySelectorAll(".room-entry").length).to.eql(2);
+    });
+
+    it("should show gradient when more than 5 rooms in list", function() {
+      var sixRoomList = [
+        new loop.store.Room(roomData),
+        new loop.store.Room(roomData2),
+        new loop.store.Room(roomData3),
+        new loop.store.Room(roomData4),
+        new loop.store.Room(roomData5),
+        new loop.store.Room(roomData6)
+      ];
+      roomStore.setStoreState({ rooms: sixRoomList });
+
+      var view = createTestComponent();
+
+      var node = view.getDOMNode();
+      expect(node.querySelectorAll(".room-entry").length).to.eql(6);
+      expect(node.querySelectorAll(".room-list-blur").length).to.eql(1);
+    });
+
+    it("should not show gradient when 5 or less rooms in list", function() {
+      var fiveRoomList = [
+        new loop.store.Room(roomData),
+        new loop.store.Room(roomData2),
+        new loop.store.Room(roomData3),
+        new loop.store.Room(roomData4),
+        new loop.store.Room(roomData5)
+      ];
+      roomStore.setStoreState({ rooms: fiveRoomList });
+
+      var view = createTestComponent();
+
+      var node = view.getDOMNode();
+      expect(node.querySelectorAll(".room-entry").length).to.eql(5);
+      expect(node.querySelectorAll(".room-list-blur").length).to.eql(0);
+    });
+
+    it("should not show gradient when no rooms in list", function() {
+      var zeroRoomList = [];
+      roomStore.setStoreState({ rooms: zeroRoomList });
+
+      var view = createTestComponent();
+
+      var node = view.getDOMNode();
+      expect(node.querySelectorAll(".room-entry").length).to.eql(0);
+      expect(node.querySelectorAll(".room-list-blur").length).to.eql(0);
     });
 
     it("should only show the opened room you're in when you're in a room", function() {

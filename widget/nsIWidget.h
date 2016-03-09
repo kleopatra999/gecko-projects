@@ -133,8 +133,8 @@ typedef void* nsNativeWidget;
 #endif
 
 #define NS_IWIDGET_IID \
-{ 0x73c0a475, 0x450f, 0x4202, \
-  { 0xab, 0xb4, 0x62, 0xf8, 0x9d, 0xbe, 0xf7, 0x9a } }
+{ 0x06396bf6, 0x2dd8, 0x45e5, \
+  { 0xac, 0x45, 0x75, 0x26, 0x53, 0xb1, 0xc9, 0x80 } }
 
 /*
  * Window shadow styles
@@ -350,6 +350,7 @@ class nsIWidget : public nsISupports {
     typedef mozilla::LayoutDeviceIntSize LayoutDeviceIntSize;
     typedef mozilla::ScreenIntPoint ScreenIntPoint;
     typedef mozilla::DesktopIntRect DesktopIntRect;
+    typedef mozilla::CSSRect CSSRect;
 
     // Used in UpdateThemeGeometries.
     struct ThemeGeometry {
@@ -1286,9 +1287,13 @@ class nsIWidget : public nsISupports {
      *
      * Called by BasicCompositor on the compositor thread for OMTC drawing
      * before each composition.
+     *
+     * The window may specify its buffer mode. If unspecified, it is assumed
+     * to require double-buffering.
      */
     virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() = 0;
-    virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawingInRegion(LayoutDeviceIntRegion& aInvalidRegion) {
+    virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawingInRegion(LayoutDeviceIntRegion& aInvalidRegion,
+                                                                                  mozilla::layers::BufferMode* aBufferMode) {
       return StartRemoteDrawing();
     }
 
@@ -1834,7 +1839,8 @@ public:
     /**
      * Set IME candidate window position by windowless plugin.
      */
-    virtual void SetCandidateWindowForPlugin(int32_t aX, int32_t aY) = 0;
+    virtual void SetCandidateWindowForPlugin(
+      const mozilla::widget::CandidateWindowPosition& aPosition) = 0;
 
     /**
      * Handle default action when PluginEvent isn't handled
@@ -1894,32 +1900,6 @@ public:
      * The button's rectangle should be supplied in aButtonRect.
      */
     NS_IMETHOD OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect) = 0;
-
-    /**
-     * Compute the overridden system mouse scroll speed on the root content of
-     * web pages.  The widget may set the same value as aOriginalDelta.  E.g.,
-     * when the system scrolling settings were customized, widget can respect
-     * the will of the user.
-     *
-     * This is called only when the mouse wheel event scrolls the root content
-     * of the web pages by line.  In other words, this isn't called when the
-     * mouse wheel event is used for zoom, page scroll and other special
-     * actions.  And also this isn't called when the user doesn't use the
-     * system wheel speed settings.
-     *
-     * @param aOriginalDeltaX   The X delta value of the current mouse wheel
-     *                          scrolling event.
-     * @param aOriginalDeltaX   The Y delta value of the current mouse wheel
-     *                          scrolling event.
-     * @param aOverriddenDeltaX The overridden mouse scrolling speed along X
-     *                          axis. This value may be same as aOriginalDeltaX.
-     * @param aOverriddenDeltaY The overridden mouse scrolling speed along Y
-     *                          axis. This value may be same as aOriginalDeltaY.
-     */
-    NS_IMETHOD OverrideSystemMouseScrollSpeed(double aOriginalDeltaX,
-                                              double aOriginalDeltaY,
-                                              double& aOverriddenDeltaX,
-                                              double& aOverriddenDeltaY) = 0;
 
     /**
      * Return true if this process shouldn't use platform widgets, and
@@ -2068,6 +2048,11 @@ public:
      * widget.  Note that this never returns nullptr.
      */
     NS_IMETHOD_(TextEventDispatcher*) GetTextEventDispatcher() = 0;
+
+    virtual void ZoomToRect(const uint32_t& aPresShellId,
+                            const FrameMetrics::ViewID& aViewId,
+                            const CSSRect& aRect,
+                            const uint32_t& aFlags) = 0;
 
 protected:
     /**

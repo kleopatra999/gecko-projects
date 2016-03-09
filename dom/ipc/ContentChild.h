@@ -77,7 +77,7 @@ public:
 
   nsresult
   ProvideWindowCommon(TabChild* aTabOpener,
-                      nsIDOMWindow* aOpener,
+                      mozIDOMWindowProxy* aOpener,
                       bool aIframeMoz,
                       uint32_t aChromeFlags,
                       bool aCalledFromJS,
@@ -87,7 +87,7 @@ public:
                       const nsAString& aName,
                       const nsACString& aFeatures,
                       bool* aWindowIsNew,
-                      nsIDOMWindow** aReturn);
+                      mozIDOMWindowProxy** aReturn);
 
   bool Init(MessageLoop* aIOLoop,
             base::ProcessId aParentPid,
@@ -143,6 +143,11 @@ public:
   PGMPServiceChild*
   AllocPGMPServiceChild(mozilla::ipc::Transport* transport,
                         base::ProcessId otherProcess) override;
+
+  PAPZChild*
+  AllocPAPZChild(const TabId& aTabId) override;
+  bool
+  DeallocPAPZChild(PAPZChild* aActor) override;
 
   PCompositorChild*
   AllocPCompositorChild(mozilla::ipc::Transport* aTransport,
@@ -526,6 +531,19 @@ public:
   virtual bool RecvEndDragSession(const bool& aDoneDrag,
                                   const bool& aUserCancelled) override;
 
+  virtual bool
+  RecvPush(const nsCString& aScope,
+           const IPC::Principal& aPrincipal) override;
+
+  virtual bool
+  RecvPushWithData(const nsCString& aScope,
+                   const IPC::Principal& aPrincipal,
+                   InfallibleTArray<uint8_t>&& aData) override;
+
+  virtual bool
+  RecvPushSubscriptionChange(const nsCString& aScope,
+                             const IPC::Principal& aPrincipal) override;
+
 #ifdef ANDROID
   gfx::IntSize GetScreenSize() { return mScreenSize; }
 #endif
@@ -574,8 +592,7 @@ public:
   AllocPOfflineCacheUpdateChild(const URIParams& manifestURI,
                                 const URIParams& documentURI,
                                 const PrincipalInfo& aLoadingPrincipalInfo,
-                                const bool& stickDocument,
-                                const TabId& aTabId) override;
+                                const bool& stickDocument) override;
 
   virtual bool
   DeallocPOfflineCacheUpdateChild(POfflineCacheUpdateChild* offlineCacheUpdate) override;
@@ -592,8 +609,6 @@ public:
   DeallocPContentPermissionRequestChild(PContentPermissionRequestChild* actor) override;
 
   virtual bool RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent) override;
-
-  virtual bool RecvTestGraphicsDeviceReset(const uint32_t& aResetReason) override;
 
 private:
   virtual void ActorDestroy(ActorDestroyReason why) override;

@@ -1222,7 +1222,11 @@ GeckoMediaPluginServiceParent::IsPersistentStorageAllowed(const nsACString& aNod
 {
   MOZ_ASSERT(NS_GetCurrentThread() == mGMPThread);
   NS_ENSURE_ARG(aOutAllowed);
-  *aOutAllowed = mPersistentStorageAllowed.Get(aNodeId);
+  // We disallow persistent storage for the NodeId used for shared GMP
+  // decoding, to prevent GMP decoding being used to track what a user
+  // watches somehow.
+  *aOutAllowed = !aNodeId.Equals(SHARED_GMP_DECODING_NODE_ID) &&
+                 mPersistentStorageAllowed.Get(aNodeId);
   return NS_OK;
 }
 
@@ -1578,7 +1582,7 @@ GeckoMediaPluginServiceParent::ForgetThisSiteOnGMPThread(const nsACString& aSite
 
   struct OriginFilter : public DirectoryFilter {
     explicit OriginFilter(const nsACString& aSite) : mSite(aSite) {}
-    virtual bool operator()(nsIFile* aPath) {
+    bool operator()(nsIFile* aPath) override {
       return MatchOrigin(aPath, mSite);
     }
   private:
@@ -1615,7 +1619,7 @@ GeckoMediaPluginServiceParent::ClearRecentHistoryOnGMPThread(PRTime aSince)
     }
 
     // |aPath| is $profileDir/gmp/$platform/$gmpName/id/$originHash/
-    virtual bool operator()(nsIFile* aPath) {
+    bool operator()(nsIFile* aPath) override {
       if (IsModifiedAfter(aPath)) {
         return true;
       }

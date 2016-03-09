@@ -98,67 +98,6 @@ static bool EnsureGLContext()
   return sPluginContext != nullptr;
 }
 
-class SharedPluginTexture final {
-public:
-  NS_INLINE_DECL_REFCOUNTING(SharedPluginTexture)
-
-  SharedPluginTexture() : mLock("SharedPluginTexture.mLock")
-  {
-  }
-
-  nsNPAPIPluginInstance::TextureInfo Lock()
-  {
-    if (!EnsureGLContext()) {
-      mTextureInfo.mTexture = 0;
-      return mTextureInfo;
-    }
-
-    if (!mTextureInfo.mTexture && sPluginContext->MakeCurrent()) {
-      sPluginContext->fGenTextures(1, &mTextureInfo.mTexture);
-    }
-
-    mLock.Lock();
-    return mTextureInfo;
-  }
-
-  void Release(nsNPAPIPluginInstance::TextureInfo& aTextureInfo)
-  {
-    mTextureInfo = aTextureInfo;
-    mLock.Unlock();
-  }
-
-  EGLImage CreateEGLImage()
-  {
-    MutexAutoLock lock(mLock);
-
-    if (!EnsureGLContext())
-      return 0;
-
-    if (mTextureInfo.mWidth == 0 || mTextureInfo.mHeight == 0)
-      return 0;
-
-    GLuint& tex = mTextureInfo.mTexture;
-    EGLImage image = gl::CreateEGLImage(sPluginContext, tex);
-
-    // We want forget about this now, so delete the texture. Assigning it to zero
-    // ensures that we create a new one in Lock()
-    sPluginContext->fDeleteTextures(1, &tex);
-    tex = 0;
-
-    return image;
-  }
-
-private:
-  // Private destructor, to discourage deletion outside of Release():
-  ~SharedPluginTexture()
-  {
-  }
-
-  nsNPAPIPluginInstance::TextureInfo mTextureInfo;
-
-  Mutex mLock;
-};
-
 static std::map<NPP, nsNPAPIPluginInstance*> sPluginNPPMap;
 
 #endif
@@ -259,7 +198,6 @@ nsNPAPIPluginInstance::Destroy()
   if (mContentSurface)
     mContentSurface->SetFrameAvailableCallback(nullptr);
 
-  mContentTexture = nullptr;
   mContentSurface = nullptr;
 
   std::map<void*, VideoInfo*>::iterator it;
@@ -280,6 +218,7 @@ nsNPAPIPluginInstance::StopTime()
 
 nsresult nsNPAPIPluginInstance::Initialize(nsNPAPIPlugin *aPlugin, nsPluginInstanceOwner* aOwner, const nsACString& aMIMEType)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsNPAPIPluginInstance::Initialize this=%p\n",this));
 
   NS_ENSURE_ARG_POINTER(aPlugin);
@@ -301,7 +240,7 @@ nsresult nsNPAPIPluginInstance::Stop()
 
   // Make sure the plugin didn't leave popups enabled.
   if (mPopupStates.Length() > 0) {
-    nsCOMPtr<nsPIDOMWindow> window = GetDOMWindow();
+    nsCOMPtr<nsPIDOMWindowOuter> window = GetDOMWindow();
 
     if (window) {
       window->PopPopupControlState(openAbused);
@@ -372,7 +311,7 @@ nsresult nsNPAPIPluginInstance::Stop()
     return NS_OK;
 }
 
-already_AddRefed<nsPIDOMWindow>
+already_AddRefed<nsPIDOMWindowOuter>
 nsNPAPIPluginInstance::GetDOMWindow()
 {
   if (!mOwner)
@@ -385,7 +324,7 @@ nsNPAPIPluginInstance::GetDOMWindow()
   if (!doc)
     return nullptr;
 
-  RefPtr<nsPIDOMWindow> window = doc->GetWindow();
+  RefPtr<nsPIDOMWindowOuter> window = doc->GetWindow();
 
   return window.forget();
 }
@@ -654,6 +593,8 @@ nsresult nsNPAPIPluginInstance::HandleEvent(void* event, int16_t* result,
 {
   if (RUNNING != mRunning)
     return NS_OK;
+
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
 
   if (!event)
     return NS_ERROR_FAILURE;
@@ -927,30 +868,12 @@ void nsNPAPIPluginInstance::SetWakeLock(bool aLocked)
                       hal::WAKE_LOCK_NO_CHANGE);
 }
 
-void nsNPAPIPluginInstance::EnsureSharedTexture()
-{
-  if (!mContentTexture)
-    mContentTexture = new SharedPluginTexture();
-}
-
 GLContext* nsNPAPIPluginInstance::GLContext()
 {
   if (!EnsureGLContext())
     return nullptr;
 
   return sPluginContext;
-}
-
-nsNPAPIPluginInstance::TextureInfo nsNPAPIPluginInstance::LockContentTexture()
-{
-  EnsureSharedTexture();
-  return mContentTexture->Lock();
-}
-
-void nsNPAPIPluginInstance::ReleaseContentTexture(nsNPAPIPluginInstance::TextureInfo& aTextureInfo)
-{
-  EnsureSharedTexture();
-  mContentTexture->Release(aTextureInfo);
 }
 
 already_AddRefed<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceTexture()
@@ -989,15 +912,6 @@ void* nsNPAPIPluginInstance::AcquireContentWindow()
   }
 
   return mContentSurface->NativeWindow()->Handle();
-}
-
-EGLImage
-nsNPAPIPluginInstance::AsEGLImage()
-{
-  if (!mContentTexture)
-    return 0;
-
-  return mContentTexture->CreateEGLImage();
 }
 
 AndroidSurfaceTexture*
@@ -1207,6 +1121,29 @@ nsNPAPIPluginInstance::GetImageSize(nsIntSize* aSize)
   return !library ? NS_ERROR_FAILURE : library->GetImageSize(&mNPP, aSize);
 }
 
+#if defined(XP_WIN)
+nsresult
+nsNPAPIPluginInstance::GetScrollCaptureContainer(ImageContainer**aContainer)
+{
+  *aContainer = nullptr;
+
+  if (RUNNING != mRunning)
+    return NS_OK;
+
+  AutoPluginLibraryCall library(this);
+  return !library ? NS_ERROR_FAILURE : library->GetScrollCaptureContainer(&mNPP, aContainer);
+}
+nsresult
+nsNPAPIPluginInstance::UpdateScrollState(bool aIsScrolling)
+{
+  if (RUNNING != mRunning)
+    return NS_OK;
+
+  AutoPluginLibraryCall library(this);
+  return !library ? NS_ERROR_FAILURE : library->UpdateScrollState(&mNPP, aIsScrolling);
+}
+#endif
+
 void
 nsNPAPIPluginInstance::DidComposite()
 {
@@ -1304,7 +1241,7 @@ nsNPAPIPluginInstance::GetFormValue(nsAString& aValue)
 nsresult
 nsNPAPIPluginInstance::PushPopupsEnabledState(bool aEnabled)
 {
-  nsCOMPtr<nsPIDOMWindow> window = GetDOMWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetDOMWindow();
   if (!window)
     return NS_ERROR_FAILURE;
 
@@ -1331,7 +1268,7 @@ nsNPAPIPluginInstance::PopPopupsEnabledState()
     return NS_OK;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetDOMWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetDOMWindow();
   if (!window)
     return NS_ERROR_FAILURE;
 
@@ -1397,7 +1334,7 @@ nsNPAPIPluginInstance::IsPrivateBrowsing(bool* aEnabled)
   mOwner->GetDocument(getter_AddRefs(doc));
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsPIDOMWindow> domwindow = doc->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> domwindow = doc->GetWindow();
   NS_ENSURE_TRUE(domwindow, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIDocShell> docShell = domwindow->GetDocShell();
@@ -1831,7 +1768,7 @@ nsNPAPIPluginInstance::GetOrCreateAudioChannelAgent(nsIAudioChannelAgent** aAgen
       return NS_ERROR_FAILURE;
     }
 
-    nsCOMPtr<nsPIDOMWindow> window = GetDOMWindow();
+    nsCOMPtr<nsPIDOMWindowOuter> window = GetDOMWindow();
     if (NS_WARN_IF(!window)) {
       return NS_ERROR_FAILURE;
     }

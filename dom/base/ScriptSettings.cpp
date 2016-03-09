@@ -26,7 +26,8 @@
 namespace mozilla {
 namespace dom {
 
-static mozilla::ThreadLocal<ScriptSettingsStackEntry*> sScriptSettingsTLS;
+static MOZ_THREAD_LOCAL(ScriptSettingsStackEntry*) sScriptSettingsTLS;
+static bool sScriptSettingsTLSInitialized;
 
 class ScriptSettingsStack {
 public:
@@ -94,14 +95,13 @@ UnuseEntryScriptProfiling()
 void
 InitScriptSettings()
 {
-  if (!sScriptSettingsTLS.initialized()) {
-    bool success = sScriptSettingsTLS.init();
-    if (!success) {
-      MOZ_CRASH();
-    }
+  bool success = sScriptSettingsTLS.init();
+  if (!success) {
+    MOZ_CRASH();
   }
 
   sScriptSettingsTLS.set(nullptr);
+  sScriptSettingsTLSInitialized = true;
 }
 
 void
@@ -113,7 +113,7 @@ DestroyScriptSettings()
 bool
 ScriptSettingsInitialized()
 {
-  return sScriptSettingsTLS.initialized();
+  return sScriptSettingsTLSInitialized;
 }
 
 ScriptSettingsStackEntry::ScriptSettingsStackEntry(nsIGlobalObject *aGlobal,
@@ -192,13 +192,15 @@ nsIDocument*
 GetEntryDocument()
 {
   nsIGlobalObject* global = GetEntryGlobal();
-  nsCOMPtr<nsPIDOMWindow> entryWin = do_QueryInterface(global);
+  nsCOMPtr<nsPIDOMWindowInner> entryWin = do_QueryInterface(global);
 
   // If our entry global isn't a window, see if it's an addon scope associated
   // with a window. If it is, the caller almost certainly wants that rather
   // than null.
   if (!entryWin && global) {
-    entryWin = xpc::AddonWindowOrNull(global->GetGlobalJSObject());
+    if (auto* win = xpc::AddonWindowOrNull(global->GetGlobalJSObject())) {
+      entryWin = win->AsInner();
+    }
   }
 
   return entryWin ? entryWin->GetExtantDoc() : nullptr;
@@ -347,9 +349,10 @@ AutoJSAPI::InitInternal(JSObject* aGlobal, JSContext* aCx, bool aIsMainThread)
     mAutoNullableCompartment.emplace(mCx, aGlobal);
   }
 
+  JSRuntime* rt = JS_GetRuntime(aCx);
+  mOldErrorReporter.emplace(JS_GetErrorReporter(rt));
+
   if (aIsMainThread) {
-    JSRuntime* rt = JS_GetRuntime(aCx);
-    mOldErrorReporter.emplace(JS_GetErrorReporter(rt));
     JS_SetErrorReporter(rt, xpc::SystemErrorReporter);
   }
 }
@@ -419,15 +422,15 @@ AutoJSAPI::InitWithLegacyErrorReporting(nsIGlobalObject* aGlobalObject)
 }
 
 bool
-AutoJSAPI::Init(nsPIDOMWindow* aWindow, JSContext* aCx)
+AutoJSAPI::Init(nsPIDOMWindowInner* aWindow, JSContext* aCx)
 {
-  return Init(static_cast<nsGlobalWindow*>(aWindow), aCx);
+  return Init(nsGlobalWindow::Cast(aWindow), aCx);
 }
 
 bool
-AutoJSAPI::Init(nsPIDOMWindow* aWindow)
+AutoJSAPI::Init(nsPIDOMWindowInner* aWindow)
 {
-  return Init(static_cast<nsGlobalWindow*>(aWindow));
+  return Init(nsGlobalWindow::Cast(aWindow));
 }
 
 bool
@@ -443,9 +446,9 @@ AutoJSAPI::Init(nsGlobalWindow* aWindow)
 }
 
 bool
-AutoJSAPI::InitWithLegacyErrorReporting(nsPIDOMWindow* aWindow)
+AutoJSAPI::InitWithLegacyErrorReporting(nsPIDOMWindowInner* aWindow)
 {
-  return InitWithLegacyErrorReporting(static_cast<nsGlobalWindow*>(aWindow));
+  return InitWithLegacyErrorReporting(nsGlobalWindow::Cast(aWindow));
 }
 
 bool
@@ -463,13 +466,32 @@ AutoJSAPI::InitWithLegacyErrorReporting(nsGlobalWindow* aWindow)
 void
 WarningOnlyErrorReporter(JSContext* aCx, const char* aMessage, JSErrorReport* aRep)
 {
-  MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(JSREPORT_IS_WARNING(aRep->flags));
+  if (!NS_IsMainThread()) {
+    // Reporting a warning on workers is a bit complicated because we have to
+    // climb our parent chain until we get to the main thread.  So go ahead and
+    // just go through the worker ReportError codepath here.
+    //
+    // That said, it feels like we should be able to short-circuit things a bit
+    // here by posting an appropriate runnable to the main thread directly...
+    // Worth looking into sometime.
+    workers::WorkerPrivate* worker = workers::GetWorkerPrivateFromContext(aCx);
+    MOZ_ASSERT(worker);
+
+    worker->ReportError(aCx, aMessage, aRep);
+    return;
+  }
 
   RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
-  nsPIDOMWindow* win = xpc::CurrentWindowOrNull(aCx);
+  nsGlobalWindow* win = xpc::CurrentWindowOrNull(aCx);
+  if (!win) {
+    // We run addons in a separate privileged compartment, but if we're in an
+    // addon compartment we should log warnings to the console of the associated
+    // DOM Window.
+    win = xpc::AddonWindowOrNull(JS::CurrentGlobalOrNull(aCx));
+  }
   xpcReport->Init(aRep, aMessage, nsContentUtils::IsCallerChrome(),
-                  win ? win->WindowID() : 0);
+                  win ? win->AsInner()->WindowID() : 0);
   xpcReport->LogToConsole();
 }
 
@@ -482,13 +504,7 @@ AutoJSAPI::TakeOwnershipOfErrorReporting()
   JSRuntime *rt = JS_GetRuntime(cx());
   mOldAutoJSAPIOwnsErrorReporting = JS::ContextOptionsRef(cx()).autoJSAPIOwnsErrorReporting();
   JS::ContextOptionsRef(cx()).setAutoJSAPIOwnsErrorReporting(true);
-  // Workers have their own error reporting mechanism which deals with warnings
-  // as well, so don't change the worker error reporter for now.  Once we switch
-  // all of workers to TakeOwnershipOfErrorReporting(), we will just make the
-  // default worker error reporter assert that it only sees warnings.
-  if (mIsMainThread) {
-    JS_SetErrorReporter(rt, WarningOnlyErrorReporter);
-  }
+  JS_SetErrorReporter(rt, WarningOnlyErrorReporter);
 }
 
 void
@@ -505,22 +521,36 @@ AutoJSAPI::ReportException()
   // In this case, we enter the privileged junk scope and don't dispatch any
   // error events.
   JS::Rooted<JSObject*> errorGlobal(cx(), JS::CurrentGlobalOrNull(cx()));
-  if (!errorGlobal)
-    errorGlobal = xpc::PrivilegedJunkScope();
+  if (!errorGlobal) {
+    if (mIsMainThread) {
+      errorGlobal = xpc::PrivilegedJunkScope();
+    } else {
+      errorGlobal = workers::GetCurrentThreadWorkerGlobal();
+    }
+  }
   JSAutoCompartment ac(cx(), errorGlobal);
   JS::Rooted<JS::Value> exn(cx());
   js::ErrorReport jsReport(cx());
   if (StealException(&exn) && jsReport.init(cx(), exn)) {
     if (mIsMainThread) {
       RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
-      nsCOMPtr<nsPIDOMWindow> win = xpc::WindowGlobalOrNull(errorGlobal);
+
+      RefPtr<nsGlobalWindow> win = xpc::WindowGlobalOrNull(errorGlobal);
+      if (!win) {
+        // We run addons in a separate privileged compartment, but they still
+        // expect to trigger the onerror handler of their associated DOM Window.
+        win = xpc::AddonWindowOrNull(errorGlobal);
+      }
+      nsPIDOMWindowInner* inner = win ? win->AsInner() : nullptr;
       xpcReport->Init(jsReport.report(), jsReport.message(),
                       nsContentUtils::IsCallerChrome(),
-                      win ? win->WindowID() : 0);
-      if (win) {
-        DispatchScriptErrorEvent(win, JS_GetRuntime(cx()), xpcReport, exn);
+                      inner ? inner->WindowID() : 0);
+      if (inner && jsReport.report()->errorNumber != JSMSG_OUT_OF_MEMORY) {
+        DispatchScriptErrorEvent(inner, JS_GetRuntime(cx()), xpcReport, exn);
       } else {
-        xpcReport->LogToConsole();
+        JS::Rooted<JSObject*> stack(cx(),
+          xpc::FindExceptionStackForConsoleReport(cx(), inner, exn));
+        xpcReport->LogToConsoleWithStack(stack);
       }
     } else {
       // On a worker, we just use the worker error reporting mechanism and don't
@@ -540,6 +570,7 @@ AutoJSAPI::ReportException()
     }
   } else {
     NS_WARNING("OOMed while acquiring uncaught exception from JSAPI");
+    ClearException();
   }
 }
 
@@ -612,7 +643,7 @@ AutoEntryScript::DocshellEntryMonitor::Entry(JSContext* aCx, JSFunction* aFuncti
     rootedScript = aScript;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window =
+  nsCOMPtr<nsPIDOMWindowInner> window =
     do_QueryInterface(xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx)));
   if (!window || !window->GetDocShell() ||
       !window->GetDocShell()->GetRecordProfileTimelineMarkers()) {
@@ -659,7 +690,7 @@ AutoEntryScript::DocshellEntryMonitor::Entry(JSContext* aCx, JSFunction* aFuncti
 void
 AutoEntryScript::DocshellEntryMonitor::Exit(JSContext* aCx)
 {
-  nsCOMPtr<nsPIDOMWindow> window =
+  nsCOMPtr<nsPIDOMWindowInner> window =
     do_QueryInterface(xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx)));
   // Not really worth checking GetRecordProfileTimelineMarkers here.
   if (window && window->GetDocShell()) {

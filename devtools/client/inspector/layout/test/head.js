@@ -1,6 +1,9 @@
 /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
  http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint no-unused-vars: [2, {"vars": "local"}] */
+/* import-globals-from ../../../framework/test/shared-head.js */
+/* import-globals-from ../../test/head.js */
 "use strict";
 
 // Import the inspector's head.js first (which itself imports shared-head.js).
@@ -46,51 +49,33 @@ function selectAndHighlightNode(nodeOrSelector, inspector) {
 }
 
 /**
- * Checks whether the inspector's sidebar corresponding to the given id already
- * exists
- * @param {InspectorPanel}
- * @param {String}
- * @return {Boolean}
- */
-function hasSideBarTab(inspector, id) {
-  return !!inspector.sidebar.getWindowForTab(id);
-}
-
-/**
  * Open the toolbox, with the inspector tool visible, and the layout-view
  * sidebar tab selected.
  * @return a promise that resolves when the inspector is ready and the layout
  * view is visible and ready
  */
-var openLayoutView = Task.async(function*() {
-  let {toolbox, inspector} = yield openInspector();
+function openLayoutView() {
+  return openInspectorSidebarTab("layoutview").then(data => {
+    // The actual highligher show/hide methods are mocked in layoutview tests.
+    // The highlighter is tested in devtools/inspector/test.
+    function mockHighlighter({highlighter}) {
+      highlighter.showBoxModel = function() {
+        return promise.resolve();
+      };
+      highlighter.hideBoxModel = function() {
+        return promise.resolve();
+      };
+    }
+    mockHighlighter(data.toolbox);
 
-  // The actual highligher show/hide methods are mocked in layoutview tests.
-  // The highlighter is tested in devtools/inspector/test.
-  function mockHighlighter({highlighter}) {
-    highlighter.showBoxModel = function(nodeFront, options) {
-      return promise.resolve();
+    return {
+      toolbox: data.toolbox,
+      inspector: data.inspector,
+      view: data.inspector.layoutview,
+      testActor: data.testActor
     };
-    highlighter.hideBoxModel = function() {
-      return promise.resolve();
-    };
-  }
-  mockHighlighter(toolbox);
-
-  if (!hasSideBarTab(inspector, "layoutview")) {
-    info("Waiting for the layoutview sidebar to be ready");
-    yield inspector.sidebar.once("layoutview-ready");
-  }
-
-  info("Selecting the layoutview sidebar");
-  inspector.sidebar.select("layoutview");
-
-  return {
-    toolbox: toolbox,
-    inspector: inspector,
-    view: inspector.sidebar.getWindowForTab("layoutview")["layoutview"]
-  };
-});
+  });
+}
 
 /**
  * Wait for the layoutview-updated event.
@@ -100,27 +85,16 @@ function waitForUpdate(inspector) {
   return inspector.once("layoutview-updated");
 }
 
-/**
- * The addTest/runTests function couple provides a simple way to define
- * subsequent test cases in a test file. Example:
- *
- * addTest("what this test does", function*() {
- *   ... actual code for the test ...
- * });
- * addTest("what this second test does", function*() {
- *   ... actual code for the second test ...
- * });
- * runTests().then(...);
- */
-var TESTS = [];
-
-function addTest(message, func) {
-  TESTS.push([message, Task.async(func)]);
+function getStyle(testActor, selector, propertyName) {
+  return testActor.eval(`
+    content.document.querySelector("${selector}")
+                    .style.getPropertyValue("${propertyName}");
+  `);
 }
 
-var runTests = Task.async(function*(...args) {
-  for (let [message, test] of TESTS) {
-    info("Running new test case: " + message);
-    yield test.apply(null, args);
-  }
-});
+function setStyle(testActor, selector, propertyName, value) {
+  return testActor.eval(`
+    content.document.querySelector("${selector}")
+                    .style.${propertyName} = "${value}";
+  `);
+}

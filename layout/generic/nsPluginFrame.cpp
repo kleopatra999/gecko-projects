@@ -54,6 +54,7 @@
 #include "gfxWindowsSurface.h"
 #endif
 
+#include "DisplayItemScrollClip.h"
 #include "Layers.h"
 #include "ReadbackLayer.h"
 #include "ImageContainer.h"
@@ -313,7 +314,7 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
     // will be reset when nsRootPresContext computes our true
     // geometry. The plugin window does need to have a good size here, so
     // set the size explicitly to a reasonable guess.
-    nsAutoTArray<nsIWidget::Configuration,1> configurations;
+    AutoTArray<nsIWidget::Configuration,1> configurations;
     nsIWidget::Configuration* configuration = configurations.AppendElement();
     nscoord appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
     configuration->mChild = mWidget;
@@ -417,7 +418,8 @@ nsPluginFrame::GetWidgetConfiguration(nsTArray<nsIWidget::Configuration>* aConfi
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   if (XRE_IsContentProcess()) {
     configuration->mWindowID = (uintptr_t)mWidget->GetNativeData(NS_NATIVE_PLUGIN_PORT);
-    configuration->mVisible = mWidget->IsVisible();
+    configuration->mVisible = !mIsHiddenDueToScroll && mWidget->IsVisible();
+
   }
 #endif // defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 }
@@ -779,7 +781,8 @@ nsPluginFrame::SetScrollVisibility(bool aState)
     mIsHiddenDueToScroll = aState;
     // Force a paint so plugin window visibility gets flushed via
     // the compositor.
-    if (changed) {
+    if (changed && mInstanceOwner) {
+      mInstanceOwner->UpdateScrollState(mIsHiddenDueToScroll);
       SchedulePaint();
     }
   }
@@ -790,10 +793,8 @@ nsPluginFrame::GetRemoteTabChromeOffset()
 {
   LayoutDeviceIntPoint offset;
   if (XRE_IsContentProcess()) {
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(GetContent()->OwnerDoc()->GetWindow());
-    if (window) {
-      nsCOMPtr<nsPIDOMWindow> topWindow = window->GetTop();
-      if (topWindow) {
+    if (nsPIDOMWindowOuter* window = GetContent()->OwnerDoc()->GetWindow()) {
+      if (nsCOMPtr<nsPIDOMWindowOuter> topWindow = window->GetTop()) {
         dom::TabChild* tc = dom::TabChild::GetFrom(topWindow);
         if (tc) {
           offset += tc->GetChromeDisplacement();
@@ -1002,6 +1003,19 @@ nsDisplayPlugin::Paint(nsDisplayListBuilder* aBuilder,
   f->PaintPlugin(aBuilder, *aCtx, mVisibleRect, GetBounds(aBuilder, &snap));
 }
 
+static nsRect
+GetClippedBoundsIncludingAllScrollClips(nsDisplayItem* aItem,
+                                        nsDisplayListBuilder* aBuilder)
+{
+  nsRect r = aItem->GetClippedBounds(aBuilder);
+  for (auto* sc = aItem->ScrollClip(); sc; sc = sc->mParent) {
+    if (sc->mClip) {
+      r = sc->mClip->ApplyNonRoundedIntersection(r);
+    }
+  }
+  return r;
+}
+
 bool
 nsDisplayPlugin::ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                    nsRegion* aVisibleRegion)
@@ -1022,15 +1036,14 @@ nsDisplayPlugin::ComputeVisibility(nsDisplayListBuilder* aBuilder,
       // Apply all scroll clips when computing the clipped bounds of this item.
       // We hide windowed plugins during APZ scrolling, so there never is an
       // async transform that we need to take into account when clipping.
-      visibleRegion.And(*aVisibleRegion, GetScrollClippedBoundsUpTo(aBuilder, nullptr));
+      visibleRegion.And(*aVisibleRegion, GetClippedBoundsIncludingAllScrollClips(this, aBuilder));
       // Make visibleRegion relative to f
       visibleRegion.MoveBy(-ToReferenceFrame());
 
       f->mNextConfigurationClipRegion.Clear();
-      nsRegionRectIterator iter(visibleRegion);
-      for (const nsRect* r = iter.Next(); r; r = iter.Next()) {
+      for (auto iter = visibleRegion.RectIter(); !iter.Done(); iter.Next()) {
         nsRect rAncestor =
-          nsLayoutUtils::TransformFrameRectToAncestor(f, *r, ReferenceFrame());
+          nsLayoutUtils::TransformFrameRectToAncestor(f, iter.Get(), ReferenceFrame());
         LayoutDeviceIntRect rPixels =
           LayoutDeviceIntRect::FromUnknownRect(rAncestor.ToNearestPixels(appUnitsPerDevPixel)) -
           f->mNextConfigurationBounds.TopLeft();
@@ -1123,11 +1136,13 @@ nsPluginFrame::DidSetWidgetGeometry()
 bool
 nsPluginFrame::IsOpaque() const
 {
+#if defined(MOZ_WIDGET_GTK)
   // Insure underlying content gets painted when we clip windowed plugins
   // during remote content scroll operations managed by nsGfxScrollFrame.
   if (mIsHiddenDueToScroll) {
     return false;
   }
+#endif
 #if defined(XP_MACOSX)
   return false;
 #elif defined(MOZ_WIDGET_ANDROID)
@@ -1173,11 +1188,13 @@ nsPluginFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
 {
+#if defined(MOZ_WIDGET_GTK)
   // Clip windowed plugin frames from the list during remote content scroll
   // operations managed by nsGfxScrollFrame.
   if (mIsHiddenDueToScroll) {
     return;
   }
+#endif
 
   // XXX why are we painting collapsed object frames?
   if (!IsVisibleOrCollapsedForPainting(aBuilder))
@@ -1399,6 +1416,10 @@ nsPluginFrame::GetLayerState(nsDisplayListBuilder* aBuilder,
     return LAYER_ACTIVE;
 #endif
 
+  if (mInstanceOwner->NeedsScrollImageLayer()) {
+    return LAYER_ACTIVE;
+  }
+
   if (!mInstanceOwner->UseAsyncRendering()) {
     return LAYER_NONE;
   }
@@ -1463,10 +1484,13 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     (aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem));
 
   if (aItem->GetType() == nsDisplayItem::TYPE_PLUGIN) {
-    // Create image
-    RefPtr<ImageContainer> container = mInstanceOwner->GetImageContainer();
+    RefPtr<ImageContainer> container;
+    // Image for Windowed plugins that support window capturing for scroll
+    // operations or async windowless rendering.
+    container = mInstanceOwner->GetImageContainer();
     if (!container) {
-      // This can occur if our instance is gone.
+      // This can occur if our instance is gone or if the current plugin
+      // configuration does not require a backing image layer.
       return nullptr;
     }
 
@@ -1772,9 +1796,7 @@ nsPluginFrame::SetIsDocumentActive(bool aIsActive)
 nsIObjectFrame *
 nsPluginFrame::GetNextObjectFrame(nsPresContext* aPresContext, nsIFrame* aRoot)
 {
-  nsIFrame* child = aRoot->GetFirstPrincipalChild();
-
-  while (child) {
+  for (nsIFrame* child : aRoot->PrincipalChildList()) {
     nsIObjectFrame* outFrame = do_QueryFrame(child);
     if (outFrame) {
       RefPtr<nsNPAPIPluginInstance> pi;
@@ -1786,7 +1808,6 @@ nsPluginFrame::GetNextObjectFrame(nsPresContext* aPresContext, nsIFrame* aRoot)
     outFrame = GetNextObjectFrame(aPresContext, child);
     if (outFrame)
       return outFrame;
-    child = child->GetNextSibling();
   }
 
   return nullptr;

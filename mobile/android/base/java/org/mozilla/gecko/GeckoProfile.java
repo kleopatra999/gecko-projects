@@ -16,11 +16,13 @@ import java.nio.charset.Charset;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Hashtable;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.json.JSONException;
 import org.json.JSONArray;
+import org.json.JSONObject;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.GeckoProfileDirectories.NoSuchProfileException;
@@ -38,11 +40,21 @@ import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.support.annotation.WorkerThread;
 import android.text.TextUtils;
 import android.util.Log;
 
 public final class GeckoProfile {
     private static final String LOGTAG = "GeckoProfile";
+
+    // The path in the profile to the file containing the client ID.
+    private static final String CLIENT_ID_FILE_PATH = "datareporting/state.json";
+    private static final String FHR_CLIENT_ID_FILE_PATH = "healthreport/state.json";
+    // In the client ID file, the attribute title in the JSON object containing the client ID value.
+    private static final String CLIENT_ID_JSON_ATTR = "clientID";
+
+    private static final String TIMES_PATH = "times.json";
+    private static final String PROFILE_CREATION_DATE_JSON_ATTR = "created";
 
     // Only tests should need to do this.
     // We can default this to AppConstants.RELEASE_BUILD once we fix Bug 1069687.
@@ -71,7 +83,6 @@ public final class GeckoProfile {
 
     private final String mName;
     private final File mMozillaDir;
-    private final boolean mIsWebAppProfile;
     private final Context mApplicationContext;
 
     private final BrowserDB mDB;
@@ -254,7 +265,7 @@ public final class GeckoProfile {
                 // We're unable to do anything sane here.
                 throw new RuntimeException(e);
             }
-        } else {
+        } else if (AppConstants.DEBUG_BUILD) {
             Log.v(LOGTAG, "Fetching profile: '" + profileName + "', '" + profileDir + "'");
         }
 
@@ -294,6 +305,8 @@ public final class GeckoProfile {
         }
     }
 
+    // Currently unused outside of testing.
+    @RobocopTarget
     public static boolean removeProfile(Context context, String profileName) {
         if (profileName == null) {
             Log.w(LOGTAG, "Unable to remove profile: null profile name.");
@@ -445,7 +458,6 @@ public final class GeckoProfile {
 
         mApplicationContext = context.getApplicationContext();
         mName = profileName;
-        mIsWebAppProfile = profileName.startsWith("webapp");
         mMozillaDir = GeckoProfileDirectories.getMozillaDirectory(context);
 
         // This apes the behavior of setDir.
@@ -461,9 +473,6 @@ public final class GeckoProfile {
         return mDB;
     }
 
-    public boolean isWebAppProfile() {
-        return mIsWebAppProfile;
-    }
 
     // Warning, Changing the lock file state from outside apis will cause this to become out of sync
     public boolean locked() {
@@ -589,6 +598,131 @@ public final class GeckoProfile {
     }
 
     /**
+     * Retrieves the Gecko client ID from the filesystem. If the client ID does not exist, we attempt to migrate and
+     * persist it from FHR and, if that fails, we attempt to create a new one ourselves.
+     *
+     * This method assumes the client ID is located in a file at a hard-coded path within the profile. The format of
+     * this file is a JSONObject which at the bottom level contains a String -> String mapping containing the client ID.
+     *
+     * WARNING: the platform provides a JSM to retrieve the client ID [1] and this would be a
+     * robust way to access it. However, we don't want to rely on Gecko running in order to get
+     * the client ID so instead we access the file this module accesses directly. However, it's
+     * possible the format of this file (and the access calls in the jsm) will change, leaving
+     * this code to fail. There are tests in TestGeckoProfile to verify the file format but be
+     * warned: THIS IS NOT FOOLPROOF.
+     *
+     * [1]: https://mxr.mozilla.org/mozilla-central/source/toolkit/modules/ClientID.jsm
+     *
+     * @throws IOException if the client ID could not be retrieved.
+     */
+    // Mimics ClientID.jsm – _doLoadClientID.
+    @WorkerThread
+    public String getClientId() throws IOException {
+        try {
+            return getValidClientIdFromDisk(CLIENT_ID_FILE_PATH);
+        } catch (final IOException e) {
+            // Avoid log spam: don't log the full Exception w/ the stack trace.
+            Log.d(LOGTAG, "Could not get client ID - attempting to migrate ID from FHR: " + e.getLocalizedMessage());
+        }
+
+        String clientIdToWrite;
+        try {
+            clientIdToWrite = getValidClientIdFromDisk(FHR_CLIENT_ID_FILE_PATH);
+        } catch (final IOException e) {
+            // Avoid log spam: don't log the full Exception w/ the stack trace.
+            Log.d(LOGTAG, "Could not migrate client ID from FHR – creating a new one: " + e.getLocalizedMessage());
+            clientIdToWrite = UUID.randomUUID().toString();
+        }
+
+        // There is a possibility Gecko is running and the Gecko telemetry implementation decided it's time to generate
+        // the client ID, writing client ID underneath us. Since it's highly unlikely (e.g. we run in onStart before
+        // Gecko is started), we don't handle that possibility besides writing the ID and then reading from the file
+        // again (rather than just returning the value we generated before writing).
+        //
+        // In the event it does happen, any discrepancy will be resolved after a restart. In the mean time, both this
+        // implementation and the Gecko implementation could upload documents with inconsistent IDs.
+        //
+        // In any case, if we get an exception, intentionally throw - there's nothing more to do here.
+        persistClientId(clientIdToWrite);
+        return getValidClientIdFromDisk(CLIENT_ID_FILE_PATH);
+    }
+
+    /**
+     * @return a valid client ID
+     * @throws IOException if a valid client ID could not be retrieved
+     */
+    @WorkerThread
+    private String getValidClientIdFromDisk(final String filePath) throws IOException {
+        final JSONObject obj = readJSONObjectFromFile(filePath);
+        final String clientId = obj.optString(CLIENT_ID_JSON_ATTR);
+        if (isClientIdValid(clientId)) {
+            return clientId;
+        }
+        throw new IOException("Received client ID is invalid: " + clientId);
+    }
+
+    @WorkerThread
+    private void persistClientId(final String clientId) throws IOException {
+        if (!ensureParentDirs(CLIENT_ID_FILE_PATH)) {
+            throw new IOException("Could not create client ID parent directories");
+        }
+
+        final JSONObject obj = new JSONObject();
+        try {
+            obj.put(CLIENT_ID_JSON_ATTR, clientId);
+        } catch (final JSONException e) {
+            throw new IOException("Could not create client ID JSON object", e);
+        }
+
+        // ClientID.jsm overwrites the file to store the client ID so it's okay if we do it too.
+        Log.d(LOGTAG, "Attempting to write new client ID");
+        writeFile(CLIENT_ID_FILE_PATH, obj.toString()); // Logs errors within function: ideally we'd throw.
+    }
+
+    // From ClientID.jsm - isValidClientID.
+    public static boolean isClientIdValid(final String clientId) {
+        // We could use UUID.fromString but, for consistency, we take the implementation from ClientID.jsm.
+        if (TextUtils.isEmpty(clientId)) {
+            return false;
+        }
+        return clientId.matches("(?i:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})");
+    }
+
+    /**
+     * @return the profile creation date in the format returned by {@link System#currentTimeMillis()} or -1 if the value
+     *         was not found.
+     */
+    @WorkerThread
+    public long getProfileCreationDate() {
+        try {
+            return getProfileCreationDateFromTimesFile();
+        } catch (final IOException e) {
+            return getAndPersistProfileCreationDateFromFilesystem();
+        }
+    }
+
+    @WorkerThread
+    private long getProfileCreationDateFromTimesFile() throws IOException {
+        final JSONObject obj = readJSONObjectFromFile(TIMES_PATH);
+        try {
+            return obj.getLong(PROFILE_CREATION_DATE_JSON_ATTR);
+        } catch (final JSONException e) {
+            // Don't log to avoid leaking data in JSONObject.
+            throw new IOException("Profile creation does not exist in JSONObject");
+        }
+    }
+
+    /**
+     * TODO (bug 1246816): Implement ProfileAge.jsm - getOldestProfileTimestamp. Persist results to times.json.
+     * Update comment in getProfileCreationDate too.
+     * @return -1 until implemented.
+     */
+    @WorkerThread
+    private long getAndPersistProfileCreationDateFromFilesystem() {
+        return -1;
+    }
+
+    /**
      * Moves the session file to the backup session file.
      *
      * sessionstore.js should hold the current session, and sessionstore.bak
@@ -631,6 +765,20 @@ public final class GeckoProfile {
         return null;
     }
 
+    /**
+     * Ensures the parent director(y|ies) of the given filename exist by making them
+     * if they don't already exist..
+     *
+     * @param filename The path to the file whose parents should be made directories
+     * @return true if the parent directory exists, false otherwise
+     */
+    @WorkerThread
+    protected boolean ensureParentDirs(final String filename) {
+        final File file = new File(getDir(), filename);
+        final File parentFile = file.getParentFile();
+        return parentFile.mkdirs() || parentFile.isDirectory();
+    }
+
     public void writeFile(final String filename, final String data) {
         File file = new File(getDir(), filename);
         BufferedWriter bufferedWriter = null;
@@ -647,6 +795,24 @@ public final class GeckoProfile {
             } catch (IOException e) {
                 Log.e(LOGTAG, "Error closing writer while writing to file", e);
             }
+        }
+    }
+
+    @WorkerThread
+    public JSONObject readJSONObjectFromFile(final String filename) throws IOException {
+        final String fileContents;
+        try {
+            fileContents = readFile(filename);
+        } catch (final IOException e) {
+            // Don't log exception to avoid leaking profile path.
+            throw new IOException("Could not access given file to retrieve JSONObject");
+        }
+
+        try {
+            return new JSONObject(fileContents);
+        } catch (final JSONException e) {
+            // Don't log exception to avoid leaking profile path.
+            throw new IOException("Could not parse JSON to retrieve JSONObject");
         }
     }
 
@@ -835,9 +1001,8 @@ public final class GeckoProfile {
             parser.addSection(generalSection);
         }
 
-        if (!isDefaultSet && !mIsWebAppProfile) {
-            // only set as default if this is the first non-webapp
-            // profile we're creating
+        if (!isDefaultSet) {
+            // only set as default if this is the first profile we're creating
             profileSection.setProperty("Default", 1);
 
             // We have no intention of stopping this session. The FIRSTRUN session
@@ -849,10 +1014,7 @@ public final class GeckoProfile {
         parser.addSection(profileSection);
         parser.write();
 
-        // Trigger init for non-webapp profiles.
-        if (!mIsWebAppProfile) {
-            enqueueInitialization(profileDir);
-        }
+        enqueueInitialization(profileDir);
 
         // Write out profile creation time, mirroring the logic in nsToolkitProfileService.
         try {
@@ -868,11 +1030,9 @@ public final class GeckoProfile {
             Log.w(LOGTAG, "Couldn't write times.json.", e);
         }
 
-        // Initialize pref flag for displaying the start pane for a new non-webapp profile.
-        if (!mIsWebAppProfile) {
-            final SharedPreferences prefs = GeckoSharedPrefs.forProfile(mApplicationContext);
-            prefs.edit().putBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED, true).apply();
-        }
+        // Initialize pref flag for displaying the start pane for a new profile.
+        final SharedPreferences prefs = GeckoSharedPrefs.forProfile(mApplicationContext);
+        prefs.edit().putBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED, true).apply();
 
         return profileDir;
     }

@@ -13,14 +13,14 @@ if CONFIG['JS_SHELL_NAME']:
 UNIFIED_SOURCES += [
     'js.cpp',
     'jsoptparse.cpp',
+    'jsshell.cpp',
     'OSObject.cpp'
 ]
 
 DEFINES['EXPORT_JS_API'] = True
 
-# Also in ../moz.build
-if CONFIG['NIGHTLY_BUILD']:
-    DEFINES['ENABLE_SHARED_ARRAY_BUFFER'] = True
+# Also set in ../moz.build
+DEFINES['ENABLE_SHARED_ARRAY_BUFFER'] = True
 
 if CONFIG['_MSC_VER']:
     # unnecessary PGO for js shell.  But gcc cannot turn off pgo because it is

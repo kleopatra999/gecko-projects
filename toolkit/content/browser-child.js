@@ -122,6 +122,17 @@ var WebProgressListener = {
     json.stateFlags = aStateFlags;
     json.status = aStatus;
 
+    // It's possible that this state change was triggered by
+    // loading an internal error page, for which the parent
+    // will want to know some details, so we'll update it with
+    // the documentURI.
+    if (aWebProgress && aWebProgress.isTopLevel) {
+      json.documentURI = content.document.documentURIObject.spec;
+      json.charset = content.document.characterSet;
+      json.mayEnableCharacterEncodingMenu = docShell.mayEnableCharacterEncodingMenu;
+    }
+
+    json.inLoadURI = WebNavigation.inLoadURI;
     this._send("Content:StateChange", json, objects);
   },
 
@@ -198,6 +209,10 @@ var WebProgressListener = {
     return true;
   },
 
+  sendLoadCallResult() {
+    this._send("Content:LoadURIResult");
+  },
+
   QueryInterface: function QueryInterface(aIID) {
     if (aIID.equals(Ci.nsIWebProgressListener) ||
         aIID.equals(Ci.nsIWebProgressListener2) ||
@@ -227,6 +242,12 @@ var WebNavigation =  {
 
   get webNavigation() {
     return docShell.QueryInterface(Ci.nsIWebNavigation);
+  },
+
+  _inLoadURI: false,
+
+  get inLoadURI() {
+    return this._inLoadURI;
   },
 
   receiveMessage: function(message) {
@@ -290,8 +311,14 @@ var WebNavigation =  {
       headers = makeInputStream(headers);
     if (baseURI)
       baseURI = Services.io.newURI(baseURI, null, null);
-    this.webNavigation.loadURIWithOptions(uri, flags, referrer, referrerPolicy,
-                                          postData, headers, baseURI);
+    this._inLoadURI = true;
+    try {
+      this.webNavigation.loadURIWithOptions(uri, flags, referrer, referrerPolicy,
+                                            postData, headers, baseURI);
+    } finally {
+      this._inLoadURI = false;
+      WebProgressListener.sendLoadCallResult();
+    }
   },
 
   reload: function(flags) {
@@ -501,6 +528,13 @@ addMessageListener("NetworkPrioritizer:AdjustPriority", (msg) => {
   loadGroup.adjustPriority(msg.data.adjustment);
 });
 
+addMessageListener("NetworkPrioritizer:SetPriority", (msg) => {
+  let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+  let loadGroup = webNav.QueryInterface(Ci.nsIDocumentLoader)
+                        .loadGroup.QueryInterface(Ci.nsISupportsPriority);
+  loadGroup.priority = msg.data.priority;
+});
+
 var AutoCompletePopup = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup]),
 
@@ -599,7 +633,7 @@ var outerWindowID = content.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindowUtils)
                            .outerWindowID;
 var initData = sendSyncMessage("Browser:Init", {outerWindowID: outerWindowID});
-if (initData.length) {
+if (initData.length && initData[0]) {
   docShell.useGlobalHistory = initData[0].useGlobalHistory;
   if (initData[0].initPopup) {
     setTimeout(() => AutoCompletePopup.init(), 0);

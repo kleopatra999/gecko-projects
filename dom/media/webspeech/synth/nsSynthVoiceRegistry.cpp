@@ -36,7 +36,7 @@ GetAllSpeechSynthActors(InfallibleTArray<mozilla::dom::SpeechSynthesisParent*>& 
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aActors.IsEmpty());
 
-  nsAutoTArray<mozilla::dom::ContentParent*, 20> contentActors;
+  AutoTArray<mozilla::dom::ContentParent*, 20> contentActors;
   mozilla::dom::ContentParent::GetAll(contentActors);
 
   for (uint32_t contentIndex = 0;
@@ -44,7 +44,7 @@ GetAllSpeechSynthActors(InfallibleTArray<mozilla::dom::SpeechSynthesisParent*>& 
        ++contentIndex) {
     MOZ_ASSERT(contentActors[contentIndex]);
 
-    AutoInfallibleTArray<mozilla::dom::PSpeechSynthesisParent*, 5> speechsynthActors;
+    AutoTArray<mozilla::dom::PSpeechSynthesisParent*, 5> speechsynthActors;
     contentActors[contentIndex]->ManagedPSpeechSynthesisParent(speechsynthActors);
 
     for (uint32_t speechsynthIndex = 0;
@@ -624,9 +624,7 @@ nsSynthVoiceRegistry::SpeakUtterance(SpeechSynthesisUtterance& aUtterance,
   float volume = aUtterance.Volume();
   RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   if (service) {
-    nsCOMPtr<nsPIDOMWindow> topWindow =
-      do_QueryInterface(aUtterance.GetOwner());
-    if (topWindow) {
+    if (nsCOMPtr<nsPIDOMWindowInner> topWindow = aUtterance.GetOwner()) {
       float audioVolume = 1.0f;
       bool muted = false;
       service->GetState(topWindow->GetOuterWindow(),
@@ -789,7 +787,13 @@ nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice,
     aTask->InitDirectAudio();
   }
 
-  aVoice->mService->Speak(aText, aVoice->mUri, aVolume, aRate, aPitch, aTask);
+  if (NS_FAILED(aVoice->mService->Speak(aText, aVoice->mUri, aVolume, aRate,
+                                        aPitch, aTask))) {
+    if (serviceType == nsISpeechService::SERVICETYPE_INDIRECT_AUDIO) {
+      aTask->DispatchError(0, 0);
+    }
+    // XXX When using direct audio, no way to dispatch error
+  }
 }
 
 } // namespace dom

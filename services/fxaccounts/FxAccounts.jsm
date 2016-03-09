@@ -30,13 +30,18 @@ XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsOAuthGrantClient",
 XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsProfile",
   "resource://gre/modules/FxAccountsProfile.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+  "resource://services-sync/util.js");
+
 // All properties exposed by the public FxAccounts API.
 var publicProperties = [
   "accountStatus",
+  "checkVerificationStatus",
   "getAccountsClient",
   "getAccountsSignInURI",
   "getAccountsSignUpURI",
   "getAssertion",
+  "getDeviceId",
   "getKeys",
   "getSignedInUser",
   "getOAuthToken",
@@ -51,6 +56,7 @@ var publicProperties = [
   "resendVerificationEmail",
   "setSignedInUser",
   "signOut",
+  "updateDeviceRegistration",
   "whenVerified"
 ];
 
@@ -130,7 +136,7 @@ AccountState.prototype = {
     });
   },
 
-  // Get user account data. Optionally specify explcit field names to fetch
+  // Get user account data. Optionally specify explicit field names to fetch
   // (and note that if you require an in-memory field you *must* specify the
   // field name(s).)
   getUserAccountData(fieldNames = null) {
@@ -310,6 +316,16 @@ this.FxAccounts = function (mockInternal) {
     external.internal = internal;
   }
 
+  if (!internal.fxaPushService) {
+    // internal.fxaPushService option is used in testing.
+    // Otherwise we load the service lazily.
+    XPCOMUtils.defineLazyGetter(internal, "fxaPushService", function () {
+      return Components.classes["@mozilla.org/fxaccounts/push;1"]
+        .getService(Components.interfaces.nsISupports)
+        .wrappedJSObject;
+    });
+  }
+
   // wait until after the mocks are setup before initializing.
   internal.initialize();
 
@@ -332,9 +348,9 @@ function FxAccountsInternal() {
  */
 FxAccountsInternal.prototype = {
   // The timeout (in ms) we use to poll for a verified mail for the first 2 mins.
-  VERIFICATION_POLL_TIMEOUT_INITIAL: 5000, // 5 seconds
+  VERIFICATION_POLL_TIMEOUT_INITIAL: 15000, // 15 seconds
   // And how often we poll after the first 2 mins.
-  VERIFICATION_POLL_TIMEOUT_SUBSEQUENT: 15000, // 15 seconds.
+  VERIFICATION_POLL_TIMEOUT_SUBSEQUENT: 30000, // 30 seconds.
 
   _fxAccountsClient: null,
 
@@ -491,11 +507,15 @@ FxAccountsInternal.prototype = {
       // really something we should commit to? Why not let the write happen in
       // the background? Already does for updateAccountData ;)
       return currentAccountState.promiseInitialized.then(() => {
-        Services.telemetry.getHistogramById("FXA_CONFIGURED").add(1);
-        this.notifyObservers(ONLOGIN_NOTIFICATION);
+        // Starting point for polling if new user
         if (!this.isUserEmailVerified(credentials)) {
           this.startVerifiedCheck(credentials);
         }
+
+        return this.updateDeviceRegistration();
+      }).then(() => {
+        Services.telemetry.getHistogramById("FXA_CONFIGURED").add(1);
+        this.notifyObservers(ONLOGIN_NOTIFICATION);
       }).then(() => {
         return currentAccountState.resolve();
       });
@@ -537,6 +557,26 @@ FxAccountsInternal.prototype = {
         }
       );
     }).then(result => currentState.resolve(result));
+  },
+
+  getDeviceId() {
+    return this.currentAccountState.getUserAccountData()
+      .then(data => {
+        if (data) {
+          if (data.isDeviceStale || !data.deviceId) {
+            // A previous device registration attempt failed or there is no
+            // device id. Either way, we should register the device with FxA
+            // before returning the id to the caller.
+            return this._registerOrUpdateDevice(data);
+          }
+
+          // Return the device id that we already registered with the server.
+          return data.deviceId;
+        }
+
+        // Without a signed-in user, there can be no device id.
+        return null;
+      });
   },
 
   /**
@@ -584,6 +624,22 @@ FxAccountsInternal.prototype = {
     });
   },
 
+  checkVerificationStatus: function() {
+    log.trace('checkVerificationStatus');
+    let currentState = this.currentAccountState;
+    return currentState.getUserAccountData().then(data => {
+      if (!data) {
+        log.trace("checkVerificationStatus - no user data");
+        return null;
+      }
+
+      if (!this.isUserEmailVerified(data)) {
+        log.trace("checkVerificationStatus - forcing verification status check");
+        this.pollEmailStatus(currentState, data.sessionToken, "start");
+      }
+    });
+  },
+
   _destroyOAuthToken: function(tokenData) {
     let client = new FxAccountsOAuthGrantClient({
       serverURL: tokenData.server,
@@ -605,10 +661,15 @@ FxAccountsInternal.prototype = {
     let currentState = this.currentAccountState;
     let sessionToken;
     let tokensToRevoke;
+    let deviceId;
     return currentState.getUserAccountData().then(data => {
-      // Save the session token for use in the call to signOut below.
-      sessionToken = data && data.sessionToken;
-      tokensToRevoke = data && data.oauthTokens;
+      // Save the session token, tokens to revoke and the
+      // device id for use in the call to signOut below.
+      if (data) {
+        sessionToken = data.sessionToken;
+        tokensToRevoke = data.oauthTokens;
+        deviceId = data.deviceId;
+      }
       return this._signOutLocal();
     }).then(() => {
       // FxAccountsManager calls here, then does its own call
@@ -620,7 +681,7 @@ FxAccountsInternal.prototype = {
           // This can happen in the background and shouldn't block
           // the user from signing out. The server must tolerate
           // clients just disappearing, so this call should be best effort.
-          return this._signOutServer(sessionToken);
+          return this._signOutServer(sessionToken, deviceId);
         }).catch(err => {
           log.error("Error during remote sign out of Firefox Accounts", err);
         }).then(() => {
@@ -652,11 +713,22 @@ FxAccountsInternal.prototype = {
     });
   },
 
-  _signOutServer: function signOutServer(sessionToken) {
-    // For now we assume the service being logged out from is Sync - we might
-    // need to revisit this when this FxA code is used in a context that
-    // isn't Sync.
-    return this.fxAccountsClient.signOut(sessionToken, {service: "sync"});
+  _signOutServer(sessionToken, deviceId) {
+    // For now we assume the service being logged out from is Sync, so
+    // we must tell the server to either destroy the device or sign out
+    // (if no device exists). We might need to revisit this when this
+    // FxA code is used in a context that isn't Sync.
+
+    const options = { service: "sync" };
+
+    if (deviceId) {
+      log.debug("destroying device and session");
+      return this.fxAccountsClient.signOutAndDestroyDevice(sessionToken, deviceId, options)
+        .then(() => this.currentAccountState.updateUserAccountData({ deviceId: null }));
+    }
+
+    log.debug("destroying session");
+    return this.fxAccountsClient.signOut(sessionToken, options);
   },
 
   /**
@@ -1023,7 +1095,7 @@ FxAccountsInternal.prototype = {
     let ageMs = Date.now() - this.pollStartDate;
     if (ageMs >= this.POLL_SESSION) {
       if (currentState.whenVerifiedDeferred) {
-        let error = new Error("User email verification timed out.")
+        let error = new Error("User email verification timed out.");
         currentState.whenVerifiedDeferred.reject(error);
         delete currentState.whenVerifiedDeferred;
       }
@@ -1334,6 +1406,133 @@ FxAccountsInternal.prototype = {
       }
     ).catch(err => Promise.reject(this._errorToErrorClass(err)));
   },
+
+  // Attempt to update the auth server with whatever device details are stored
+  // in the account data. Returns a promise that always resolves, never rejects.
+  // If the promise resolves to a value, that value is the device id.
+  updateDeviceRegistration() {
+    return this.getSignedInUser().then(signedInUser => {
+      if (signedInUser) {
+        return this._registerOrUpdateDevice(signedInUser);
+      }
+    }).catch(error => this._logErrorAndSetStaleDeviceFlag(error));
+  },
+
+  _registerOrUpdateDevice(signedInUser) {
+    try {
+      // Allow tests to skip device registration because:
+      //   1. It makes remote requests to the auth server.
+      //   2. _getDeviceName does not work from xpcshell.
+      //   3. The B2G tests fail when attempting to import services-sync/util.js.
+      if (Services.prefs.getBoolPref("identity.fxaccounts.skipDeviceRegistration")) {
+        return Promise.resolve();
+      }
+    } catch(ignore) {}
+
+    return this.fxaPushService.registerPushEndpoint().then(subscription => {
+      const deviceName = this._getDeviceName();
+      let deviceOptions = {};
+
+      // if we were able to obtain a subscription
+      if (subscription && subscription.endpoint) {
+        deviceOptions.pushCallback = subscription.endpoint;
+      }
+
+      if (signedInUser.deviceId) {
+        log.debug("updating existing device details");
+        return this.fxAccountsClient.updateDevice(
+          signedInUser.sessionToken, signedInUser.deviceId, deviceName, deviceOptions);
+      }
+
+      log.debug("registering new device details");
+      return this.fxAccountsClient.registerDevice(
+        signedInUser.sessionToken, deviceName, this._getDeviceType(), deviceOptions);
+    }).then(device =>
+      this.currentAccountState.updateUserAccountData({
+        deviceId: device.id,
+        isDeviceStale: null
+      }).then(() => device.id)
+    ).catch(error => this._handleDeviceError(error, signedInUser.sessionToken));
+  },
+
+  _getDeviceName() {
+    return Utils.getDeviceName();
+  },
+
+  _getDeviceType() {
+    return Utils.getDeviceType();
+  },
+
+  _handleDeviceError(error, sessionToken) {
+    return Promise.resolve().then(() => {
+      if (error.code === 400) {
+        if (error.errno === ERRNO_UNKNOWN_DEVICE) {
+          return this._recoverFromUnknownDevice();
+        }
+
+        if (error.errno === ERRNO_DEVICE_SESSION_CONFLICT) {
+          return this._recoverFromDeviceSessionConflict(error, sessionToken);
+        }
+      }
+
+      return this._logErrorAndSetStaleDeviceFlag(error);
+    }).catch(() => {});
+  },
+
+  _recoverFromUnknownDevice() {
+    // FxA did not recognise the device id. Handle it by clearing the device
+    // id on the account data. At next sync or next sign-in, registration is
+    // retried and should succeed.
+    log.warn("unknown device id, clearing the local device data");
+    return this.currentAccountState.updateUserAccountData({ deviceId: null })
+      .catch(error => this._logErrorAndSetStaleDeviceFlag(error));
+  },
+
+  _recoverFromDeviceSessionConflict(error, sessionToken) {
+    // FxA has already associated this session with a different device id.
+    // Perhaps we were beaten in a race to register. Handle the conflict:
+    //   1. Fetch the list of devices for the current user from FxA.
+    //   2. Look for ourselves in the list.
+    //   3. If we find a match, set the correct device id and the stale device
+    //      flag on the account data and return the correct device id. At next
+    //      sync or next sign-in, registration is retried and should succeed.
+    //   4. If we don't find a match, log the original error.
+    log.warn("device session conflict, attempting to ascertain the correct device id");
+    return this.fxAccountsClient.getDeviceList(sessionToken)
+      .then(devices => {
+        const matchingDevices = devices.filter(device => device.isCurrentDevice);
+        const length = matchingDevices.length;
+        if (length === 1) {
+          const deviceId = matchingDevices[0].id;
+          return this.currentAccountState.updateUserAccountData({
+            deviceId,
+            isDeviceStale: true
+          }).then(() => deviceId);
+        }
+        if (length > 1) {
+          log.error("insane server state, " + length + " devices for this session");
+        }
+        return this._logErrorAndSetStaleDeviceFlag(error);
+      }).catch(secondError => {
+        log.error("failed to recover from device-session conflict", secondError);
+        this._logErrorAndSetStaleDeviceFlag(error)
+      });
+  },
+
+  _logErrorAndSetStaleDeviceFlag(error) {
+    // Device registration should never cause other operations to fail.
+    // If we've reached this point, just log the error and set the stale
+    // device flag on the account data. At next sync or next sign-in,
+    // registration will be retried.
+    log.error("device registration failed", error);
+    return this.currentAccountState.updateUserAccountData({
+      isDeviceStale: true
+    }).catch(secondError => {
+      log.error(
+        "failed to set stale device flag, device registration won't be retried",
+        secondError);
+    }).then(() => {});
+  }
 };
 
 

@@ -43,6 +43,7 @@
 #include "builtin/SymbolObject.h"
 #include "frontend/BytecodeCompiler.h"
 #include "gc/Marking.h"
+#include "gc/Policy.h"
 #include "jit/BaselineJIT.h"
 #include "js/MemoryMetrics.h"
 #include "js/Proxy.h"
@@ -1061,7 +1062,7 @@ JS_CopyPropertyFrom(JSContext* cx, HandleId id, HandleObject target,
 {
     // |obj| and |cx| are generally not same-compartment with |target| here.
     assertSameCompartment(cx, obj, id);
-    Rooted<JSPropertyDescriptor> desc(cx);
+    Rooted<PropertyDescriptor> desc(cx);
 
     if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
         return false;
@@ -2569,61 +2570,7 @@ js::GetOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
         return ok;
     }
 
-    RootedNativeObject nobj(cx, obj.as<NativeObject>());
-    RootedShape shape(cx);
-    if (!NativeLookupOwnProperty<CanGC>(cx, nobj, id, &shape))
-        return false;
-    if (!shape) {
-        desc.object().set(nullptr);
-        return true;
-    }
-
-    desc.setAttributes(GetShapeAttributes(obj, shape));
-    if (desc.isAccessorDescriptor()) {
-        MOZ_ASSERT(desc.isShared());
-
-        // The result of GetOwnPropertyDescriptor() must be either undefined or
-        // a complete property descriptor (per ES6 draft rev 32 (2015 Feb 2)
-        // 6.1.7.3, Invariants of the Essential Internal Methods).
-        //
-        // It is an unfortunate fact that in SM, properties can exist that have
-        // JSPROP_GETTER or JSPROP_SETTER but not both. In these cases, rather
-        // than return true with desc incomplete, we fill out the missing
-        // getter or setter with a null, following CompletePropertyDescriptor.
-        if (desc.hasGetterObject()) {
-            desc.setGetterObject(shape->getterObject());
-        } else {
-            desc.setGetterObject(nullptr);
-            desc.attributesRef() |= JSPROP_GETTER;
-        }
-        if (desc.hasSetterObject()) {
-            desc.setSetterObject(shape->setterObject());
-        } else {
-            desc.setSetterObject(nullptr);
-            desc.attributesRef() |= JSPROP_SETTER;
-        }
-
-        desc.value().setUndefined();
-    } else {
-        // This is either a straight-up data property or (rarely) a
-        // property with a JSGetterOp/JSSetterOp. The latter must be
-        // reported to the caller as a plain data property, so clear
-        // desc.getter/setter, and mask away the SHARED bit.
-        desc.setGetter(nullptr);
-        desc.setSetter(nullptr);
-        desc.attributesRef() &= ~JSPROP_SHARED;
-
-        if (IsImplicitDenseOrTypedArrayElement(shape)) {
-            desc.value().set(nobj->getDenseOrTypedArrayElement(JSID_TO_INT(id)));
-        } else {
-            if (!NativeGetExistingProperty(cx, nobj, nobj, shape, desc.value()))
-                return false;
-        }
-    }
-
-    desc.object().set(nobj);
-    desc.assertComplete();
-    return true;
+    return NativeGetOwnPropertyDescriptor(cx, obj.as<NativeObject>(), id, desc);
 }
 
 bool
@@ -2960,24 +2907,10 @@ DefineFunctionFromSpec(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs
 
 bool
 js::DefineFunctions(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs,
-                    DefineAsIntrinsic intrinsic, PropertyDefinitionBehavior behavior)
+                    DefineAsIntrinsic intrinsic)
 {
     for (; fs->name; fs++) {
-        unsigned flags = fs->flags;
-        switch (behavior) {
-          case DefineAllProperties:
-            break;
-          case OnlyDefineLateProperties:
-            if (!(flags & JSPROP_DEFINE_LATE))
-                continue;
-            break;
-          default:
-            MOZ_ASSERT(behavior == DontDefineLateProperties);
-            if (flags & JSPROP_DEFINE_LATE)
-                continue;
-        }
-
-        if (!DefineFunctionFromSpec(cx, obj, fs, flags & ~JSPROP_DEFINE_LATE, intrinsic))
+        if (!DefineFunctionFromSpec(cx, obj, fs, fs->flags, intrinsic))
             return false;
     }
     return true;
@@ -3598,7 +3531,7 @@ js::DumpInterpreterFrame(JSContext* cx, InterpreterFrame* start)
         else
             fprintf(stderr, "InterpreterFrame at %p\n", (void*) i.interpFrame());
 
-        if (i.isNonEvalFunctionFrame()) {
+        if (i.isFunctionFrame()) {
             fprintf(stderr, "callee fun: ");
             RootedValue v(cx);
             JSObject* fun = i.callee(cx);
@@ -3617,7 +3550,7 @@ js::DumpInterpreterFrame(JSContext* cx, InterpreterFrame* start)
             fprintf(stderr, "  current op: %s\n", CodeName[*pc]);
             MaybeDumpObject("staticScope", i.script()->getStaticBlockScope(pc));
         }
-        if (i.isNonEvalFunctionFrame())
+        if (i.isFunctionFrame())
             MaybeDumpValue("this", i.thisArgument(cx));
         if (!i.isJit()) {
             fprintf(stderr, "  rval: ");
@@ -3757,7 +3690,7 @@ JSObject::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::ClassIn
     if (is<NativeObject>() && as<NativeObject>().hasDynamicElements()) {
         js::ObjectElements* elements = as<NativeObject>().getElementsHeader();
         if (!elements->isCopyOnWrite() || elements->ownerObject() == this)
-            info->objectsMallocHeapElementsNonAsmJS += mallocSizeOf(elements);
+            info->objectsMallocHeapElementsNormal += mallocSizeOf(elements);
     }
 
     // Other things may be measured in the future if DMD indicates it is worthwhile.

@@ -70,6 +70,7 @@ class TestEmitterBasic(unittest.TestCase):
             ENABLE_TESTS='1' if enable_tests else '',
             BIN_SUFFIX='.prog',
             OS_TARGET='WINNT',
+            COMPILE_ENVIRONMENT='1',
         ))
 
         return BuildReader(config)
@@ -100,8 +101,6 @@ class TestEmitterBasic(unittest.TestCase):
 
         reldirs = [o.relativedir for o in objs]
         self.assertEqual(reldirs, ['', 'foo', 'foo/biz', 'bar'])
-
-        self.assertEqual(objs[3].affected_tiers, {'misc'})
 
         dirs = [[d.full_path for d in o.dirs] for o in objs]
         self.assertEqual(dirs, [
@@ -180,7 +179,6 @@ class TestEmitterBasic(unittest.TestCase):
             'RESFILE': 'bar.res',
             'RCINCLUDE': 'bar.rc',
             'DEFFILE': 'baz.def',
-            'USE_STATIC_LIBS': True,
             'MOZBUILD_CFLAGS': ['-fno-exceptions', '-w'],
             'MOZBUILD_CXXFLAGS': ['-fcxx-exceptions', '-include foo.h'],
             'MOZBUILD_LDFLAGS': ['-framework Foo', '-x', '-DELAYLOAD:foo.dll',
@@ -366,7 +364,7 @@ class TestEmitterBasic(unittest.TestCase):
         """A missing manifest file should result in an error."""
         reader = self.reader('test-manifest-missing-manifest')
 
-        with self.assertRaisesRegexp(SandboxValidationError, 'IOError: Missing files'):
+        with self.assertRaisesRegexp(BuildReaderError, 'IOError: Missing files'):
             self.read_topsrcdir(reader)
 
     def test_empty_test_manifest_rejected(self):
@@ -378,15 +376,11 @@ class TestEmitterBasic(unittest.TestCase):
 
 
     def test_test_manifest_just_support_files(self):
-        """A test manifest with no tests but support-files is supported."""
+        """A test manifest with no tests but support-files is not supported."""
         reader = self.reader('test-manifest-just-support')
 
-        objs = self.read_topsrcdir(reader)
-        self.assertEqual(len(objs), 1)
-        o = objs[0]
-        self.assertEqual(len(o.installs), 2)
-        paths = sorted([k[len(o.directory)+1:] for k in o.installs.keys()])
-        self.assertEqual(paths, ["foo.txt", "just-support.ini"])
+        with self.assertRaisesRegexp(SandboxValidationError, 'Empty test manifest'):
+            self.read_topsrcdir(reader)
 
     def test_test_manifest_absolute_support_files(self):
         """Support files starting with '/' are placed relative to the install root"""
@@ -395,10 +389,11 @@ class TestEmitterBasic(unittest.TestCase):
         objs = self.read_topsrcdir(reader)
         self.assertEqual(len(objs), 1)
         o = objs[0]
-        self.assertEqual(len(o.installs), 2)
+        self.assertEqual(len(o.installs), 3)
         expected = [
             mozpath.normpath(mozpath.join(o.install_prefix, "../.well-known/foo.txt")),
             mozpath.join(o.install_prefix, "absolute-support.ini"),
+            mozpath.join(o.install_prefix, "test_file.js"),
         ]
         paths = sorted([v[0] for v in o.installs.values()])
         self.assertEqual(paths, expected)
@@ -742,6 +737,8 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('sources')
         objs = self.read_topsrcdir(reader)
 
+        # The last object is a Linkable, ignore it
+        objs = objs[:-1]
         self.assertEqual(len(objs), 6)
         for o in objs:
             self.assertIsInstance(o, Sources)
@@ -768,6 +765,8 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('generated-sources')
         objs = self.read_topsrcdir(reader)
 
+        # The last object is a Linkable, ignore it
+        objs = objs[:-1]
         self.assertEqual(len(objs), 6)
 
         generated_sources = [o for o in objs if isinstance(o, GeneratedSources)]
@@ -795,6 +794,8 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('host-sources')
         objs = self.read_topsrcdir(reader)
 
+        # The last object is a Linkable, ignore it
+        objs = objs[:-1]
         self.assertEqual(len(objs), 3)
         for o in objs:
             self.assertIsInstance(o, HostSources)
@@ -818,6 +819,8 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('unified-sources')
         objs = self.read_topsrcdir(reader)
 
+        # The last object is a Linkable, ignore it
+        objs = objs[:-1]
         self.assertEqual(len(objs), 3)
         for o in objs:
             self.assertIsInstance(o, UnifiedSources)
@@ -842,6 +845,8 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('unified-sources-non-unified')
         objs = self.read_topsrcdir(reader)
 
+        # The last object is a Linkable, ignore it
+        objs = objs[:-1]
         self.assertEqual(len(objs), 3)
         for o in objs:
             self.assertIsInstance(o, UnifiedSources)

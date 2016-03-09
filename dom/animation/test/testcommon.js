@@ -30,6 +30,34 @@ function addDiv(t, attrs) {
 }
 
 /**
+ * Appends a style div to the document head.
+ *
+ * @param t  The testharness.js Test object. If provided, this will be used
+ *           to register a cleanup callback to remove the style element
+ *           when the test finishes.
+ *
+ * @param rules  A dictionary object with selector names and rules to set on
+ *               the style sheet.
+ */
+function addStyle(t, rules) {
+  var extraStyle = document.createElement('style');
+  document.head.appendChild(extraStyle);
+  if (rules) {
+    var sheet = extraStyle.sheet;
+    for (var selector in rules) {
+      sheet.insertRule(selector + '{' + rules[selector] + '}',
+                       sheet.cssRules.length);
+    }
+  }
+
+  if (t && typeof t.add_cleanup === 'function') {
+    t.add_cleanup(function() {
+      extraStyle.remove();
+    });
+  }
+}
+
+/**
  * Promise wrapper for requestAnimationFrame.
  */
 function waitForFrame() {
@@ -41,13 +69,19 @@ function waitForFrame() {
 /**
  * Returns a Promise that is resolved after the given number of consecutive
  * animation frames have occured (using requestAnimationFrame callbacks).
+ *
+ * @param frameCount  The number of animation frames.
+ * @param onFrame  An optional function to be processed in each animation frame.
  */
-function waitForAnimationFrames(frameCount) {
+function waitForAnimationFrames(frameCount, onFrame) {
   return new Promise(function(resolve, reject) {
     function handleFrame() {
       if (--frameCount <= 0) {
         resolve();
       } else {
+        if (onFrame && typeof onFrame === 'function') {
+          onFrame();
+        }
         window.requestAnimationFrame(handleFrame); // wait another frame
       }
     }

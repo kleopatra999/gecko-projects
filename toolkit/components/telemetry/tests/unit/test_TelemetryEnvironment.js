@@ -9,6 +9,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://testing-common/AddonManagerTesting.jsm");
 Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://testing-common/MockRegistrar.jsm", this);
+Cu.import("resource://gre/modules/FileUtils.jsm");
 
 // Lazy load |LightweightThemeManager|, we won't be using it on Gonk.
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
@@ -67,6 +68,9 @@ const PERSONA_DESCRIPTION = "A nice theme/persona description.";
 
 const PLUGIN_UPDATED_TOPIC     = "plugins-list-updated";
 
+// system add-ons are enabled at startup, so record date when the test starts
+const SYSTEM_ADDON_INSTALL_DATE = Date.now();
+
 /**
  * Used to mock plugin tags in our fake plugin host.
  */
@@ -119,6 +123,100 @@ var PluginHost = {
 
 function registerFakePluginHost() {
   MockRegistrar.register("@mozilla.org/plugin/host;1", PluginHost);
+}
+
+function MockAddonWrapper(aAddon) {
+  this.addon = aAddon;
+}
+MockAddonWrapper.prototype = {
+  get id() {
+    return this.addon.id;
+  },
+
+  get type() {
+    return "service";
+  },
+
+  get appDisabled() {
+    return false;
+  },
+
+  get isCompatible() {
+    return true;
+  },
+
+  get isPlatformCompatible() {
+    return true;
+  },
+
+  get scope() {
+    return AddonManager.SCOPE_PROFILE;
+  },
+
+  get foreignInstall() {
+    return false;
+  },
+
+  get providesUpdatesSecurely() {
+    return true;
+  },
+
+  get blocklistState() {
+    return 0; // Not blocked.
+  },
+
+  get pendingOperations() {
+    return AddonManager.PENDING_NONE;
+  },
+
+  get permissions() {
+    return AddonManager.PERM_CAN_UNINSTALL | AddonManager.PERM_CAN_DISABLE;
+  },
+
+  get isActive() {
+    return true;
+  },
+
+  get name() {
+    return this.addon.name;
+  },
+
+  get version() {
+    return this.addon.version;
+  },
+
+  get creator() {
+    return new AddonManagerPrivate.AddonAuthor(this.addon.author);
+  },
+
+  get userDisabled() {
+    return this.appDisabled;
+  },
+};
+
+function createMockAddonProvider(aName) {
+  let mockProvider = {
+    _addons: [],
+
+    get name() {
+      return aName;
+    },
+
+    addAddon: function(aAddon) {
+      this._addons.push(aAddon);
+      AddonManagerPrivate.callAddonListeners("onInstalled", new MockAddonWrapper(aAddon));
+    },
+
+    getAddonsByTypes: function (aTypes, aCallback) {
+      aCallback(this._addons.map(a => new MockAddonWrapper(a)));
+    },
+
+    shutdown() {
+      return Promise.resolve();
+    },
+  };
+
+  return mockProvider;
 }
 
 /**
@@ -243,8 +341,8 @@ function checkSettingsSection(data) {
   const EXPECTED_FIELDS_TYPES = {
     blocklistEnabled: "boolean",
     e10sEnabled: "boolean",
+    e10sCohort: "string",
     telemetryEnabled: "boolean",
-    isInOptoutSample: "boolean",
     locale: "string",
     update: "object",
     userPrefs: "object",
@@ -313,7 +411,7 @@ function checkPartnerSection(data, isInitial) {
   if (isInitial) {
     Assert.equal(data.partner.partnerNames.length, 0);
   } else {
-    Assert.ok(data.partner.partnerNames.indexOf(PARTNER_NAME) >= 0);
+    Assert.ok(data.partner.partnerNames.includes(PARTNER_NAME));
   }
 }
 
@@ -478,6 +576,11 @@ function checkSystemSection(data) {
 }
 
 function checkActiveAddon(data){
+  let signedState = mozinfo.addon_signing ? "number" : "undefined";
+  // system add-ons have an undefined signState
+  if (data.isSystem)
+    signedState = "undefined";
+
   const EXPECTED_ADDON_FIELDS_TYPES = {
     blocklisted: "boolean",
     name: "string",
@@ -490,7 +593,8 @@ function checkActiveAddon(data){
     hasBinaryComponents: "boolean",
     installDay: "number",
     updateDay: "number",
-    signedState: mozinfo.addon_signing ? "number" : "undefined",
+    signedState: signedState,
+    isSystem: "boolean",
   };
 
   for (let f in EXPECTED_ADDON_FIELDS_TYPES) {
@@ -622,6 +726,13 @@ function run_test() {
   do_test_pending();
   spoofGfxAdapter();
   do_get_profile();
+
+  // The system add-on must be installed before AddonManager is started.
+  const distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "app0"], true);
+  do_get_file("system.xpi").copyTo(distroDir, "tel-system-xpi@tests.mozilla.org.xpi");
+  let system_addon = FileUtils.File(distroDir.path);
+  system_addon.append("tel-system-xpi@tests.mozilla.org.xpi");
+  system_addon.lastModifiedTime = SYSTEM_ADDON_INSTALL_DATE;
   loadAddonManager(APP_ID, APP_NAME, APP_VERSION, PLATFORM_VERSION);
 
   // Spoof the persona ID, but not on Gonk.
@@ -922,7 +1033,25 @@ add_task(function* test_addonsAndPlugins() {
     hasBinaryComponents: false,
     installDay: ADDON_INSTALL_DATE,
     updateDay: ADDON_INSTALL_DATE,
-    signedState: mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_MISSING : AddonManager.SIGNEDSTATE_NOT_REQUIRED,
+    signedState: mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_SIGNED : AddonManager.SIGNEDSTATE_NOT_REQUIRED,
+    isSystem: false,
+  };
+  const SYSTEM_ADDON_ID = "tel-system-xpi@tests.mozilla.org";
+  const EXPECTED_SYSTEM_ADDON_DATA = {
+    blocklisted: false,
+    description: "A system addon which is shipped with Firefox.",
+    name: "XPI Telemetry System Add-on Test",
+    userDisabled: false,
+    appDisabled: false,
+    version: "1.0",
+    scope: 1,
+    type: "extension",
+    foreignInstall: false,
+    hasBinaryComponents: false,
+    installDay: truncateToDays(SYSTEM_ADDON_INSTALL_DATE),
+    updateDay: truncateToDays(SYSTEM_ADDON_INSTALL_DATE),
+    signedState: undefined,
+    isSystem: true,
   };
 
   const EXPECTED_PLUGIN_DATA = {
@@ -945,6 +1074,13 @@ add_task(function* test_addonsAndPlugins() {
   let targetAddon = data.addons.activeAddons[ADDON_ID];
   for (let f in EXPECTED_ADDON_DATA) {
     Assert.equal(targetAddon[f], EXPECTED_ADDON_DATA[f], f + " must have the correct value.");
+  }
+
+  // Check system add-on data.
+  Assert.ok(SYSTEM_ADDON_ID in data.addons.activeAddons, "We must have one active system addon.");
+  let targetSystemAddon = data.addons.activeAddons[SYSTEM_ADDON_ID];
+  for (let f in EXPECTED_SYSTEM_ADDON_DATA) {
+    Assert.equal(targetSystemAddon[f], EXPECTED_SYSTEM_ADDON_DATA[f], f + " must have the correct value.");
   }
 
   // Check theme data.
@@ -1049,11 +1185,9 @@ add_task(function* test_addonsFieldsLimit() {
 add_task(function* test_collectionWithbrokenAddonData() {
   const BROKEN_ADDON_ID = "telemetry-test2.example.com@services.mozilla.org";
   const BROKEN_MANIFEST = {
-    name: "telemetry social provider",
+    id: "telemetry-test2.example.com@services.mozilla.org",
+    name: "telemetry broken addon",
     origin: "https://telemetry-test2.example.com",
-    sidebarURL: "https://telemetry-test2.example.com/browser/browser/base/content/test/social/social_sidebar.html",
-    workerURL: "https://telemetry-test2.example.com/browser/browser/base/content/test/social/social_worker.js",
-    iconURL: "https://telemetry-test2.example.com/browser/browser/base/content/test/general/moz.png",
     version: 1, // This is intentionally not a string.
     signedState: AddonManager.SIGNEDSTATE_SIGNED,
   };
@@ -1097,21 +1231,11 @@ add_task(function* test_collectionWithbrokenAddonData() {
     TelemetryEnvironment.unregisterChangeListener("testBrokenAddon_collection" + aExpected);
   };
 
-  // Initialize Social in order to use the SocialService later.
-  let Social = Cu.import("resource:///modules/Social.jsm", {}).Social;
-  Social.init();
-  Assert.ok(Social.initialized, "Social is now initialized");
-
-  // Add the broken provider to the SocialService.
-  const PROVIDER_DATA = {
-    origin: BROKEN_MANIFEST.origin,
-    manifest: BROKEN_MANIFEST,
-  };
-
-  let SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
+  // Register the broken provider and install the broken addon.
   let checkpointPromise = registerCheckpointPromise(1);
-  SocialService.installProvider(PROVIDER_DATA, () => SocialService.enableProvider(BROKEN_MANIFEST.origin),
-                                { bypassInstallPanel: true });
+  let brokenAddonProvider = createMockAddonProvider("Broken Extensions Provider");
+  AddonManagerPrivate.registerProvider(brokenAddonProvider);
+  brokenAddonProvider.addAddon(BROKEN_MANIFEST);
   yield checkpointPromise;
   assertCheckpoint(1);
 
@@ -1138,10 +1262,8 @@ add_task(function* test_collectionWithbrokenAddonData() {
   Assert.equal(activeAddons[ADDON_ID].description, EXPECTED_ADDON_DATA.description,
                "The description for the valid addon should be correct.");
 
-  // Uninstall the broken addon so don't mess with other tests.
-  deferred = PromiseUtils.defer();
-  SocialService.uninstallProvider(BROKEN_MANIFEST.origin, deferred.resolve);
-  yield deferred.promise;
+  // Unregister the broken provider so we don't mess with other tests.
+  AddonManagerPrivate.unregisterProvider(brokenAddonProvider);
 
   // Uninstall the valid addon.
   yield AddonTestUtils.uninstallAddonByID(ADDON_ID);
@@ -1290,6 +1412,31 @@ add_task(function* test_defaultSearchEngine() {
   Services.obs.notifyObservers(null, "browser-search-service", "init-complete");
   data = TelemetryEnvironment.currentEnvironment;
   Assert.equal(data.settings.searchCohort, "testcohort");
+});
+
+add_task(function* test_environmentShutdown() {
+  // Define and reset the test preference.
+  const PREF_TEST = "toolkit.telemetry.test.pref1";
+  const PREFS_TO_WATCH = new Map([
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_PREF_STATE}],
+  ]);
+  Preferences.reset(PREF_TEST);
+  gNow = futureDate(gNow, 10 * MILLISECONDS_PER_MINUTE);
+  fakeNow(gNow);
+
+  // Set up the preferences and listener, then the trigger shutdown
+  TelemetryEnvironment._watchPreferences(PREFS_TO_WATCH);
+  TelemetryEnvironment.registerChangeListener("test_environmentShutdownChange", () => {
+  // Register a new change listener that asserts if change is propogated
+    Assert.ok(false, "No change should be propagated after shutdown.");
+  });
+  TelemetryEnvironment.shutdown();
+
+  // Flipping  the test preference after shutdown should not trigger the listener
+  Preferences.set(PREF_TEST, 1);
+
+  // Unregister the listener.
+  TelemetryEnvironment.unregisterChangeListener("test_environmentShutdownChange");
 });
 
 add_task(function*() {

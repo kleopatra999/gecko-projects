@@ -382,15 +382,8 @@ public:
   }
 
   ~AsyncCloseConnection() {
-    nsCOMPtr<nsIThread> thread;
-    (void)NS_GetMainThread(getter_AddRefs(thread));
-    // Handle ambiguous nsISupports inheritance.
-    Connection *rawConnection = nullptr;
-    mConnection.swap(rawConnection);
-    (void)NS_ProxyRelease(thread,
-                          NS_ISUPPORTS_CAST(mozIStorageConnection *,
-                                            rawConnection));
-    (void)NS_ProxyRelease(thread, mCallbackEvent);
+    NS_ReleaseOnMainThread(mConnection.forget());
+    NS_ReleaseOnMainThread(mCallbackEvent.forget());
   }
 private:
   RefPtr<Connection> mConnection;
@@ -452,22 +445,13 @@ private:
     MOZ_ASSERT(NS_SUCCEEDED(rv));
 
     // Handle ambiguous nsISupports inheritance.
-    Connection *rawConnection = nullptr;
-    mConnection.swap(rawConnection);
-    (void)NS_ProxyRelease(thread, NS_ISUPPORTS_CAST(mozIStorageConnection *,
-                                                    rawConnection));
-
-    Connection *rawClone = nullptr;
-    mClone.swap(rawClone);
-    (void)NS_ProxyRelease(thread, NS_ISUPPORTS_CAST(mozIStorageConnection *,
-                                                    rawClone));
+    NS_ProxyRelease(thread, mConnection.forget());
+    NS_ProxyRelease(thread, mClone.forget());
 
     // Generally, the callback will be released by CallbackComplete.
     // However, if for some reason Run() is not executed, we still
     // need to ensure that it is released here.
-    mozIStorageCompletionCallback *rawCallback = nullptr;
-    mCallback.swap(rawCallback);
-    (void)NS_ProxyRelease(thread, rawCallback);
+    NS_ProxyRelease(thread, mCallback.forget());
   }
 
   RefPtr<Connection> mConnection;
@@ -489,7 +473,9 @@ Connection::Connection(Service *aService,
 , threadOpenedOn(do_GetCurrentThread())
 , mDBConn(nullptr)
 , mAsyncExecutionThreadShuttingDown(false)
+#ifdef DEBUG
 , mAsyncExecutionThreadIsAlive(false)
+#endif
 , mConnectionClosed(false)
 , mTransactionInProgress(false)
 , mProgressHandler(nullptr)
@@ -575,7 +561,10 @@ Connection::getAsyncExecutionTarget()
                              mAsyncExecutionThread);
   }
 
+#ifdef DEBUG
   mAsyncExecutionThreadIsAlive = true;
+#endif
+
   return mAsyncExecutionThread;
 }
 
@@ -911,7 +900,9 @@ Connection::shutdownAsyncThread(nsIThread *aThread) {
 
   DebugOnly<nsresult> rv = aThread->Shutdown();
   MOZ_ASSERT(NS_SUCCEEDED(rv));
+#ifdef DEBUG
   mAsyncExecutionThreadIsAlive = false;
+#endif
 }
 
 nsresult

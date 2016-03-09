@@ -5,7 +5,6 @@
 
 package org.mozilla.gecko.preferences;
 
-import android.annotation.TargetApi;
 import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.AdjustConstants;
 import org.mozilla.gecko.AppConstants;
@@ -13,6 +12,7 @@ import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.BrowserLocaleManager;
 import org.mozilla.gecko.DataReportingNotification;
+import org.mozilla.gecko.DynamicToolbar;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoActivityStatus;
 import org.mozilla.gecko.GeckoAppShell;
@@ -31,8 +31,10 @@ import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.TelemetryContract.Method;
 import org.mozilla.gecko.background.common.GlobalConstants;
 import org.mozilla.gecko.db.BrowserContract.SuggestedSites;
+import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
+import org.mozilla.gecko.tabqueue.TabQueuePrompt;
 import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.EventCallback;
@@ -42,8 +44,8 @@ import org.mozilla.gecko.util.InputOptionsUtils;
 import org.mozilla.gecko.util.NativeEventListener;
 import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.widget.FloatingHintEditText;
 
+import android.annotation.TargetApi;
 import android.app.ActionBar;
 import android.app.AlertDialog;
 import android.app.Dialog;
@@ -57,6 +59,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.content.res.Configuration;
+import android.Manifest;
 import android.os.Build;
 import android.os.Bundle;
 import android.preference.CheckBoxPreference;
@@ -70,6 +73,7 @@ import android.preference.PreferenceGroup;
 import android.preference.PreferenceScreen;
 import android.preference.TwoStatePreference;
 import android.support.design.widget.Snackbar;
+import android.support.design.widget.TextInputLayout;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -84,6 +88,7 @@ import android.widget.ListAdapter;
 import android.widget.ListView;
 
 import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -115,7 +120,7 @@ OnSharedPreferenceChangeListener
 
     private static boolean sIsCharEncodingEnabled;
     private boolean mInitialized;
-    private int mPrefsRequestId;
+    private PrefsHelper.PrefHandler mPrefsRequest;
     private List<Header> mHeaders;
 
     // These match keys in resources/xml*/preferences*.xml
@@ -135,6 +140,7 @@ OnSharedPreferenceChangeListener
     private static final String PREFS_DEVTOOLS_REMOTE_LINK = NON_PREF_PREFIX + "remote_debugging.link";
     private static final String PREFS_TRACKING_PROTECTION = "privacy.trackingprotection.state";
     private static final String PREFS_TRACKING_PROTECTION_PB = "privacy.trackingprotection.pbmode.enabled";
+    private static final String PREFS_ZOOMED_VIEW_ENABLED = "ui.zoomedview.enabled";
     public static final String PREFS_VOICE_INPUT_ENABLED = NON_PREF_PREFIX + "voice_input_enabled";
     public static final String PREFS_QRCODE_ENABLED = NON_PREF_PREFIX + "qrcode_enabled";
     private static final String PREFS_TRACKING_PROTECTION_PRIVATE_BROWSING = "privacy.trackingprotection.pbmode.enabled";
@@ -159,6 +165,8 @@ OnSharedPreferenceChangeListener
     public static final String PREFS_TAB_QUEUE_LAST_SITE = NON_PREF_PREFIX + "last_site";
     public static final String PREFS_TAB_QUEUE_LAST_TIME = NON_PREF_PREFIX + "last_time";
 
+    private static final String PREFS_DYNAMIC_TOOLBAR = "browser.chrome.dynamictoolbar";
+
     // These values are chosen to be distinct from other Activity constants.
     private static final int REQUEST_CODE_PREF_SCREEN = 5;
     private static final int RESULT_CODE_EXIT_SETTINGS = 6;
@@ -167,6 +175,10 @@ OnSharedPreferenceChangeListener
     // Callers can recognize this code to refresh themselves to
     // accommodate a locale change.
     public static final int RESULT_CODE_LOCALE_DID_CHANGE = 7;
+
+    private static final int REQUEST_CODE_TAB_QUEUE = 8;
+
+    private CheckBoxPreference tabQueuePreference;
 
     /**
      * Track the last locale so we know whether to redisplay.
@@ -502,7 +514,7 @@ OnSharedPreferenceChangeListener
         mInitialized = true;
         if (Versions.preHC) {
             PreferenceScreen screen = getPreferenceScreen();
-            mPrefsRequestId = setupPreferences(screen);
+            mPrefsRequest = setupPreferences(screen);
         }
     }
 
@@ -526,8 +538,9 @@ OnSharedPreferenceChangeListener
         EventDispatcher.getInstance().unregisterGeckoThreadListener((NativeEventListener) this,
             "Snackbar:Show");
 
-        if (mPrefsRequestId > 0) {
-            PrefsHelper.removeObserver(mPrefsRequestId);
+        if (mPrefsRequest != null) {
+            PrefsHelper.removeObserver(mPrefsRequest);
+            mPrefsRequest = null;
         }
 
         // The intent extras will be null if this is the top-level settings
@@ -620,7 +633,17 @@ OnSharedPreferenceChangeListener
                   break;
               }
               break;
+            case REQUEST_CODE_TAB_QUEUE:
+                if (TabQueueHelper.processTabQueuePromptResponse(resultCode, this)) {
+                    tabQueuePreference.setChecked(true);
+                }
+                break;
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        Permissions.onRequestPermissionsResult(this, permissions, grantResults);
     }
 
     @Override
@@ -632,7 +655,7 @@ OnSharedPreferenceChangeListener
 
                 SnackbarHelper.showSnackbar(GeckoPreferences.this,
                         getString(stringRes),
-                        Snackbar.LENGTH_SHORT);
+                        Snackbar.LENGTH_LONG);
             }
         } catch (Exception e) {
             Log.e(LOGTAG, "Exception handling message \"" + event + "\":", e);
@@ -653,7 +676,7 @@ OnSharedPreferenceChangeListener
       * @return The integer id for the PrefsHelper.PrefHandlerBase listener added
       *         to monitor changes to Gecko prefs.
       */
-    public int setupPreferences(PreferenceGroup prefs) {
+    public PrefsHelper.PrefHandler setupPreferences(PreferenceGroup prefs) {
         ArrayList<String> list = new ArrayList<String>();
         setupPreferences(prefs, list);
         return getGeckoPreferences(prefs, list);
@@ -808,8 +831,15 @@ OnSharedPreferenceChangeListener
                         }
                     });
                 } else if (PREFS_TAB_QUEUE.equals(key)) {
+                    tabQueuePreference = (CheckBoxPreference) pref;
                     // Only show tab queue pref on nightly builds with the tab queue build flag.
                     if (!TabQueueHelper.TAB_QUEUE_ENABLED) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    }
+                } else if (PREFS_ZOOMED_VIEW_ENABLED.equals(key)) {
+                    if (!AppConstants.NIGHTLY_BUILD) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
@@ -865,17 +895,16 @@ OnSharedPreferenceChangeListener
                     final String url = getResources().getString(R.string.faq_link, VERSION, OS, LOCALE);
                     ((LinkPreference) pref).setUrl(url);
                 } else if (PREFS_FEEDBACK_LINK.equals(key)) {
-                    PrefsHelper.getPref("app.feedbackURL", new PrefsHelper.PrefHandlerBase() {
-                        @Override
-                        public void prefValue(String prefName, final String value) {
-                            ThreadUtils.postToUiThread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    ((LinkPreference) pref).setUrl(value);
-                                }
-                            });
-                        }
-                    });
+                    // Format the feedback link. We can't easily use this "app.feedbackURL"
+                    // Gecko preference because the URL must be formatted.
+                    final String url = getResources().getString(R.string.feedback_link, AppConstants.MOZ_APP_VERSION, AppConstants.MOZ_UPDATE_CHANNEL);
+                    ((LinkPreference) pref).setUrl(url);
+                } else if (PREFS_DYNAMIC_TOOLBAR.equals(key)) {
+                    if (DynamicToolbar.isForceDisabled()) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    }
                 }
 
                 // Some Preference UI elements are not actually preferences,
@@ -1212,9 +1241,19 @@ OnSharedPreferenceChangeListener
             broadcastHealthReportUploadPref(this, newBooleanValue);
             AdjustConstants.getAdjustHelper().setEnabled(newBooleanValue);
         } else if (PREFS_GEO_REPORTING.equals(prefName)) {
-            broadcastStumblerPref(this, (Boolean) newValue);
-            // Translate boolean value to int for geo reporting pref.
-            newValue = (Boolean) newValue ? 1 : 0;
+            if ((Boolean) newValue) {
+                enableStumbler((CheckBoxPreference) preference);
+                return false;
+            } else {
+                broadcastStumblerPref(GeckoPreferences.this, false);
+                return true;
+            }
+        } else if (PREFS_TAB_QUEUE.equals(prefName)) {
+            if ((Boolean) newValue && !TabQueueHelper.canDrawOverlays(this)) {
+                Intent promptIntent = new Intent(this, TabQueuePrompt.class);
+                startActivityForResult(promptIntent, REQUEST_CODE_TAB_QUEUE);
+                return false;
+            }
         } else if (handlers.containsKey(prefName)) {
             PrefHandler handler = handlers.get(prefName);
             handler.onChange(this, preference, newValue);
@@ -1241,14 +1280,38 @@ OnSharedPreferenceChangeListener
         return true;
     }
 
-    private EditText getTextBox(int aHintText) {
-        EditText input = new FloatingHintEditText(this);
+    private void enableStumbler(final CheckBoxPreference preference) {
+        Permissions
+                .from(this)
+                .withPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+                .onUIThread()
+                .andFallback(new Runnable() {
+                    @Override
+                    public void run() {
+                        preference.setChecked(false);
+                    }
+                })
+                .run(new Runnable() {
+                    @Override
+                    public void run() {
+                        preference.setChecked(true);
+                        broadcastStumblerPref(GeckoPreferences.this, true);
+                    }
+                });
+    }
+
+    private TextInputLayout getTextBox(int aHintText) {
+        final EditText input = new EditText(this);
         int inputtype = InputType.TYPE_CLASS_TEXT;
         inputtype |= InputType.TYPE_TEXT_VARIATION_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
         input.setInputType(inputtype);
 
         input.setHint(aHintText);
-        return input;
+
+        final TextInputLayout layout = new TextInputLayout(this);
+        layout.addView(input);
+
+        return layout;
     }
 
     private class PasswordTextWatcher implements TextWatcher {
@@ -1312,10 +1375,13 @@ OnSharedPreferenceChangeListener
         AlertDialog dialog;
         switch(id) {
             case DIALOG_CREATE_MASTER_PASSWORD:
-                final EditText input1 = getTextBox(R.string.masterpassword_password);
-                final EditText input2 = getTextBox(R.string.masterpassword_confirm);
-                linearLayout.addView(input1);
-                linearLayout.addView(input2);
+                final TextInputLayout inputLayout1 = getTextBox(R.string.masterpassword_password);
+                final TextInputLayout inputLayout2 = getTextBox(R.string.masterpassword_confirm);
+                linearLayout.addView(inputLayout1);
+                linearLayout.addView(inputLayout2);
+
+                final EditText input1 = inputLayout1.getEditText();
+                final EditText input2 = inputLayout2.getEditText();
 
                 builder.setTitle(R.string.masterpassword_create_title)
                        .setView((View) linearLayout)
@@ -1359,8 +1425,9 @@ OnSharedPreferenceChangeListener
 
                 break;
             case DIALOG_REMOVE_MASTER_PASSWORD:
-                final EditText input = getTextBox(R.string.masterpassword_password);
-                linearLayout.addView(input);
+                final TextInputLayout inputLayout = getTextBox(R.string.masterpassword_password);
+                linearLayout.addView(inputLayout);
+                final EditText input = inputLayout.getEditText();
 
                 builder.setTitle(R.string.masterpassword_remove_title)
                        .setView((View) linearLayout)
@@ -1399,8 +1466,10 @@ OnSharedPreferenceChangeListener
     }
 
     // Initialize preferences by requesting the preference values from Gecko
-    private int getGeckoPreferences(final PreferenceGroup screen, ArrayList<String> prefs) {
-        return PrefsHelper.getPrefs(prefs, new PrefsHelper.PrefHandlerBase() {
+    private PrefsHelper.PrefHandler getGeckoPreferences(final PreferenceGroup screen,
+                                                        ArrayList<String> prefs) {
+
+        final PrefsHelper.PrefHandler prefHandler = new PrefsHelper.PrefHandlerBase() {
             private Preference getField(String prefName) {
                 return screen.findPreference(prefName);
             }
@@ -1482,11 +1551,6 @@ OnSharedPreferenceChangeListener
             }
 
             @Override
-            public boolean isObserver() {
-                return true;
-            }
-
-            @Override
             public void finish() {
                 // enable all preferences once we have them from gecko
                 ThreadUtils.postToUiThread(new Runnable() {
@@ -1496,7 +1560,10 @@ OnSharedPreferenceChangeListener
                     }
                 });
             }
-        });
+        };
+        final String[] prefNames = prefs.toArray(new String[prefs.size()]);
+        PrefsHelper.addObserver(prefNames, prefHandler);
+        return prefHandler;
     }
 
     @Override

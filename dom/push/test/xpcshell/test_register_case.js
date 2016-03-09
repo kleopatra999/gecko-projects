@@ -10,9 +10,6 @@ const userAgentID = '1760b1f5-c3ba-40e3-9344-adef7c18ab12';
 function run_test() {
   do_get_profile();
   setPrefs();
-  disableServiceWorkerEvents(
-    'https://example.net/case'
-  );
   run_next_test();
 }
 
@@ -50,7 +47,7 @@ add_task(function* test_register_case() {
     PushService.register({
       scope: 'https://example.net/case',
       originAttributes: ChromeUtils.originAttributesToSuffix(
-        { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inBrowser: false }),
+        { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
     }),
     DEFAULT_TIMEOUT,
     'Mixed-case register response timed out'

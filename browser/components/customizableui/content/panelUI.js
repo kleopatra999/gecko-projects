@@ -157,10 +157,6 @@ const PanelUI = {
 
       this.panel.addEventListener("popupshown", function onPopupShown() {
         this.removeEventListener("popupshown", onPopupShown);
-        // As an optimization for the customize mode transition, we preload
-        // about:customizing in the background once the menu panel is first
-        // shown.
-        gCustomizationTabPreloader.ensurePreloading();
         deferred.resolve();
       });
 
@@ -228,7 +224,7 @@ const PanelUI = {
     if (this._readyPromise) {
       return this._readyPromise;
     }
-    this._readyPromise = Task.spawn(function() {
+    this._readyPromise = Task.spawn(function*() {
       if (!this._initialized) {
         let delayedStartupDeferred = Promise.defer();
         let delayedStartupObserver = (aSubject, aTopic, aData) => {
@@ -329,6 +325,7 @@ const PanelUI = {
       evt.initCustomEvent("ViewShowing", true, true, viewNode);
       viewNode.dispatchEvent(evt);
       if (evt.defaultPrevented) {
+        aAnchor.open = false;
         return;
       }
 

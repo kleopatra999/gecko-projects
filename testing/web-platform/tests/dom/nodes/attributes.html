@@ -19,12 +19,17 @@ var XMLNS = "http://www.w3.org/2000/xmlns/"
 test(function() {
   document.body.setAttribute("abc", "pass")
   var attr = document.body.attributes[0]
-  assert_true(attr instanceof Attr)
-  assert_false(attr instanceof Node)
-  assert_throws(new TypeError(), function() { attr.appendChild(document.createTextNode("fail")) })
-  assert_throws(new TypeError(), function() { attr.appendChild(null) })
+  assert_true(attr instanceof Attr, "should be an Attr")
+  assert_false(attr instanceof Node, "should not be a Node")
+  var removed_members = [
+    "appendChild",
+    "insertBefore",
+    "childNodes",
+  ]
+  removed_members.forEach(function(m) {
+    assert_false(m in attr, m + " should not be supported")
+  })
   assert_equals(attr.value, "pass")
-  assert_false("childNodes" in attr, "Should not have childNodes")
 }, "AttrExodus")
 
 // setAttribute exhaustive tests
@@ -440,6 +445,26 @@ test(function() {
   el2.setAttributeNodeNS(attrNode);
   assert_equals(el2.getAttributeNS("x", "foo"), "bar");
 }, "Basic functionality of setAttributeNodeNS")
+
+test(function() {
+  var el = document.createElement("div");
+  var other = document.createElement("div");
+  attr = document.createAttribute("foo");
+  assert_equals(el.setAttributeNode(attr), null);
+  assert_equals(attr.ownerElement, el);
+  assert_throws("INUSE_ATTRIBUTE_ERR",
+                  function() { other.setAttributeNode(attr) },
+                  "Attribute already associated with el")
+}, "If attr’s element is neither null nor element, throw an InUseAttributeError.");
+
+test(function() {
+  var el = document.createElement("div");
+  attr = document.createAttribute("foo");
+  assert_equals(el.setAttributeNode(attr), null);
+  el.setAttribute("bar", "qux");
+  assert_equals(el.setAttributeNode(attr), attr);
+  assert_equals(el.attributes[0], attr);
+}, "Replacing an attr by itself");
 
 test(function() {
   var el = document.createElement("div")

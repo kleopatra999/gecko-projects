@@ -52,7 +52,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(LegacyMozTCPSocket)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-LegacyMozTCPSocket::LegacyMozTCPSocket(nsPIDOMWindow* aWindow)
+LegacyMozTCPSocket::LegacyMozTCPSocket(nsPIDOMWindowInner* aWindow)
 : mGlobal(do_QueryInterface(aWindow))
 {
 }
@@ -166,14 +166,11 @@ TCPSocket::TCPSocket(nsIGlobalObject* aGlobal, const nsAString& aHost, uint16_t 
   , mTxBytes(0)
   , mRxBytes(0)
   , mAppId(nsIScriptSecurityManager::UNKNOWN_APP_ID)
-  , mInBrowser(false)
+  , mInIsolatedMozBrowser(false)
 #endif
 {
   if (aGlobal) {
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal);
-    if (window && window->IsOuterWindow()) {
-      window = window->GetCurrentInnerWindow();
-    }
+    nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
     if (window) {
       mInnerWindowID = window->WindowID();
     }
@@ -1103,11 +1100,11 @@ TCPSocket::SetSocketBridgeParent(TCPSocketParent* aBridgeParent)
 }
 
 void
-TCPSocket::SetAppIdAndBrowser(uint32_t aAppId, bool aInBrowser)
+TCPSocket::SetAppIdAndBrowser(uint32_t aAppId, bool aInIsolatedMozBrowser)
 {
 #ifdef MOZ_WIDGET_GONK
   mAppId = aAppId;
-  mInBrowser = aInBrowser;
+  mInIsolatedMozBrowser = aInIsolatedMozBrowser;
 #endif
 }
 
@@ -1158,8 +1155,8 @@ TCPSocket::SaveNetworkStats(bool aEnforce)
     return;
   }
 
-  nssProxy->SaveAppStats(mAppId, mInBrowser, mActiveNetworkInfo, PR_Now(),
-                         mRxBytes, mTxBytes, false, nullptr);
+  nssProxy->SaveAppStats(mAppId, mInIsolatedMozBrowser, mActiveNetworkInfo,
+                         PR_Now(), mRxBytes, mTxBytes, false, nullptr);
 
   // Reset the counters once the statistics is saved to NetworkStatsServiceProxy.
   mTxBytes = mRxBytes = 0;

@@ -70,7 +70,8 @@
 #include "gfxRect.h"
 #include "ImageLayers.h"
 #include "ImageContainer.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsBlockFrame.h"
 #include "nsStyleStructInlines.h"
 
@@ -219,7 +220,7 @@ nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
   if (mDisplayingIcon)
     gIconLoad->RemoveIconObserver(this);
 
-  nsSplittableFrame::DestroyFrom(aDestructRoot);
+  ImageFrameSuper::DestroyFrom(aDestructRoot);
 }
 
 void
@@ -255,7 +256,7 @@ nsImageFrame::Init(nsIContent*       aContent,
                    nsContainerFrame* aParent,
                    nsIFrame*         aPrevInFlow)
 {
-  nsSplittableFrame::Init(aContent, aParent, aPrevInFlow);
+  ImageFrameSuper::Init(aContent, aParent, aPrevInFlow);
 
   mListener = new nsImageListener(this);
 
@@ -681,16 +682,18 @@ nsImageFrame::NotifyNewCurrentRequest(imgIRequest *aRequest,
   }
 
   if (mState & IMAGE_GOTINITIALREFLOW) { // do nothing if we haven't gotten the initial reflow yet
-    if (!(mState & IMAGE_SIZECONSTRAINED) && intrinsicSizeChanged) {
-      nsIPresShell *presShell = PresContext()->GetPresShell();
-      if (presShell) { 
-        presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
-                                    NS_FRAME_IS_DIRTY);
+    if (intrinsicSizeChanged) {
+      if (!(mState & IMAGE_SIZECONSTRAINED)) {
+        nsIPresShell *presShell = PresContext()->GetPresShell();
+        if (presShell) {
+          presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
+                                      NS_FRAME_IS_DIRTY);
+        }
+      } else {
+        // We've already gotten the initial reflow, and our size hasn't changed,
+        // so we're ready to request a decode.
+        MaybeDecodeForPredictedSize();
       }
-    } else {
-      // We've already gotten the initial reflow, and our size hasn't changed,
-      // so we're ready to request a decode.
-      MaybeDecodeForPredictedSize();
     }
     // Update border+content to account for image change
     InvalidateFrame();
@@ -1700,10 +1703,20 @@ nsDisplayImage::ConfigureLayer(ImageLayer* aLayer,
   // aParameters.Offset() is always zero.
   MOZ_ASSERT(aParameters.Offset() == LayerIntPoint(0,0));
 
+  // It's possible (for example, due to downscale-during-decode) that the
+  // ImageContainer this ImageLayer is holding has a different size from the
+  // intrinsic size of the image. For this reason we compute the transform using
+  // the ImageContainer's size rather than the image's intrinsic size.
+  // XXX(seth): In reality, since the size of the ImageContainer may change
+  // asynchronously, this is not enough. Bug 1183378 will provide a more
+  // complete fix, but this solution is safe in more cases than simply relying
+  // on the intrinsic size.
+  IntSize containerSize = aLayer->GetContainer()->GetCurrentSize();
+
   const LayoutDevicePoint p = destRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(destRect.Width() / imageWidth,
-                     destRect.Height() / imageHeight);
+  transform.PreScale(destRect.Width() / containerSize.width,
+                     destRect.Height() / containerSize.height);
   aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 }
 
@@ -2069,7 +2082,7 @@ nsImageFrame::HandleEvent(nsPresContext* aPresContext,
     }
   }
 
-  return nsSplittableFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
+  return ImageFrameSuper::HandleEvent(aPresContext, aEvent, aEventStatus);
 }
 
 nsresult
@@ -2106,8 +2119,8 @@ nsImageFrame::AttributeChanged(int32_t aNameSpaceID,
                                nsIAtom* aAttribute,
                                int32_t aModType)
 {
-  nsresult rv = nsSplittableFrame::AttributeChanged(aNameSpaceID,
-                                                    aAttribute, aModType);
+  nsresult rv = ImageFrameSuper::AttributeChanged(aNameSpaceID,
+                                                  aAttribute, aModType);
   if (NS_FAILED(rv)) {
     return rv;
   }

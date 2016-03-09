@@ -818,7 +818,9 @@ gfxContext::PushGroupForBlendBack(gfxContentType content, Float aOpacity, Source
 
     CurrentState().mBlendOpacity = aOpacity;
     CurrentState().mBlendMask = aMask;
+#ifdef DEBUG
     CurrentState().mWasPushedForBlendBack = true;
+#endif
     CurrentState().mBlendMaskTransform = aMaskTransform;
   }
 }
@@ -854,9 +856,11 @@ gfxContext::PushGroupAndCopyBackground(gfxContentType content, Float aOpacity, S
       mDT->PushLayer(content == gfxContentType::COLOR, aOpacity, aMask, aMaskTransform, IntRect(), false);
     }
   } else {
-    if (pushOpaqueWithCopiedBG) {
+    RefPtr<SourceSurface> source;
+    // This snapshot can be nullptr if the DrawTarget is a cairo target that is currently
+    // in an error state.
+    if (pushOpaqueWithCopiedBG && (source = mDT->Snapshot())) {
       DrawTarget *oldDT = mDT;
-      RefPtr<SourceSurface> source = mDT->Snapshot();
       Point oldDeviceOffset = CurrentState().deviceOffset;
 
       PushNewDT(gfxContentType::COLOR);
@@ -868,7 +872,9 @@ gfxContext::PushGroupAndCopyBackground(gfxContentType content, Float aOpacity, S
 
       CurrentState().mBlendOpacity = aOpacity;
       CurrentState().mBlendMask = aMask;
+#ifdef DEBUG
       CurrentState().mWasPushedForBlendBack = true;
+#endif
       CurrentState().mBlendMaskTransform = aMaskTransform;
 
       Point offset = CurrentState().deviceOffset - oldDeviceOffset;
@@ -916,7 +922,9 @@ gfxContext::PushGroupAndCopyBackground(gfxContentType content, Float aOpacity, S
     mDT->SetTransform(GetDTTransform());
     CurrentState().mBlendOpacity = aOpacity;
     CurrentState().mBlendMask = aMask;
+#ifdef DEBUG
     CurrentState().mWasPushedForBlendBack = true;
+#endif
     CurrentState().mBlendMaskTransform = aMaskTransform;
   }
 }
@@ -1004,15 +1012,6 @@ gfxContext::EnsurePath()
 
       mTransformChanged = false;
     }
-
-    if (FillRule::FILL_WINDING == mPath->GetFillRule()) {
-      return;
-    }
-
-    mPathBuilder = mPath->CopyToBuilder();
-
-    mPath = mPathBuilder->Finish();
-    mPathBuilder = nullptr;
     return;
   }
 

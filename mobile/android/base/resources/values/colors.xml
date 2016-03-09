@@ -66,9 +66,8 @@
 
   <color name="dark_transparent_overlay">#99000000</color>
 
-  <!-- Firstrun tour-->
-  <color name="firstrun_tabstrip">#1193CB</color>
-  <color name="firstrun_pager_background">#16A3DF</color>
+  <!-- Firstrun tour -->
+  <color name="firstrun_pager_header">#E8E8E8</color>
 
   <!-- Tab Queue -->
   <color name="tab_queue_dismiss_button_foreground">#16A3DF</color>
@@ -141,9 +140,6 @@
   <color name="tab_history_favicon_border">#D7D9DB</color>
   <color name="tab_history_favicon_background">#FFFFFF</color>
   <color name="tab_history_border_color">#DADADF</color>
-
-  <!-- Colour used for Find-In-Page dialog -->
-  <color name="find_matchcase_off">#D02626</color>
 
   <!-- Canvas delegate paint color -->
   <color name="canvas_delegate_paint">#FFFF0000</color>

@@ -14,6 +14,7 @@
 #include "nsIDOMWindow.h"
 #include "nsPIDOMWindow.h"
 #include "nsIDOMDocument.h"
+#include "nsIScriptObjectPrincipal.h"
 #include "nsIServiceManager.h"
 #include "nsIServiceManager.h"
 #include "mozilla/Preferences.h"
@@ -136,6 +137,37 @@ NS_IMETHODIMP nsDeviceSensors::HasWindowListener(uint32_t aType, nsIDOMWindow *a
   return NS_OK;
 }
 
+class DeviceSensorTestEvent : public nsRunnable
+{
+public:
+  DeviceSensorTestEvent(nsDeviceSensors* aTarget,
+                        uint32_t aType)
+  : mTarget(aTarget)
+  , mType(aType)
+  {
+  }
+
+  NS_IMETHOD Run()
+  {
+    SensorData sensorData;
+    sensorData.sensor() = static_cast<SensorType>(mType);
+    sensorData.timestamp() = PR_Now();
+    sensorData.values().AppendElement(0.5f);
+    sensorData.values().AppendElement(0.5f);
+    sensorData.values().AppendElement(0.5f);
+    sensorData.values().AppendElement(0.5f);
+    sensorData.accuracy() = SENSOR_ACCURACY_UNRELIABLE;
+    mTarget->Notify(sensorData);
+    return NS_OK;
+  }
+
+private:
+  RefPtr<nsDeviceSensors> mTarget;
+  uint32_t mType;
+};
+
+static bool sTestSensorEvents = false;
+
 NS_IMETHODIMP nsDeviceSensors::AddWindowListener(uint32_t aType, nsIDOMWindow *aWindow)
 {
   if (!mEnabled)
@@ -149,6 +181,20 @@ NS_IMETHODIMP nsDeviceSensors::AddWindowListener(uint32_t aType, nsIDOMWindow *a
   }
 
   mWindowListeners[aType]->AppendElement(aWindow);
+
+  static bool sPrefCacheInitialized = false;
+  if (!sPrefCacheInitialized) {
+    sPrefCacheInitialized = true;
+    Preferences::AddBoolVarCache(&sTestSensorEvents,
+                                 "device.sensors.test.events",
+                                 false);
+  }
+
+  if (sTestSensorEvents) {
+    nsCOMPtr<nsIRunnable> event = new DeviceSensorTestEvent(this, aType);
+    NS_DispatchToCurrentThread(event);
+  }
+
   return NS_OK;
 }
 
@@ -174,7 +220,7 @@ NS_IMETHODIMP nsDeviceSensors::RemoveWindowAsListener(nsIDOMWindow *aWindow)
 }
 
 static bool
-WindowCannotReceiveSensorEvent (nsPIDOMWindow* aWindow)
+WindowCannotReceiveSensorEvent (nsPIDOMWindowInner* aWindow)
 {
   // Check to see if this window is in the background.  If
   // it is and it does not have the "background-sensors" permission,
@@ -183,10 +229,29 @@ WindowCannotReceiveSensorEvent (nsPIDOMWindow* aWindow)
     return true;
   }
 
-  if (aWindow->GetOuterWindow()->IsBackground()) {
+  bool disabled = aWindow->GetOuterWindow()->IsBackground() ||
+                  !aWindow->IsTopLevelWindowActive();
+  if (!disabled) {
+    nsCOMPtr<nsPIDOMWindowOuter> top = aWindow->GetScriptableTop();
+    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(aWindow);
+    nsCOMPtr<nsIScriptObjectPrincipal> topSop = do_QueryInterface(top);
+    if (!sop || !topSop) {
+      return true;
+    }
+
+    nsIPrincipal* principal = sop->GetPrincipal();
+    nsIPrincipal* topPrincipal = topSop->GetPrincipal();
+    if (!principal || !topPrincipal) {
+      return true;
+    }
+
+    disabled = !principal->Subsumes(topPrincipal);
+  }
+
+  if (disabled) {
     nsCOMPtr<nsIPermissionManager> permMgr =
       services::GetPermissionManager();
-    NS_ENSURE_TRUE(permMgr, false);
+    NS_ENSURE_TRUE(permMgr, true);
     uint32_t permission = nsIPermissionManager::DENY_ACTION;
     permMgr->TestPermissionFromWindow(aWindow, "background-sensors", &permission);
     return permission != nsIPermissionManager::ALLOW_ACTION;
@@ -198,6 +263,12 @@ WindowCannotReceiveSensorEvent (nsPIDOMWindow* aWindow)
 // Holds the device orientation in Euler angle degrees (azimuth, pitch, roll).
 struct Orientation
 {
+  enum OrientationReference
+  {
+    kRelative = 0,
+    kAbsolute
+  };
+
   static Orientation RadToDeg(const Orientation& aOrient)
   {
     const static double kRadToDeg = 180.0 / M_PI;
@@ -270,7 +341,7 @@ nsDeviceSensors::Notify(const mozilla::hal::SensorData& aSensorData)
   for (uint32_t i = windowListeners.Count(); i > 0 ; ) {
     --i;
 
-    nsCOMPtr<nsPIDOMWindow> pwindow = do_QueryInterface(windowListeners[i]);
+    nsCOMPtr<nsPIDOMWindowInner> pwindow = do_QueryInterface(windowListeners[i]);
     if (WindowCannotReceiveSensorEvent(pwindow)) {
         continue;
     }
@@ -282,10 +353,15 @@ nsDeviceSensors::Notify(const mozilla::hal::SensorData& aSensorData)
         type == nsIDeviceSensorData::TYPE_GYROSCOPE) {
         FireDOMMotionEvent(domDoc, target, type, x, y, z);
       } else if (type == nsIDeviceSensorData::TYPE_ORIENTATION) {
-        FireDOMOrientationEvent(target, x, y, z);
+        FireDOMOrientationEvent(target, x, y, z, Orientation::kAbsolute);
       } else if (type == nsIDeviceSensorData::TYPE_ROTATION_VECTOR) {
         const Orientation orient = RotationVectorToOrientation(x, y, z, w);
-        FireDOMOrientationEvent(target, orient.alpha, orient.beta, orient.gamma);
+        FireDOMOrientationEvent(target, orient.alpha, orient.beta, orient.gamma,
+                                Orientation::kAbsolute);
+      } else if (type == nsIDeviceSensorData::TYPE_GAME_ROTATION_VECTOR) {
+        const Orientation orient = RotationVectorToOrientation(x, y, z, w);
+        FireDOMOrientationEvent(target, orient.alpha, orient.beta, orient.gamma,
+                                Orientation::kRelative);
       } else if (type == nsIDeviceSensorData::TYPE_PROXIMITY) {
         FireDOMProximityEvent(target, x, y, z);
       } else if (type == nsIDeviceSensorData::TYPE_LIGHT) {
@@ -368,7 +444,8 @@ void
 nsDeviceSensors::FireDOMOrientationEvent(EventTarget* aTarget,
                                          double aAlpha,
                                          double aBeta,
-                                         double aGamma)
+                                         double aGamma,
+                                         bool aIsAbsolute)
 {
   DeviceOrientationEventInit init;
   init.mBubbles = true;
@@ -376,18 +453,36 @@ nsDeviceSensors::FireDOMOrientationEvent(EventTarget* aTarget,
   init.mAlpha.SetValue(aAlpha);
   init.mBeta.SetValue(aBeta);
   init.mGamma.SetValue(aGamma);
-  init.mAbsolute = true;
+  init.mAbsolute = aIsAbsolute;
 
-  RefPtr<DeviceOrientationEvent> event =
-    DeviceOrientationEvent::Constructor(aTarget,
-                                        NS_LITERAL_STRING("deviceorientation"),
-                                        init);
-  event->SetTrusted(true);
+  auto Dispatch = [&](EventTarget* aEventTarget, const nsAString& aType)
+  {
+    RefPtr<DeviceOrientationEvent> event =
+      DeviceOrientationEvent::Constructor(aEventTarget, aType, init);
+    event->SetTrusted(true);
+    bool dummy;
+    aEventTarget->DispatchEvent(event, &dummy);
+  };
 
-  bool dummy;
-  aTarget->DispatchEvent(event, &dummy);
+  Dispatch(aTarget, aIsAbsolute ? NS_LITERAL_STRING("absolutedeviceorientation") :
+                                  NS_LITERAL_STRING("deviceorientation"));
+
+  // This is used to determine whether relative events have been dispatched
+  // during the current session, in which case we don't dispatch the additional
+  // compatibility events.
+  static bool sIsDispatchingRelativeEvents = false;
+  sIsDispatchingRelativeEvents = sIsDispatchingRelativeEvents || !aIsAbsolute;
+
+  // Android devices with SENSOR_GAME_ROTATION_VECTOR support dispatch
+  // relative events for "deviceorientation" by default, while other platforms
+  // and devices without such support dispatch absolute events by default.
+  if (aIsAbsolute && !sIsDispatchingRelativeEvents) {
+    // For absolute events on devices without support for relative events,
+    // we need to additionally dispatch type "deviceorientation" to keep
+    // backwards-compatibility.
+    Dispatch(aTarget, NS_LITERAL_STRING("deviceorientation"));
+  }
 }
-
 
 void
 nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
@@ -398,7 +493,11 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
                                     double z)
 {
   // Attempt to coalesce events
-  bool fireEvent = TimeStamp::Now() > mLastDOMMotionEventTime + TimeDuration::FromMilliseconds(DEFAULT_SENSOR_POLL);
+  TimeDuration sensorPollDuration =
+    TimeDuration::FromMilliseconds(DEFAULT_SENSOR_POLL);
+  bool fireEvent =
+    (TimeStamp::Now() > mLastDOMMotionEventTime + sensorPollDuration) ||
+    sTestSensorEvents;
 
   switch (type) {
   case nsIDeviceSensorData::TYPE_LINEAR_ACCELERATION:

@@ -1,5 +1,4 @@
 /* vim: set ts=2 et sw=2 tw=80: */
-/* global nsContextMenu*/
 /* Any copyright is dedicated to the Public Domain.
  http://creativecommons.org/publicdomain/zero/1.0/ */
 
@@ -14,10 +13,10 @@ requestLongerTimeout(2);
 const TEST_URL = "data:text/html;charset=utf8,<div>test element</div>";
 
 add_task(function*() {
-  let {toolbox, inspector} = yield addTab(TEST_URL).then(openInspector);
+  let {inspector, testActor} = yield openInspectorForURL(TEST_URL);
 
   info("Select the test node with the browser ctx menu");
-  yield selectWithBrowserMenu(inspector);
+  yield clickOnInspectMenuItem(testActor, "div");
   assertNodeSelected(inspector, "div");
 
   info("Press arrowUp to focus <body> " +
@@ -26,7 +25,7 @@ add_task(function*() {
   assertNodeSelected(inspector, "body");
 
   info("Select the test node with the element picker");
-  yield selectWithElementPicker(inspector);
+  yield selectWithElementPicker(inspector, testActor);
   assertNodeSelected(inspector, "div");
 
   info("Press arrowUp to focus <body> " +
@@ -47,40 +46,13 @@ function selectPreviousNodeWithArrowUp(inspector) {
   return Promise.all([onUpdated, onNodeHighlighted]);
 }
 
-function* selectWithBrowserMenu(inspector) {
-  yield BrowserTestUtils.synthesizeMouseAtCenter("div", {
-    type: "contextmenu",
-    button: 2
-  }, gBrowser.selectedBrowser);
-
-  // nsContextMenu also requires the popupNode to be set, but we can't set it to
-  // node under e10s as it's a CPOW, not a DOM node. But under e10s,
-  // nsContextMenu won't use the property anyway, so just try/catching is ok.
-  try {
-    document.popupNode = getNode("div");
-  } catch (e) {}
-
-  let contentAreaContextMenu = document.querySelector("#contentAreaContextMenu");
-  let contextMenu = new nsContextMenu(contentAreaContextMenu);
-  yield contextMenu.inspectNode();
-
-  contentAreaContextMenu.hidden = true;
-  contentAreaContextMenu.hidePopup();
-  contextMenu.hiding();
-
-  yield inspector.once("inspector-updated");
-}
-
-function* selectWithElementPicker(inspector) {
-  yield inspector.toolbox.highlighterUtils.startPicker();
+function* selectWithElementPicker(inspector, testActor) {
+  yield startPicker(inspector.toolbox);
 
   yield BrowserTestUtils.synthesizeMouseAtCenter("div", {
     type: "mousemove",
   }, gBrowser.selectedBrowser);
 
-  executeInContent("Test:SynthesizeKey", {
-    key: "VK_RETURN",
-    options: {}
-  }, {}, false);
+  yield testActor.synthesizeKey({key: "VK_RETURN", options: {}});
   yield inspector.once("inspector-updated");
 }

@@ -99,8 +99,6 @@ static RedirEntry kRedirMap[] = {
 #endif
   { "accounts", "chrome://browser/content/aboutaccounts/aboutaccounts.xhtml",
     nsIAboutModule::ALLOW_SCRIPT },
-  { "customizing", "chrome://browser/content/customizableui/aboutCustomizing.xul",
-    nsIAboutModule::ALLOW_SCRIPT },
   { "loopconversation", "chrome://loop/content/panels/conversation.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::ALLOW_SCRIPT |
@@ -162,7 +160,8 @@ AboutRedirector::NewChannel(nsIURI* aURI,
         // let the aboutNewTabService decide where to redirect
         nsCOMPtr<nsIAboutNewTabService> aboutNewTabService =
           do_GetService("@mozilla.org/browser/aboutnewtab-service;1", &rv);
-        rv = aboutNewTabService->GetNewTabURL(url);
+        NS_ENSURE_SUCCESS(rv, rv);
+        rv = aboutNewTabService->GetDefaultURL(url);
         NS_ENSURE_SUCCESS(rv, rv);
       }
       // fall back to the specified url in the map

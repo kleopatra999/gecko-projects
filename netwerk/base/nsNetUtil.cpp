@@ -63,6 +63,7 @@
 #include "plstr.h"
 #include "nsINestedURI.h"
 #include "mozilla/dom/nsCSPUtils.h"
+#include "mozilla/net/HttpBaseChannel.h"
 #include "nsIScriptError.h"
 #include "nsISiteSecurityService.h"
 #include "nsHttpHandler.h"
@@ -370,11 +371,7 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
                                  nsIURI             *aUri,
                                  const nsAString    &aData,
                                  const nsACString   &aContentType,
-                                 nsINode            *aLoadingNode,
-                                 nsIPrincipal       *aLoadingPrincipal,
-                                 nsIPrincipal       *aTriggeringPrincipal,
-                                 nsSecurityFlags     aSecurityFlags,
-                                 nsContentPolicyType aContentPolicyType,
+                                 nsILoadInfo        *aLoadInfo,
                                  bool                aIsSrcdocChannel /* = false */)
 {
   nsresult rv;
@@ -397,11 +394,7 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
                                         stream,
                                         aContentType,
                                         NS_LITERAL_CSTRING("UTF-8"),
-                                        aLoadingNode,
-                                        aLoadingPrincipal,
-                                        aTriggeringPrincipal,
-                                        aSecurityFlags,
-                                        aContentPolicyType);
+                                        aLoadInfo);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -412,6 +405,25 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
   }
   channel.forget(outChannel);
   return NS_OK;
+}
+
+nsresult
+NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
+                                 nsIURI             *aUri,
+                                 const nsAString    &aData,
+                                 const nsACString   &aContentType,
+                                 nsINode            *aLoadingNode,
+                                 nsIPrincipal       *aLoadingPrincipal,
+                                 nsIPrincipal       *aTriggeringPrincipal,
+                                 nsSecurityFlags     aSecurityFlags,
+                                 nsContentPolicyType aContentPolicyType,
+                                 bool                aIsSrcdocChannel /* = false */)
+{
+  nsCOMPtr<nsILoadInfo> loadInfo =
+      new mozilla::LoadInfo(aLoadingPrincipal, aTriggeringPrincipal,
+                            aLoadingNode, aSecurityFlags, aContentPolicyType);
+  return NS_NewInputStreamChannelInternal(outChannel, aUri, aData, aContentType,
+                                          loadInfo, aIsSrcdocChannel);
 }
 
 nsresult
@@ -558,21 +570,21 @@ NS_LoadGroupMatchesPrincipal(nsILoadGroup *aLoadGroup,
 
     // Verify load context appId and browser flag match the principal
     uint32_t contextAppId;
-    bool contextInBrowserElement;
+    bool contextInIsolatedBrowser;
     rv = loadContext->GetAppId(&contextAppId);
     NS_ENSURE_SUCCESS(rv, false);
-    rv = loadContext->GetIsInBrowserElement(&contextInBrowserElement);
+    rv = loadContext->GetIsInIsolatedMozBrowserElement(&contextInIsolatedBrowser);
     NS_ENSURE_SUCCESS(rv, false);
 
     uint32_t principalAppId;
-    bool principalInBrowserElement;
+    bool principalInIsolatedBrowser;
     rv = aPrincipal->GetAppId(&principalAppId);
     NS_ENSURE_SUCCESS(rv, false);
-    rv = aPrincipal->GetIsInBrowserElement(&principalInBrowserElement);
+    rv = aPrincipal->GetIsInIsolatedMozBrowserElement(&principalInIsolatedBrowser);
     NS_ENSURE_SUCCESS(rv, false);
 
     return contextAppId == principalAppId &&
-           contextInBrowserElement == principalInBrowserElement;
+           contextInIsolatedBrowser == principalInIsolatedBrowser;
 }
 
 nsresult
@@ -1261,7 +1273,7 @@ NS_GetOriginAttributes(nsIChannel *aChannel,
 bool
 NS_GetAppInfo(nsIChannel *aChannel,
               uint32_t *aAppID,
-              bool *aIsInBrowserElement)
+              bool *aIsInIsolatedMozBrowserElement)
 {
     nsCOMPtr<nsILoadContext> loadContext;
     NS_QueryNotificationCallbacks(aChannel, loadContext);
@@ -1272,7 +1284,7 @@ NS_GetAppInfo(nsIChannel *aChannel,
     nsresult rv = loadContext->GetAppId(aAppID);
     NS_ENSURE_SUCCESS(rv, false);
 
-    rv = loadContext->GetIsInBrowserElement(aIsInBrowserElement);
+    rv = loadContext->GetIsInIsolatedMozBrowserElement(aIsInIsolatedMozBrowserElement);
     NS_ENSURE_SUCCESS(rv, false);
 
     return true;
@@ -1646,9 +1658,10 @@ NS_SecurityHashURI(nsIURI *aURI)
     if (scheme.EqualsLiteral("file"))
         return schemeHash; // sad face
 
-    if (scheme.EqualsLiteral("imap") ||
-        scheme.EqualsLiteral("mailbox") ||
-        scheme.EqualsLiteral("news"))
+    bool hasFlag;
+    if (NS_FAILED(NS_URIChainHasFlags(baseURI,
+        nsIProtocolHandler::ORIGIN_IS_FULL_SPEC, &hasFlag)) ||
+        hasFlag)
     {
         nsAutoCString spec;
         uint32_t specHash;
@@ -1745,13 +1758,13 @@ NS_SecurityCompareURIs(nsIURI *aSourceURI,
         return NS_SUCCEEDED(rv) && filesAreEqual;
     }
 
-    // Special handling for mailnews schemes
-    if (targetScheme.EqualsLiteral("imap") ||
-        targetScheme.EqualsLiteral("mailbox") ||
-        targetScheme.EqualsLiteral("news"))
+    bool hasFlag;
+    if (NS_FAILED(NS_URIChainHasFlags(targetBaseURI,
+        nsIProtocolHandler::ORIGIN_IS_FULL_SPEC, &hasFlag)) ||
+        hasFlag)
     {
-        // Each message is a distinct trust domain; use the
-        // whole spec for comparison
+        // URIs with this flag have the whole spec as a distinct trust
+        // domain; use the whole spec for comparison
         nsAutoCString targetSpec;
         nsAutoCString sourceSpec;
         return ( NS_SUCCEEDED( targetBaseURI->GetSpec(targetSpec) ) &&
@@ -1918,28 +1931,11 @@ NS_IsHSTSUpgradeRedirect(nsIChannel *aOldChannel,
     return false;
   }
 
-  bool isHttps;
-  if (NS_FAILED(newURI->SchemeIs("https", &isHttps)) || !isHttps) {
-    return false;
-  }
-
   nsCOMPtr<nsIURI> upgradedURI;
-  if (NS_FAILED(oldURI->Clone(getter_AddRefs(upgradedURI)))) {
+  nsresult rv =
+    HttpBaseChannel::GetSecureUpgradedURI(oldURI, getter_AddRefs(upgradedURI));
+  if (NS_FAILED(rv)) {
     return false;
-  }
-
-  if (NS_FAILED(upgradedURI->SetScheme(NS_LITERAL_CSTRING("https")))) {
-    return false;
-  }
-
-  int32_t oldPort = -1;
-  if (NS_FAILED(oldURI->GetPort(&oldPort))) {
-    return false;
-  }
-  if (oldPort == 80 || oldPort == -1) {
-    upgradedURI->SetPort(-1);
-  } else {
-    upgradedURI->SetPort(oldPort);
   }
 
   bool res;

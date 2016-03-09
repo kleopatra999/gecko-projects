@@ -13,7 +13,7 @@ XPCOMUtils.defineLazyGetter(this, "osString", function() {
   return Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
 });
 
-const TEST_URI = TEST_URL_ROOT + "doc_copystyles.html";
+const TEST_URI = URL_ROOT + "doc_copystyles.html";
 
 add_task(function*() {
   yield addTab(TEST_URI);
@@ -259,7 +259,7 @@ function* checkCopyStyle(view, node, menuItem, expectedPattern, hidden) {
   try {
     yield waitForClipboard(() => menuItem.click(),
       () => checkClipboardData(expectedPattern));
-  } catch(e) {
+  } catch (e) {
     failedClipboard(expectedPattern);
   }
 
@@ -268,11 +268,8 @@ function* checkCopyStyle(view, node, menuItem, expectedPattern, hidden) {
 
 function* disableProperty(view, index) {
   let ruleEditor = getRuleViewRuleEditor(view, 1);
-  let propEditor = ruleEditor.rule.textProps[index].editor;
-
-  info("Disabling a property");
-  propEditor.enable.click();
-  yield ruleEditor.rule._applyingModifications;
+  let textProp = ruleEditor.rule.textProps[index];
+  yield togglePropStatus(view, textProp);
 }
 
 function checkClipboardData(expectedPattern) {

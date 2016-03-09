@@ -34,6 +34,7 @@ from ..testing import (
 
 class TreeMetadata(object):
     """Base class for all data being captured."""
+    __slots__ = ()
 
 
 class ContextDerived(TreeMetadata):
@@ -44,13 +45,15 @@ class ContextDerived(TreeMetadata):
     """
 
     __slots__ = (
-        'objdir',
-        'relativedir',
+        'context_main_path',
         'context_all_paths',
-        'context_path',
-        'srcdir',
-        'topobjdir',
         'topsrcdir',
+        'topobjdir',
+        'relativedir',
+        'srcdir',
+        'objdir',
+        'config',
+        '_context',
     )
 
     def __init__(self, context):
@@ -155,9 +158,10 @@ class XPIDLFile(ContextDerived):
     """Describes an XPIDL file to be compiled."""
 
     __slots__ = (
-        'add_to_manifest',
-        'basename',
         'source_path',
+        'basename',
+        'module',
+        'add_to_manifest',
     )
 
     def __init__(self, context, source, module, add_to_manifest):
@@ -497,10 +501,12 @@ class SharedLibrary(Library):
         else:
             self.soname = self.lib_name
 
-        if symbols_file:
-            self.symbols_file = '%s.symbols' % self.lib_name
-        else:
+        if not symbols_file:
             self.symbols_file = None
+        elif context.config.substs['OS_TARGET'] == 'WINNT':
+            self.symbols_file = '%s.def' % self.lib_name
+        else:
+            self.symbols_file = '%s.symbols' % self.lib_name
 
 
 class ExternalLibrary(object):
@@ -785,7 +791,7 @@ class FinalTargetFiles(ContextDerived):
     this object fills that role. It just has a reference to the underlying
     HierarchicalStringList, which is created when parsing FINAL_TARGET_FILES.
     """
-    __slots__ = ('files', 'target')
+    __slots__ = ('files')
 
     def __init__(self, sandbox, files):
         ContextDerived.__init__(self, sandbox)
@@ -801,7 +807,7 @@ class FinalTargetPreprocessedFiles(ContextDerived):
     HierarchicalStringList, which is created when parsing
     FINAL_TARGET_PP_FILES.
     """
-    __slots__ = ('files', 'target')
+    __slots__ = ('files')
 
     def __init__(self, sandbox, files):
         ContextDerived.__init__(self, sandbox)
@@ -848,14 +854,16 @@ class GeneratedFile(ContextDerived):
         'method',
         'output',
         'inputs',
+        'flags',
     )
 
-    def __init__(self, context, script, method, output, inputs):
+    def __init__(self, context, script, method, output, inputs, flags=()):
         ContextDerived.__init__(self, context)
         self.script = script
         self.method = method
         self.output = output
         self.inputs = inputs
+        self.flags = flags
 
 
 class ClassPathEntry(object):
@@ -974,6 +982,7 @@ class ChromeManifestEntry(ContextDerived):
     """Represents a chrome.manifest entry."""
 
     __slots__ = (
+        'path',
         'entry',
     )
 

@@ -7,6 +7,7 @@
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "nsGlobalWindow.h"
 #include "nsIDOMClientRect.h"
 #include "nsIDocShell.h"
@@ -58,8 +59,6 @@ MediaEngineTabVideoSource::StartRunnable::Run()
 nsresult
 MediaEngineTabVideoSource::StopRunnable::Run()
 {
-  nsCOMPtr<nsPIDOMWindow> privateDOMWindow = do_QueryInterface(mVideoSource->mWindow);
-
   if (mVideoSource->mTimer) {
     mVideoSource->mTimer->Cancel();
     mVideoSource->mTimer = nullptr;
@@ -87,7 +86,8 @@ nsresult
 MediaEngineTabVideoSource::InitRunnable::Run()
 {
   if (mVideoSource->mWindowId != -1) {
-    nsCOMPtr<nsPIDOMWindow> window  = nsGlobalWindow::GetOuterWindowWithId(mVideoSource->mWindowId);
+    nsCOMPtr<nsPIDOMWindowOuter> window =
+      nsGlobalWindow::GetOuterWindowWithId(mVideoSource->mWindowId)->AsOuter();
     if (window) {
       mVideoSource->mWindow = window;
     }
@@ -97,13 +97,13 @@ MediaEngineTabVideoSource::InitRunnable::Run()
     mVideoSource->mTabSource = do_GetService(NS_TABSOURCESERVICE_CONTRACTID, &rv);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIDOMWindow> win;
+    nsCOMPtr<mozIDOMWindowProxy> win;
     rv = mVideoSource->mTabSource->GetTabToStream(getter_AddRefs(win));
     NS_ENSURE_SUCCESS(rv, rv);
     if (!win)
       return NS_OK;
 
-    mVideoSource->mWindow = win;
+    mVideoSource->mWindow = nsPIDOMWindowOuter::From(win);
   }
   nsCOMPtr<nsIRunnable> start(new StartRunnable(mVideoSource));
   start->Run();
@@ -129,7 +129,8 @@ MediaEngineTabVideoSource::GetUUID(nsACString_internal& aUuid)
 nsresult
 MediaEngineTabVideoSource::Allocate(const dom::MediaTrackConstraints& aConstraints,
                                     const MediaEnginePrefs& aPrefs,
-                                    const nsString& aDeviceId)
+                                    const nsString& aDeviceId,
+                                    const nsACString& aOrigin)
 {
   // windowId is not a proper constraint, so just read it.
   // It has no well-defined behavior in advanced, so ignore it there.
@@ -210,17 +211,15 @@ MediaEngineTabVideoSource::NotifyPull(MediaStreamGraph*,
 
 void
 MediaEngineTabVideoSource::Draw() {
-  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(mWindow);
-
-  if (!win) {
+  if (!mWindow) {
     return;
   }
 
   if (mScrollWithPage || mViewportWidth == INT32_MAX) {
-    win->GetInnerWidth(&mViewportWidth);
+    mWindow->GetInnerWidth(&mViewportWidth);
   }
   if (mScrollWithPage || mViewportHeight == INT32_MAX) {
-    win->GetInnerHeight(&mViewportHeight);
+    mWindow->GetInnerHeight(&mViewportHeight);
   }
   if (!mViewportWidth || !mViewportHeight) {
     return;
@@ -229,7 +228,7 @@ MediaEngineTabVideoSource::Draw() {
   IntSize size;
   {
     float pixelRatio;
-    win->GetDevicePixelRatio(&pixelRatio);
+    mWindow->GetDevicePixelRatio(&pixelRatio);
     const int32_t deviceWidth = (int32_t)(pixelRatio * mViewportWidth);
     const int32_t deviceHeight = (int32_t)(pixelRatio * mViewportHeight);
 
@@ -249,7 +248,7 @@ MediaEngineTabVideoSource::Draw() {
 
   if (mDataSize < static_cast<size_t>(stride * size.height)) {
     mDataSize = stride * size.height;
-    mData = static_cast<unsigned char*>(malloc(mDataSize));
+    mData = MakeUniqueFallible<unsigned char[]>(mDataSize);
   }
   if (!mData) {
     return;
@@ -258,7 +257,7 @@ MediaEngineTabVideoSource::Draw() {
   nsCOMPtr<nsIPresShell> presShell;
   {
     RefPtr<nsPresContext> presContext;
-    nsIDocShell* docshell = win->GetDocShell();
+    nsIDocShell* docshell = mWindow->GetDocShell();
     if (docshell) {
       docshell->GetPresContext(getter_AddRefs(presContext));
     }
@@ -280,7 +279,7 @@ MediaEngineTabVideoSource::Draw() {
   RefPtr<layers::ImageContainer> container = layers::LayerManager::CreateImageContainer();
   RefPtr<DrawTarget> dt =
     Factory::CreateDrawTargetForData(BackendType::CAIRO,
-                                     mData.rwget(),
+                                     mData.get(),
                                      size,
                                      stride,
                                      SurfaceFormat::B8G8R8X8);
@@ -311,12 +310,6 @@ MediaEngineTabVideoSource::Stop(mozilla::SourceMediaStream*, mozilla::TrackID)
     return NS_OK;
 
   NS_DispatchToMainThread(new StopRunnable(this));
-  return NS_OK;
-}
-
-nsresult
-MediaEngineTabVideoSource::Config(bool, uint32_t, bool, uint32_t, bool, uint32_t, int32_t)
-{
   return NS_OK;
 }
 

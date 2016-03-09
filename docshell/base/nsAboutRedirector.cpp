@@ -44,6 +44,11 @@ static RedirEntry kRedirMap[] = {
     "buildconfig", "chrome://global/content/buildconfig.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT
   },
+  {
+    "checkerboard", "chrome://global/content/aboutCheckerboard.xhtml",
+    nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+      nsIAboutModule::ALLOW_SCRIPT
+  },
   { "config", "chrome://global/content/config.xul", 0 },
 #ifdef MOZ_CRASHREPORTER
   { "crashes", "chrome://global/content/crashes.xhtml", 0 },
@@ -90,12 +95,10 @@ static RedirEntry kRedirMap[] = {
     nsIAboutModule::ALLOW_SCRIPT |
       nsIAboutModule::HIDE_FROM_ABOUTABOUT
   },
-#ifdef NIGHTLY_BUILD
   {
     "performance", "chrome://global/content/aboutPerformance.xhtml",
     nsIAboutModule::ALLOW_SCRIPT
   },
-#endif
   {
     "plugins", "chrome://global/content/plugins.html",
     nsIAboutModule::URI_MUST_LOAD_IN_CHILD
@@ -129,7 +132,7 @@ static RedirEntry kRedirMap[] = {
     nsIAboutModule::ALLOW_SCRIPT
   },
   {
-    "webrtc", "chrome://global/content/aboutwebrtc/aboutWebrtc.xhtml",
+    "webrtc", "chrome://global/content/aboutwebrtc/aboutWebrtc.html",
     nsIAboutModule::ALLOW_SCRIPT
   }
 };

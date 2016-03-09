@@ -4,7 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ImageClient.h"
+
 #include <stdint.h>                     // for uint32_t
+
+#include "ClientLayerManager.h"         // for ClientLayer
 #include "ImageContainer.h"             // for Image, PlanarYCbCrImage, etc
 #include "ImageTypes.h"                 // for ImageFormat::PLANAR_YCBCR, etc
 #include "GLImages.h"                   // for SurfaceTextureImage::Data, etc
@@ -12,6 +15,7 @@
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
+#include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat, etc
@@ -29,7 +33,7 @@
 #include "nsDebug.h"                    // for NS_WARNING, NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Image::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
-#include "mozilla/gfx/2D.h"
+
 #ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
 #endif
@@ -119,7 +123,7 @@ ImageClientSingle::FlushAllImages(AsyncTransactionWaiter* aAsyncTransactionWaite
 bool
 ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlags)
 {
-  nsAutoTArray<ImageContainer::OwningImage,4> images;
+  AutoTArray<ImageContainer::OwningImage,4> images;
   uint32_t generationCounter;
   aContainer->GetCurrentImages(&images, &generationCounter);
 
@@ -145,7 +149,7 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
   }
 
   nsTArray<Buffer> newBuffers;
-  nsAutoTArray<CompositableForwarder::TimedTextureClient,4> textures;
+  AutoTArray<CompositableForwarder::TimedTextureClient,4> textures;
 
   for (auto& img : images) {
     Image* image = img.mImage;
@@ -155,7 +159,15 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
       OverlayImage* overlayImage = static_cast<OverlayImage*>(image);
       OverlaySource source;
       if (overlayImage->GetSidebandStream().IsValid()) {
-        source.handle() = OverlayHandle(overlayImage->GetSidebandStream());
+        // Duplicate GonkNativeHandle::NhObj for ipc,
+        // since ParamTraits<GonkNativeHandle>::Write() absorbs native_handle_t.
+        RefPtr<GonkNativeHandle::NhObj> nhObj = overlayImage->GetSidebandStream().GetDupNhObj();
+        GonkNativeHandle handle(nhObj);
+        if (!handle.IsValid()) {
+          gfxWarning() << "ImageClientSingle::UpdateImage failed in GetDupNhObj";
+          return false;
+        }
+        source.handle() = OverlayHandle(handle);
       } else {
         source.handle() = OverlayHandle(overlayImage->GetOverlayId());
       }
@@ -166,11 +178,12 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
 #endif
 
     RefPtr<TextureClient> texture = image->GetTextureClient(this);
+    const bool hasTextureClient = !!texture;
 
     for (int32_t i = mBuffers.Length() - 1; i >= 0; --i) {
       if (mBuffers[i].mImageSerial == image->GetSerial()) {
-        if (texture) {
-          MOZ_ASSERT(texture == mBuffers[i].mTextureClient);
+        if (hasTextureClient) {
+          MOZ_ASSERT(image->GetTextureClient(this) == mBuffers[i].mTextureClient);
         } else {
           texture = mBuffers[i].mTextureClient;
         }

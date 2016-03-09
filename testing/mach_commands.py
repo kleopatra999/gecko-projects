@@ -133,10 +133,14 @@ TEST_FLAVORS = {
         'mach_command': 'mochitest',
         'kwargs': {'flavor': 'browser-chrome', 'test_paths': []},
     },
-    'chrashtest': { },
+    'crashtest': {},
     'chrome': {
         'mach_command': 'mochitest',
         'kwargs': {'flavor': 'chrome', 'test_paths': []},
+    },
+    'marionette': {
+        'mach_command': 'marionette-test',
+        'kwargs': {'tests': []},
     },
     'mochitest': {
         'mach_command': 'mochitest',
@@ -146,21 +150,16 @@ TEST_FLAVORS = {
         'mach_command': 'reftest',
         'kwargs': {'tests': []}
     },
-    'steeplechase': { },
+    'steeplechase': {},
     'web-platform-tests': {
         'mach_command': 'web-platform-tests',
         'kwargs': {'include': []}
-    },
-    'webapprt-chrome': {
-        'mach_command': 'mochitest',
-        'kwargs': {'flavor': 'webapprt-chrome', 'test_paths': []},
     },
     'xpcshell': {
         'mach_command': 'xpcshell-test',
         'kwargs': {'test_paths': []},
     },
 }
-
 
 for i in range(1, MOCHITEST_TOTAL_CHUNKS + 1):
     TEST_SUITES['mochitest-%d' %i] = {
@@ -499,6 +498,7 @@ class PushToTry(MachCommandBase):
             return rv
 
     def validate_args(self, **kwargs):
+        from autotry import AutoTry
         if not kwargs["paths"] and not kwargs["tests"] and not kwargs["tags"]:
             print("Paths, tags, or tests must be specified as an argument to autotry.")
             sys.exit(1)
@@ -549,7 +549,11 @@ class PushToTry(MachCommandBase):
             print("Error parsing --tags argument:\n%s" % e.message)
             sys.exit(1)
 
-        return kwargs["builds"], platforms, tests, talos, paths, tags, kwargs["extra_args"]
+        extra_values = {k['dest'] for k in AutoTry.pass_through_arguments.values()}
+        extra_args = {k: v for k, v in kwargs.items()
+                      if k in extra_values and v}
+
+        return kwargs["builds"], platforms, tests, talos, paths, tags, extra_args
 
 
     @Command('try',
@@ -629,7 +633,7 @@ class PushToTry(MachCommandBase):
         if not any(kwargs[item] for item in ("paths", "tests", "tags")):
             kwargs["paths"], kwargs["tags"] = at.find_paths_and_tags(kwargs["verbose"])
 
-        builds, platforms, tests, talos, paths, tags, extra_args = self.validate_args(**kwargs)
+        builds, platforms, tests, talos, paths, tags, extra = self.validate_args(**kwargs)
 
         if paths or tags:
             driver = self._spawn(BuildDriver)
@@ -651,7 +655,7 @@ class PushToTry(MachCommandBase):
 
         try:
             msg = at.calc_try_syntax(platforms, tests, talos, builds, paths_by_flavor, tags,
-                                     extra_args, kwargs["intersection"])
+                                     extra, kwargs["intersection"])
         except ValueError as e:
             print(e.message)
             sys.exit(1)

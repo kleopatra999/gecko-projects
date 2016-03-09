@@ -69,11 +69,11 @@ nsTransformedTextRun::SetCapitalization(uint32_t aStart, uint32_t aLength,
 }
 
 bool
-nsTransformedTextRun::SetPotentialLineBreaks(uint32_t aStart, uint32_t aLength,
+nsTransformedTextRun::SetPotentialLineBreaks(Range aRange,
                                              uint8_t* aBreakBefore)
 {
   bool changed =
-    gfxTextRun::SetPotentialLineBreaks(aStart, aLength, aBreakBefore);
+    gfxTextRun::SetPotentialLineBreaks(aRange, aBreakBefore);
   if (changed) {
     mNeedsRebuild = true;
   }
@@ -131,9 +131,9 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
 {
   aDest->ResetGlyphRuns();
 
-  gfxTextRun::GlyphRunIterator iter(aSrc, 0, aSrc->GetLength());
+  gfxTextRun::GlyphRunIterator iter(aSrc, gfxTextRun::Range(aSrc));
   uint32_t offset = 0;
-  nsAutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
+  AutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
   while (iter.NextRun()) {
     gfxTextRun::GlyphRun* run = iter.GetGlyphRun();
     nsresult rv = aDest->AddGlyphRun(run->mFont, run->mMatchType,
@@ -605,10 +605,10 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
                                               gfxMissingFontRecorder* aMFR)
 {
   nsAutoString convertedString;
-  nsAutoTArray<bool,50> charsToMergeArray;
-  nsAutoTArray<bool,50> deletedCharsArray;
-  nsAutoTArray<uint8_t,50> canBreakBeforeArray;
-  nsAutoTArray<RefPtr<nsTransformedCharStyle>,50> styleArray;
+  AutoTArray<bool,50> charsToMergeArray;
+  AutoTArray<bool,50> deletedCharsArray;
+  AutoTArray<uint8_t,50> canBreakBeforeArray;
+  AutoTArray<RefPtr<nsTransformedCharStyle>,50> styleArray;
 
   bool mergeNeeded = TransformString(aTextRun->mString,
                                      convertedString,
@@ -646,8 +646,8 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
   // (and also child will be shaped appropriately)
   NS_ASSERTION(convertedString.Length() == canBreakBeforeArray.Length(),
                "Dropped characters or break-before values somewhere!");
-  child->SetPotentialLineBreaks(0, canBreakBeforeArray.Length(),
-                                canBreakBeforeArray.Elements());
+  gfxTextRun::Range range(0, uint32_t(canBreakBeforeArray.Length()));
+  child->SetPotentialLineBreaks(range, canBreakBeforeArray.Elements());
   if (transformedChild) {
     transformedChild->FinishSettingProperties(aRefDrawTarget, aMFR);
   }
@@ -666,6 +666,6 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
     // We can't steal the data because the child may be cached and stealing
     // the data would break the cache.
     aTextRun->ResetGlyphRuns();
-    aTextRun->CopyGlyphDataFrom(child, 0, child->GetLength(), 0);
+    aTextRun->CopyGlyphDataFrom(child, gfxTextRun::Range(child), 0);
   }
 }

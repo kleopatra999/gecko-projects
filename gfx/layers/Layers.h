@@ -640,17 +640,6 @@ public:
     mRegionToClear = aRegion;
   }
 
-  virtual bool SupportsMixBlendModes(EnumSet<gfx::CompositionOp>& aMixBlendModes)
-  {
-    return false;
-  }
-
-  bool SupportsMixBlendMode(gfx::CompositionOp aMixBlendMode)
-  {
-    EnumSet<gfx::CompositionOp> modes(aMixBlendMode);
-    return SupportsMixBlendModes(modes);
-  }
-
   virtual float RequestProperty(const nsAString& property) { return -1; }
 
   const TimeStamp& GetAnimationReadyTime() const {
@@ -693,15 +682,17 @@ private:
     // Stores state and data for frame intervals and paint times recording.
     // see LayerManager::StartFrameTimeRecording() at Layers.cpp for more details.
     FramesTimingRecording()
-      : mIsPaused(true)
-      , mNextIndex(0)
+      : mNextIndex(0)
+      , mLatestStartIndex(0)
+      , mCurrentRunStartIndex(0)
+      , mIsPaused(true)
     {}
-    bool mIsPaused;
-    uint32_t mNextIndex;
-    TimeStamp mLastFrameTime;
     nsTArray<float> mIntervals;
+    TimeStamp mLastFrameTime;
+    uint32_t mNextIndex;
     uint32_t mLatestStartIndex;
     uint32_t mCurrentRunStartIndex;
+    bool mIsPaused;
   };
   FramesTimingRecording mRecording;
 
@@ -713,7 +704,7 @@ typedef InfallibleTArray<Animation> AnimationArray;
 struct AnimData {
   InfallibleTArray<mozilla::StyleAnimationValue> mStartValues;
   InfallibleTArray<mozilla::StyleAnimationValue> mEndValues;
-  InfallibleTArray<nsAutoPtr<mozilla::ComputedTimingFunction> > mFunctions;
+  InfallibleTArray<Maybe<mozilla::ComputedTimingFunction>> mFunctions;
 };
 
 /**
@@ -1349,7 +1340,7 @@ public:
 
   /**
    * Returns the local transform for this layer: either mTransform or,
-   * for shadow layers, GetShadowTransform(), in either case with the
+   * for shadow layers, GetShadowBaseTransform(), in either case with the
    * pre- and post-scales applied.
    */
   const gfx::Matrix4x4 GetLocalTransform();
@@ -1483,7 +1474,7 @@ public:
   // values that should be used when drawing this layer to screen,
   // accounting for this layer possibly being a shadow.
   const Maybe<ParentLayerIntRect>& GetEffectiveClipRect();
-  const LayerIntRegion& GetEffectiveVisibleRegion();
+  const LayerIntRegion& GetLocalVisibleRegion();
 
   bool Extend3DContext() {
     return GetContentFlags() & CONTENT_EXTEND_3D_CONTEXT;
@@ -1505,7 +1496,7 @@ public:
     // For containers extending 3D context, visible region
     // is meaningless, since they are just intermediate result of
     // content.
-    return !GetEffectiveVisibleRegion().IsEmpty() || Extend3DContext();
+    return !GetLocalVisibleRegion().IsEmpty() || Extend3DContext();
   }
 
   /**
@@ -1843,7 +1834,9 @@ protected:
   // CSS pixels of the scrollframe's space).
   float mScrollbarThumbRatio;
   bool mIsScrollbarContainer;
-  DebugOnly<uint32_t> mDebugColorIndex;
+#ifdef DEBUG
+  uint32_t mDebugColorIndex;
+#endif
   // If this layer is used for OMTA, then this counter is used to ensure we
   // stay in sync with the animation manager
   uint64_t mAnimationGeneration;
@@ -2098,7 +2091,7 @@ public:
   RenderTargetIntRect GetIntermediateSurfaceRect()
   {
     NS_ASSERTION(mUseIntermediateSurface, "Must have intermediate surface");
-    return RenderTargetIntRect::FromUnknownRect(GetEffectiveVisibleRegion().ToUnknownRegion().GetBounds());
+    return RenderTargetIntRect::FromUnknownRect(GetLocalVisibleRegion().ToUnknownRegion().GetBounds());
   }
 
   /**
@@ -2141,9 +2134,17 @@ public:
    */
   void SetVRDeviceID(uint32_t aVRDeviceID) {
     mVRDeviceID = aVRDeviceID;
+    Mutated();
   }
   uint32_t GetVRDeviceID() {
     return mVRDeviceID;
+  }
+  void SetInputFrameID(int32_t aInputFrameID) {
+    mInputFrameID = aInputFrameID;
+    Mutated();
+  }
+  int32_t GetInputFrameID() {
+    return mInputFrameID;
   }
 
   /**
@@ -2221,6 +2222,7 @@ protected:
   bool mChildrenChanged;
   EventRegionsOverride mEventRegionsOverride;
   uint32_t mVRDeviceID;
+  int32_t mInputFrameID;
 };
 
 /**

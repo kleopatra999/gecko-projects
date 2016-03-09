@@ -1,5 +1,6 @@
 [
 {
+"version": "gcc 4.7.3",
 "size": 80458572,
 "digest": "e5101f9dee1e462f6cbd3897ea57eede41d23981825c7b20d91d23ab461875d54d3dfc24999aa58a31e8b01f49fb3140e05ffe5af2957ef1d1afb89fd0dfe1ad",
 "algorithm": "sha512", 
@@ -7,15 +8,16 @@
 "unpack": true
 },
 {
-"size": 12057960,
-"digest": "6105d6432943141cffb40020dc5ba3a793650bdeb3af9bd5e56d3796c5f03df9962a73e521646cd71fbfb5e266c1e74716ad722fb6055589dfb7d35175bca89e",
+"size": 12072532,
+"digest": "3915f8ec396c56a8a92e6f9695b70f09ce9d1582359d1258e37e3fd43a143bc974410e4cfc27f500e095f34a8956206e0ebf799b7287f0f38def0d5e34ed71c9",
 "algorithm": "sha512",
 "filename": "gtk3.tar.xz",
+"setup": "setup.sh",
 "unpack": true
 },
 {
-"size": 193213220,
-"digest": "58b8ebd8de923117831dcbba71172a53e26c25bd16c2b2bb363a1254f2cd4e87f95e2c5f41e2dce10e18e43a17e0a395637c9ddcbf1e27673582792f9095c62e",
+"size": 89319524,
+"digest": "5383d843c9f28abf0a6d254e9d975d96972d2c86d627ca836fa8e272a5d53230603b387d7d1499c49df7f84b1bb946946e800a85c88d968bdbe81c755fcb02e1",
 "algorithm": "sha512",
 "filename": "rustc.tar.xz",
 "unpack": true

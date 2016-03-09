@@ -11,9 +11,6 @@ function run_test() {
     requestTimeout: 1000,
     retryBaseInterval: 150
   });
-  disableServiceWorkerEvents(
-    'https://example.com/page/1'
-  );
   run_next_test();
 }
 
@@ -48,12 +45,12 @@ add_task(function* test_register_request_queue() {
   let firstRegister = PushService.register({
     scope: 'https://example.com/page/1',
     originAttributes: ChromeUtils.originAttributesToSuffix(
-      { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inBrowser: false }),
+      { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
   });
   let secondRegister = PushService.register({
     scope: 'https://example.com/page/1',
     originAttributes: ChromeUtils.originAttributesToSuffix(
-      { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inBrowser: false }),
+      { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
   });
 
   yield waitForPromise(Promise.all([

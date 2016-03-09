@@ -6,9 +6,12 @@
 
 #include "EffectSet.h"
 #include "mozilla/dom/Element.h" // For Element
-#include "RestyleManager.h"
+#include "mozilla/RestyleManagerHandle.h"
+#include "mozilla/RestyleManagerHandleInlines.h"
+#include "nsCSSPseudoElements.h" // For CSSPseudoElementType
 #include "nsCycleCollectionNoteChild.h" // For CycleCollectionNoteChild
 #include "nsPresContext.h"
+#include "nsLayoutUtils.h"
 
 namespace mozilla {
 
@@ -37,7 +40,7 @@ EffectSet::Traverse(nsCycleCollectionTraversalCallback& aCallback)
 
 /* static */ EffectSet*
 EffectSet::GetEffectSet(dom::Element* aElement,
-                        nsCSSPseudoElements::Type aPseudoType)
+                        CSSPseudoElementType aPseudoType)
 {
   nsIAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
   return static_cast<EffectSet*>(aElement->GetProperty(propName));
@@ -70,6 +73,10 @@ EffectSet::GetEffectSet(const nsIFrame* aFrame)
       return nullptr;
     }
   } else {
+    if (nsLayoutUtils::GetStyleFrame(content) != aFrame) {
+      // The effects associated with an element are for its primary frame.
+      return nullptr;
+    }
     propName = nsGkAtoms::animationEffectsProperty;
   }
 
@@ -82,7 +89,7 @@ EffectSet::GetEffectSet(const nsIFrame* aFrame)
 
 /* static */ EffectSet*
 EffectSet::GetOrCreateEffectSet(dom::Element* aElement,
-                                nsCSSPseudoElements::Type aPseudoType)
+                                CSSPseudoElementType aPseudoType)
 {
   EffectSet* effectSet = GetEffectSet(aElement, aPseudoType);
   if (effectSet) {
@@ -109,7 +116,7 @@ EffectSet::GetOrCreateEffectSet(dom::Element* aElement,
 
 /* static */ void
 EffectSet::DestroyEffectSet(dom::Element* aElement,
-                            nsCSSPseudoElements::Type aPseudoType)
+                            CSSPseudoElementType aPseudoType)
 {
   nsIAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
   EffectSet* effectSet =
@@ -128,8 +135,11 @@ EffectSet::DestroyEffectSet(dom::Element* aElement,
 void
 EffectSet::UpdateAnimationGeneration(nsPresContext* aPresContext)
 {
+  MOZ_ASSERT(aPresContext->RestyleManager()->IsGecko(),
+             "stylo: Servo-backed style system should not be using "
+             "EffectSet");
   mAnimationGeneration =
-    aPresContext->RestyleManager()->GetAnimationGeneration();
+    aPresContext->RestyleManager()->AsGecko()->GetAnimationGeneration();
 }
 
 /* static */ nsIAtom**
@@ -147,16 +157,16 @@ EffectSet::GetEffectSetPropertyAtoms()
 }
 
 /* static */ nsIAtom*
-EffectSet::GetEffectSetPropertyAtom(nsCSSPseudoElements::Type aPseudoType)
+EffectSet::GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType)
 {
   switch (aPseudoType) {
-    case nsCSSPseudoElements::ePseudo_NotPseudoElement:
+    case CSSPseudoElementType::NotPseudo:
       return nsGkAtoms::animationEffectsProperty;
 
-    case nsCSSPseudoElements::ePseudo_before:
+    case CSSPseudoElementType::before:
       return nsGkAtoms::animationEffectsForBeforeProperty;
 
-    case nsCSSPseudoElements::ePseudo_after:
+    case CSSPseudoElementType::after:
       return nsGkAtoms::animationEffectsForAfterProperty;
 
     default:

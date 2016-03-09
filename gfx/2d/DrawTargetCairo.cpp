@@ -12,6 +12,7 @@
 #include "BorrowedContext.h"
 #include "FilterNodeSoftware.h"
 #include "mozilla/Scoped.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 
 #include "cairo.h"
@@ -613,7 +614,8 @@ DrawTargetCairo::~DrawTargetCairo()
 bool
 DrawTargetCairo::IsValid() const
 {
-  return mSurface && !cairo_surface_status(mSurface);
+  return mSurface && !cairo_surface_status(mSurface) &&
+         mContext && !cairo_surface_status(cairo_get_group_target(mContext));
 }
 
 DrawTargetType
@@ -812,7 +814,7 @@ DrawTargetCairo::DrawSurface(SourceSurface *aSurface,
   }
 
   if (!IsValid() || !aSurface) {
-    gfxCriticalNote << "DrawSurface with bad surface " << cairo_surface_status(mSurface);
+    gfxCriticalNote << "DrawSurface with bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
     return;
   }
 
@@ -1266,7 +1268,7 @@ DrawTargetCairo::SetPermitSubpixelAA(bool aPermitSubpixelAA)
 {
   DrawTarget::SetPermitSubpixelAA(aPermitSubpixelAA);
 #ifdef MOZ_TREE_CAIRO
-  cairo_surface_set_subpixel_antialiasing(mSurface,
+  cairo_surface_set_subpixel_antialiasing(cairo_get_group_target(mContext),
     aPermitSubpixelAA ? CAIRO_SUBPIXEL_ANTIALIASING_ENABLED : CAIRO_SUBPIXEL_ANTIALIASING_DISABLED);
 #endif
 }
@@ -1283,7 +1285,12 @@ DrawTargetCairo::FillGlyphs(ScaledFont *aFont,
   }
 
   if (!IsValid()) {
-    gfxDebug() << "FillGlyphs bad surface " << cairo_surface_status(mSurface);
+    gfxDebug() << "FillGlyphs bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
+    return;
+  }
+
+  if (!aFont) {
+    gfxDevCrash(LogReason::InvalidFont) << "Invalid scaled font";
     return;
   }
 
@@ -1321,8 +1328,8 @@ DrawTargetCairo::FillGlyphs(ScaledFont *aFont,
 
   cairo_show_glyphs(mContext, &glyphs[0], aBuffer.mNumGlyphs);
 
-  if (mSurface && cairo_surface_status(mSurface)) {
-    gfxDebug() << "Ending FillGlyphs with a bad surface " << cairo_surface_status(mSurface);
+  if (cairo_surface_status(cairo_get_group_target(mContext))) {
+    gfxDebug() << "Ending FillGlyphs with a bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
   }
 }
 
@@ -1697,8 +1704,7 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
     return surface.forget();
   }
 
-  ScopedDeletePtr<DestroyPixmapClosure> closure(
-    new DestroyPixmapClosure(pixmap, screen));
+  auto closure = MakeUnique<DestroyPixmapClosure>(pixmap, screen);
 
   ScopedCairoSurface csurf(
     cairo_xlib_surface_create_with_xrender_format(dpy, pixmap,
@@ -1709,7 +1715,7 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
   }
 
   cairo_surface_set_user_data(csurf, &gDestroyPixmapKey,
-                              closure.forget(), DestroyPixmap);
+                              closure.release(), DestroyPixmap);
 
   RefPtr<DrawTargetCairo> dt = new DrawTargetCairo();
   if (!dt->Init(csurf, size, &format)) {
@@ -1730,23 +1736,13 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
 already_AddRefed<SourceSurface>
 DrawTargetCairo::CreateSourceSurfaceFromNativeSurface(const NativeSurface &aSurface) const
 {
-  if (aSurface.mType == NativeSurfaceType::CAIRO_CONTEXT) {
-    if (aSurface.mSize.width <= 0 ||
-        aSurface.mSize.height <= 0) {
-      gfxWarning() << "Can't create a SourceSurface without a valid size";
-      return nullptr;
-    }
-    cairo_surface_t* surf = static_cast<cairo_surface_t*>(aSurface.mSurface);
-    return MakeAndAddRef<SourceSurfaceCairo>(surf, aSurface.mSize, aSurface.mFormat);
-  }
-
   return nullptr;
 }
 
 already_AddRefed<DrawTarget>
 DrawTargetCairo::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFormat) const
 {
-  if (cairo_surface_status(mSurface)) {
+  if (cairo_surface_status(cairo_get_group_target(mContext))) {
     RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
     if (target->Init(aSize, aFormat)) {
       return target.forget();
@@ -1764,7 +1760,7 @@ DrawTargetCairo::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFo
     }
   }
 
-  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar) << cairo_surface_status(mSurface) << " format " << (int)aFormat;
+  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar) << cairo_surface_status(cairo_get_group_target(mContext)) << " format " << (int)aFormat;
 
   return nullptr;
 }

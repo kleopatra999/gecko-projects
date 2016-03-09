@@ -6,6 +6,7 @@
 
 #include "jit/BaselineJIT.h"
 
+#include "mozilla/BinarySearch.h"
 #include "mozilla/MemoryReporting.h"
 
 #include "asmjs/WasmModule.h"
@@ -25,6 +26,8 @@
 #include "jit/JitFrames-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "vm/Stack-inl.h"
+
+using mozilla::BinarySearchIf;
 
 using namespace js;
 using namespace js::jit;
@@ -84,7 +87,7 @@ CheckFrame(InterpreterFrame* fp)
         return false;
     }
 
-    if (fp->isNonEvalFunctionFrame() && fp->numActualArgs() > BASELINE_MAX_ARGS_LENGTH) {
+    if (fp->isFunctionFrame() && fp->numActualArgs() > BASELINE_MAX_ARGS_LENGTH) {
         // Fall back to the interpreter to avoid running out of stack space.
         JitSpew(JitSpew_BaselineAbort, "Too many arguments (%u)", fp->numActualArgs());
         return false;
@@ -105,6 +108,15 @@ EnterBaseline(JSContext* cx, EnterJitData& data)
     } else {
         JS_CHECK_RECURSION(cx, return JitExec_Aborted);
     }
+
+#ifdef DEBUG
+    // Assert we don't GC before entering JIT code. A GC could discard JIT code
+    // or move the function stored in the CalleeToken (it won't be traced at
+    // this point). We use Maybe<> here so we can call reset() to call the
+    // AutoAssertOnGC destructor before we enter JIT code.
+    mozilla::Maybe<JS::AutoAssertOnGC> nogc;
+    nogc.emplace(cx->runtime());
+#endif
 
     MOZ_ASSERT(jit::IsBaselineEnabled(cx));
     MOZ_ASSERT_IF(data.osrFrame, CheckFrame(data.osrFrame));
@@ -130,6 +142,9 @@ EnterBaseline(JSContext* cx, EnterJitData& data)
         if (data.osrFrame)
             data.osrFrame->setRunningInJit();
 
+#ifdef DEBUG
+        nogc.reset();
+#endif
         // Single transition point from Interpreter to Baseline.
         CALL_GENERATED_CODE(enter, data.jitcode, data.maxArgc, data.maxArgv, data.osrFrame, data.calleeToken,
                             data.scopeChain.get(), data.osrNumStackValues, data.result.address());
@@ -201,7 +216,7 @@ jit::EnterBaselineAtBranch(JSContext* cx, InterpreterFrame* fp, jsbytecode* pc)
     AutoValueVector vals(cx);
     RootedValue thisv(cx);
 
-    if (fp->isNonEvalFunctionFrame()) {
+    if (fp->isFunctionFrame()) {
         data.constructing = fp->isConstructing();
         data.numActualArgs = fp->numActualArgs();
         data.maxArgc = Max(fp->numActualArgs(), fp->numFormalArgs()) + 1; // +1 = include |this|
@@ -367,9 +382,7 @@ jit::CanEnterBaselineMethod(JSContext* cx, RunState& state)
             return Method_Error;
         }
     } else {
-        MOZ_ASSERT(state.isExecute());
-        ExecuteType type = state.asExecute()->type();
-        if (type == EXECUTE_DEBUG) {
+        if (state.asExecute()->isDebuggerEval()) {
             JitSpew(JitSpew_BaselineAbort, "debugger frame");
             return Method_CantCompile;
         }
@@ -564,50 +577,63 @@ BaselineScript::pcMappingReader(size_t indexEntry)
     return CompactBufferReader(dataStart, dataEnd);
 }
 
+struct ICEntries
+{
+    BaselineScript* const baseline_;
+
+    explicit ICEntries(BaselineScript* baseline) : baseline_(baseline) {}
+
+    ICEntry& operator[](size_t index) const {
+        return baseline_->icEntry(index);
+    }
+};
+
 ICEntry&
 BaselineScript::icEntryFromReturnOffset(CodeOffset returnOffset)
 {
-    size_t bottom = 0;
-    size_t top = numICEntries();
-    size_t mid = bottom + (top - bottom) / 2;
-    while (mid < top) {
-        ICEntry& midEntry = icEntry(mid);
-        if (midEntry.returnOffset().offset() < returnOffset.offset())
-            bottom = mid + 1;
-        else
-            top = mid;
-        mid = bottom + (top - bottom) / 2;
-    }
+    size_t loc;
+#ifdef DEBUG
+    bool found =
+#endif
+        BinarySearchIf(ICEntries(this), 0, numICEntries(),
+                       [&returnOffset](ICEntry& entry) {
+                           size_t roffset = returnOffset.offset();
+                           size_t entryRoffset = entry.returnOffset().offset();
+                           if (roffset < entryRoffset)
+                               return -1;
+                           if (entryRoffset < roffset)
+                               return 1;
+                           return 0;
+                       },
+                       &loc);
 
-    MOZ_ASSERT(mid < numICEntries());
-    MOZ_ASSERT(icEntry(mid).returnOffset().offset() == returnOffset.offset());
+    MOZ_ASSERT(found);
+    MOZ_ASSERT(loc < numICEntries());
+    MOZ_ASSERT(icEntry(loc).returnOffset().offset() == returnOffset.offset());
+    return icEntry(loc);
+}
 
-    return icEntry(mid);
+static inline size_t
+ComputeBinarySearchMid(BaselineScript* baseline, uint32_t pcOffset)
+{
+    size_t loc;
+    BinarySearchIf(ICEntries(baseline), 0, baseline->numICEntries(),
+                   [pcOffset](ICEntry& entry) {
+                       uint32_t entryOffset = entry.pcOffset();
+                       if (pcOffset < entryOffset)
+                           return -1;
+                       if (entryOffset < pcOffset)
+                           return 1;
+                       return 0;
+                   },
+                   &loc);
+    return loc;
 }
 
 uint8_t*
 BaselineScript::returnAddressForIC(const ICEntry& ent)
 {
     return method()->raw() + ent.returnOffset().offset();
-}
-
-static inline size_t
-ComputeBinarySearchMid(BaselineScript* baseline, uint32_t pcOffset)
-{
-    size_t bottom = 0;
-    size_t top = baseline->numICEntries();
-    size_t mid = bottom + (top - bottom) / 2;
-    while (mid < top) {
-        ICEntry& midEntry = baseline->icEntry(mid);
-        if (midEntry.pcOffset() < pcOffset)
-            bottom = mid + 1;
-        else if (midEntry.pcOffset() > pcOffset)
-            top = mid;
-        else
-            break;
-        mid = bottom + (top - bottom) / 2;
-    }
-    return mid;
 }
 
 ICEntry&
@@ -685,6 +711,18 @@ BaselineScript::stackCheckICEntry(bool earlyCheck)
             return icEntry(i);
     }
     MOZ_CRASH("No stack check ICEntry found.");
+}
+
+ICEntry&
+BaselineScript::warmupCountICEntry()
+{
+    // The stack check will be at a very low offset, so just do a linear search
+    // from the beginning.
+    for (size_t i = 0; i < numICEntries() && icEntry(i).pcOffset() == 0; i++) {
+        if (icEntry(i).kind() == ICEntry::Kind_WarmupCounter)
+            return icEntry(i);
+    }
+    MOZ_CRASH("No warmup count ICEntry found.");
 }
 
 ICEntry&
@@ -1167,11 +1205,12 @@ MarkActiveBaselineScripts(JSRuntime* rt, const JitActivationIterator& activation
           case JitFrame_BaselineJS:
             iter.script()->baselineScript()->setActive();
             break;
-          case JitFrame_LazyLink: {
-            LazyLinkExitFrameLayout* ll = iter.exitFrame()->as<LazyLinkExitFrameLayout>();
-            ScriptFromCalleeToken(ll->jsFrame()->calleeToken())->baselineScript()->setActive();
+          case JitFrame_Exit:
+            if (iter.exitFrame()->is<LazyLinkExitFrameLayout>()) {
+                LazyLinkExitFrameLayout* ll = iter.exitFrame()->as<LazyLinkExitFrameLayout>();
+                ScriptFromCalleeToken(ll->jsFrame()->calleeToken())->baselineScript()->setActive();
+            }
             break;
-          }
           case JitFrame_Bailout:
           case JitFrame_IonJS: {
             // Keep the baseline script around, since bailouts from the ion

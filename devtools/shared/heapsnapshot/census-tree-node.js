@@ -465,9 +465,7 @@ function insertOrMergeNode(parentCacheValue, node) {
 
   if (val) {
     val.node.count += node.count;
-    val.node.totalCount += node.totalCount;
     val.node.bytes += node.bytes;
-    val.node.totalBytes += node.totalBytes;
   } else {
     val = new CensusTreeNodeCacheValue();
 
@@ -521,18 +519,6 @@ function invert(tree) {
 
     path.pop();
   }(tree));
-
-  // Next, do a depth-first search of the inverted tree and ensure that siblings
-  // are sorted by their self bytes/count.
-
-  (function ensureSorted(node) {
-    if (node.children) {
-      node.children.sort(compareBySelf);
-      for (let i = 0, length = node.children.length; i < length; i++) {
-        ensureSorted(node.children[i]);
-      }
-    }
-  }(inverted.node));
 
   // Ensure that the root node always has the totals.
   inverted.node.totalBytes = tree.totalBytes;
@@ -678,6 +664,18 @@ exports.censusReportToCensusTreeNode = function (breakdown, report,
     result.totalBytes = report[basisTotalBytes];
     result.totalCount = report[basisTotalCount];
   }
+
+  // Inverting and filtering could have messed up the sort order, so do a
+  // depth-first search of the tree and ensure that siblings are sorted.
+  const comparator = options.invert ? compareBySelf : compareByTotal;
+  (function ensureSorted(node) {
+    if (node.children) {
+      node.children.sort(comparator);
+      for (let i = 0, length = node.children.length; i < length; i++) {
+        ensureSorted(node.children[i]);
+      }
+    }
+  }(result));
 
   return result;
 };

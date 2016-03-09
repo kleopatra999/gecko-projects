@@ -21,7 +21,7 @@ namespace layers {
 class CompositorD3D9 : public Compositor
 {
 public:
-  CompositorD3D9(PCompositorParent* aParent, nsIWidget *aWidget);
+  CompositorD3D9(CompositorParent* aParent, nsIWidget *aWidget);
   ~CompositorD3D9();
 
   virtual bool Initialize() override;
@@ -64,6 +64,7 @@ public:
   virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
                           const gfx::Rect *aClipRectIn,
                           const gfx::Rect& aRenderBounds,
+                          bool aOpaque,
                           gfx::Rect *aClipRectOut = nullptr,
                           gfx::Rect *aRenderBoundsOut = nullptr) override;
 
@@ -136,6 +137,20 @@ private:
    * recreate the device.
    */
   bool EnsureSwapChain();
+
+  already_AddRefed<IDirect3DTexture9>
+  CreateTexture(const gfx::IntRect& aRect,
+                const CompositingRenderTarget* aSource,
+                const gfx::IntPoint& aSourcePoint);
+
+  /**
+   * Complete a mix-blend step at the end of DrawQuad().
+   */
+  void FinishMixBlend(const gfx::IntRect& aBackdropRect,
+                      const gfx::Rect& aBackdropDest,
+                      const gfx::Matrix4x4& aBackdropTransform,
+                      RefPtr<IDirect3DTexture9> aBackdrop,
+                      gfx::CompositionOp aBlendMode);
 
   /**
    * DeviceManagerD3D9 keeps a count of the number of times its device is

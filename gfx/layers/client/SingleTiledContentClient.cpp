@@ -46,17 +46,12 @@ SingleTiledContentClient::ClientSupportsLayerSize(const gfx::IntSize& aSize, Cli
   return aSize.width <= maxTextureSize && aSize.height <= maxTextureSize;
 }
 
-bool
-SingleTiledContentClient::SupportsLayerSize(const gfx::IntSize& aSize, ClientLayerManager* aManager) const
-{
-  return ClientSupportsLayerSize(aSize, aManager);
-}
-
 ClientSingleTiledLayerBuffer::ClientSingleTiledLayerBuffer(ClientTiledPaintedLayer* aPaintedLayer,
                                                            CompositableClient* aCompositableClient,
                                                            ClientLayerManager* aManager)
   : ClientTiledLayerBuffer(aPaintedLayer, aCompositableClient)
   , mManager(aManager)
+  , mFormat(gfx::SurfaceFormat::UNKNOWN)
 {
 }
 
@@ -107,6 +102,7 @@ ClientSingleTiledLayerBuffer::GetSurfaceDescriptorTiles()
 already_AddRefed<TextureClient>
 ClientSingleTiledLayerBuffer::GetTextureClient()
 {
+  MOZ_ASSERT(mFormat != gfx::SurfaceFormat::UNKNOWN);
   return mCompositableClient->CreateTextureClientForDrawing(
     gfx::ImageFormatToSurfaceFormat(mFormat), mSize, BackendSelector::Content,
     TextureFlags::DISALLOW_BIGIMAGE | TextureFlags::IMMEDIATE_UPLOAD);
@@ -170,16 +166,15 @@ ClientSingleTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
   }
 
   if (mode != SurfaceMode::SURFACE_OPAQUE) {
-    nsIntRegionRectIterator iter(tileDirtyRegion);
-    const gfx::IntRect *iterRect;
-    while ((iterRect = iter.Next())) {
+    for (auto iter = tileDirtyRegion.RectIter(); !iter.Done(); iter.Next()) {
+      const gfx::IntRect& rect = iter.Get();
       if (dtOnWhite) {
-        dt->FillRect(gfx::Rect(iterRect->x, iterRect->y, iterRect->width, iterRect->height),
+        dt->FillRect(gfx::Rect(rect.x, rect.y, rect.width, rect.height),
                      gfx::ColorPattern(gfx::Color(0.0, 0.0, 0.0, 1.0)));
-        dtOnWhite->FillRect(gfx::Rect(iterRect->x, iterRect->y, iterRect->width, iterRect->height),
+        dtOnWhite->FillRect(gfx::Rect(rect.x, rect.y, rect.width, rect.height),
                             gfx::ColorPattern(gfx::Color(1.0, 1.0, 1.0, 1.0)));
       } else {
-        dt->ClearRect(gfx::Rect(iterRect->x, iterRect->y, iterRect->width, iterRect->height));
+        dt->ClearRect(gfx::Rect(rect.x, rect.y, rect.width, rect.height));
       }
     }
   }
@@ -208,7 +203,7 @@ ClientSingleTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
   mTile.Flip();
   UnlockTile(mTile);
 
-  if (backBuffer->HasInternalBuffer()) {
+  if (backBuffer->HasIntermediateBuffer()) {
     // If our new buffer has an internal buffer, we don't want to keep another
     // TextureClient around unnecessarily, so discard the back-buffer.
     mTile.DiscardBackBuffer();
