@@ -535,6 +535,7 @@ class BaseMarionetteTestRunner(object):
         self.homedir = homedir
         self.app = app
         self.app_args = app_args or []
+        self._appinfo = None
         self.bin = binary
         self.profile = profile
         self.addons = addons
@@ -653,6 +654,23 @@ class BaseMarionetteTestRunner(object):
         self._capabilities = self.marionette.session_capabilities
         self.marionette.delete_session()
         return self._capabilities
+
+     @property
+    def appinfo(self):
+        if self._appinfo:
+            return self._appinfo
+
+        self.marionette.start_session()
+        with self.marionette.using_context('chrome'):
+            self._appinfo = self.marionette.execute_script("""
+            try {
+              return Services.appinfo
+            } catch (e) {
+              return null;
+            }""")
+        self.marionette.delete_session()
+        self._appinfo = self._appinfo or {}
+        return self._appinfo
 
     @property
     def device(self):
@@ -986,6 +1004,10 @@ setReq.onerror = function() {
 
         file_ext = os.path.splitext(os.path.split(filepath)[-1])[1]
 
+        self.logger.info("mozinfo {}".format(mozinfo.info.__repr__()))
+        self.logger.info("capabilities {}".format(self.capabilities.__repr__()))
+        self.logger.info("appinfo {}".format(self.appinfo.__repr__()))
+
         if file_ext == '.ini':
             manifest = TestManifest()
             manifest.read(filepath)
@@ -993,11 +1015,13 @@ setReq.onerror = function() {
             filters = []
             if self.test_tags:
                 filters.append(tags(self.test_tags))
+            e10s = self.appinfo.get('browserTabsRemoteAutostart', False)
             manifest_tests = manifest.active_tests(exists=False,
                                                    disabled=True,
                                                    filters=filters,
                                                    device=self.device,
                                                    app=self.appName,
+                                                   e10s=e10s,
                                                    **mozinfo.info)
             if len(manifest_tests) == 0:
                 self.logger.error("no tests to run using specified "
