@@ -1010,6 +1010,10 @@ setReq.onerror = function() {
             manifest = TestManifest()
             manifest.read(filepath)
 
+            self.logger.info("mozinfo {}".format(mozinfo.info.__repr__()))
+            self.logger.info("capabilities {}".format(self.capabilities.__repr__()))
+            self.logger.info("appinfo {}".format(self.appinfo.__repr__()))
+
             filters = []
             if self.test_tags:
                 filters.append(tags(self.test_tags))
