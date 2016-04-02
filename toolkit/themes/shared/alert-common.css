@@ -10,11 +10,6 @@
 
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 
-#alertBox[hasBodyText] > #alertTextBox,
-#alertBox[hasOrigin] > #alertTitleBox {
-  border-bottom: 1px solid ThreeDShadow;
-}
-
 #alertBox[animate] {
   animation-timing-function: cubic-bezier(.12,1.23,.48,1.09);
 }
@@ -58,21 +53,45 @@
   }
 }
 
+#alertIcon {
+  margin-top: 6px;
+  margin-inline-start: 8px;
+  margin-inline-end: 0;
+  margin-bottom: 0;
+  width: 16px;
+  min-height: 16px;
+  max-height: 16px;
+}
+
+@media (resolution: 2dppx) {
+  #alertIcon {
+    image-rendering: -moz-crisp-edges;
+  }
+}
+
 #alertImage {
-  width: 64px;
+  width: 80px;
+  height: 80px;
+  max-width: 80px;
+  max-height: 80px;
+  object-fit: scale-down;
+  margin: 0 7px 7px;
 }
 
 .alertTextBox {
-  padding-top: 8px;
-  padding-inline-start: 8px;
+  padding-top: 4px;
   /* The text box width is increased to make up for the lack of image when one
-     is not provided. 319px is the text box width when a picture is present,
-     255px, plus the width of the image, 64px. */
-  width: 319px;
+     is not provided. 349px is the text box width when a picture is present,
+     255px, plus the width of the image, 80px, and the margins, 7px each. */
+  width: 349px;
 }
 
 #alertBox[hasImage] > box > #alertTextBox {
   width: 255px;
+}
+
+#alertBox:not([hasImage]) > box > #alertTextBox {
+  padding-inline-start: 8px;
 }
 
 #alertTextLabel {
@@ -82,8 +101,17 @@
 .alertTitle {
   -moz-box-flex: 1;
   font-weight: bold;
-  padding: 6px 8px;
+  padding: 6px 8px 0;
   width: 255px;
+}
+
+#alertFooter {
+  -moz-box-align: start;
+}
+
+#alertBox:not([hasOrigin]) > box > #alertTextBox,
+#alertFooter {
+  padding-bottom: 5px;
 }
 
 #alertSourceLabel {
@@ -96,18 +124,33 @@
   -moz-appearance: none;
   background-color: transparent;
   border-width: 0;
+  border-radius: 20px;
   min-width: 0;
-  list-style-image: url("chrome://mozapps/skin/extensions/utilities.svg#utilities");
+  list-style-image: url("chrome://mozapps/skin/extensions/utilities.svg#utilities-grayscale");
+  margin-inline-end: 0;
+  margin-bottom: 0;
+}
+
+#alertSettings > .button-box {
+  padding: 0;
+}
+
+#alertSettings:hover,
+#alertSettings[open] {
+  list-style-image: url("chrome://mozapps/skin/extensions/utilities.svg#utilities-inverted");
 }
 
 #alertSettings:hover {
-  background-color: rgba(107,107,107,.2);
-  border-radius: 20px;
+  background-color: rgb(128,128,128);
 }
 
 #alertSettings[open],
 #alertSettings:hover:active {
-  background-color: rgba(107,107,107,.4);
+  background-color: rgb(102,102,102);
+}
+
+#alertSettings[focusedViaMouse]:-moz-focusring > .button-box {
+  border-color: transparent;
 }
 
 #alertSettings > .button-box > .button-menu-dropmarker,

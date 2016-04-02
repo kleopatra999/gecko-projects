@@ -40,7 +40,10 @@ public:
   }
 
 protected:
-  virtual ~AnimationTimeline() { }
+  virtual ~AnimationTimeline()
+  {
+    mAnimationOrder.clear();
+  }
 
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -48,11 +51,8 @@ public:
 
   nsIGlobalObject* GetParentObject() const { return mWindow; }
 
-  typedef nsTArray<RefPtr<Animation>> AnimationSequence;
-
   // AnimationTimeline methods
   virtual Nullable<TimeDuration> GetCurrentTime() const = 0;
-  void GetAnimations(AnimationSequence& aAnimations);
 
   // Wrapper functions for AnimationTimeline DOM methods when called from
   // script.
@@ -91,6 +91,19 @@ public:
    */
   virtual void NotifyAnimationUpdated(Animation& aAnimation);
 
+  /**
+   * Returns true if any CSS animations, CSS transitions or Web animations are
+   * currently associated with this timeline.  As soon as an animation is
+   * applied to an element it is associated with the timeline even if it has a
+   * delayed start, so this includes animations that may not be active for some
+   * time.
+   */
+  bool HasAnimations() const {
+    return !mAnimations.IsEmpty();
+  }
+
+  void RemoveAnimation(Animation* aAnimation);
+
 protected:
   nsCOMPtr<nsIGlobalObject> mWindow;
 
@@ -99,13 +112,11 @@ protected:
   // We store them in (a) a hashset for quick lookup, and (b) an array
   // to maintain a fixed sampling order.
   //
-  // The array keeps a strong reference to each animation in order
-  // to save some addref/release traffic and because we never dereference
-  // the pointers in the hashset.
-  typedef nsTHashtable<nsPtrHashKey<dom::Animation>> AnimationSet;
-  typedef nsTArray<RefPtr<dom::Animation>>         AnimationArray;
-  AnimationSet   mAnimations;
-  AnimationArray mAnimationOrder;
+  // The hashset keeps a strong reference to each animation since
+  // dealing with addref/release with LinkedList is difficult.
+  typedef nsTHashtable<nsRefPtrHashKey<dom::Animation>> AnimationSet;
+  AnimationSet mAnimations;
+  LinkedList<dom::Animation> mAnimationOrder;
 };
 
 } // namespace dom

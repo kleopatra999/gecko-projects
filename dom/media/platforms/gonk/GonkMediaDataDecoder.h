@@ -28,6 +28,7 @@ public:
   virtual ~GonkDecoderManager() {}
 
   virtual RefPtr<InitPromise> Init() = 0;
+  virtual const char* GetDescriptionName() const = 0;
 
   // Asynchronously send sample into mDecoder. If out of input buffer, aSample
   // will be queued for later re-send.
@@ -76,6 +77,7 @@ protected:
   void ProcessInput(bool aEndOfStream);
   virtual void ProcessFlush();
   void ProcessToDo(bool aEndOfStream);
+  virtual void ResetEOS();
 
   RefPtr<MediaByteBuffer> mCodecSpecificData;
 
@@ -198,6 +200,11 @@ public:
   nsresult Drain() override;
 
   nsresult Shutdown() override;
+
+  const char* GetDescriptionName() const override
+  {
+    return "gonk decoder";
+  }
 
 private:
 

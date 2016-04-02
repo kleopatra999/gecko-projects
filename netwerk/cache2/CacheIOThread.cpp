@@ -21,18 +21,26 @@ NS_IMPL_ISUPPORTS(CacheIOThread, nsIThreadObserver)
 CacheIOThread::CacheIOThread()
 : mMonitor("CacheIOThread")
 , mThread(nullptr)
+, mXPCOMThread(nullptr)
 , mLowestLevelWaiting(LAST_LEVEL)
 , mCurrentlyExecutingLevel(0)
 , mHasXPCOMEvents(false)
 , mRerunCurrentEvent(false)
 , mShutdown(false)
+#ifdef DEBUG
 , mInsideLoop(true)
+#endif
 {
   sSelf = this;
 }
 
 CacheIOThread::~CacheIOThread()
 {
+  if (mXPCOMThread) {
+    nsIThread *thread = mXPCOMThread;
+    thread->Release();
+  }
+
   sSelf = nullptr;
 #ifdef DEBUG
   for (uint32_t level = 0; level < LAST_LEVEL; ++level) {
@@ -149,8 +157,9 @@ already_AddRefed<nsIEventTarget> CacheIOThread::Target()
   if (!target && mThread)
   {
     MonitorAutoLock lock(mMonitor);
-    if (!mXPCOMThread)
+    while (!mXPCOMThread) {
       lock.Wait();
+    }
 
     target = mXPCOMThread;
   }
@@ -182,7 +191,7 @@ void CacheIOThread::ThreadFunc()
     if (threadInternal)
       threadInternal->SetObserver(this);
 
-    mXPCOMThread.swap(xpcomThread);
+    mXPCOMThread = xpcomThread.forget().take();
 
     lock.NotifyAll();
 
@@ -203,7 +212,8 @@ loopStart:
         bool processedEvent;
         nsresult rv;
         do {
-          rv = mXPCOMThread->ProcessNextEvent(false, &processedEvent);
+          nsIThread *thread = mXPCOMThread;
+          rv = thread->ProcessNextEvent(false, &processedEvent);
         } while (NS_SUCCEEDED(rv) && processedEvent);
       }
 
@@ -235,8 +245,10 @@ loopStart:
 
     MOZ_ASSERT(!EventsPending());
 
+#ifdef DEBUG
     // This is for correct assertion on XPCOM events dispatch.
     mInsideLoop = false;
+#endif
   } // lock
 
   if (threadInternal)

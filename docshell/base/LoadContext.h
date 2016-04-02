@@ -39,11 +39,11 @@ public:
   NS_DECL_NSILOADCONTEXT
   NS_DECL_NSIINTERFACEREQUESTOR
 
-  // AppId/inBrowser arguments override those in SerializedLoadContext provided
-  // by child process.
+  // appId/inIsolatedMozBrowser arguments override those in SerializedLoadContext
+  // provided by child process.
   LoadContext(const IPC::SerializedLoadContext& aToCopy,
               dom::Element* aTopFrameElement,
-              OriginAttributes& aAttrs)
+              DocShellOriginAttributes& aAttrs)
     : mTopFrameElement(do_GetWeakReference(aTopFrameElement))
     , mNestedFrameId(0)
     , mIsContent(aToCopy.mIsContent)
@@ -56,11 +56,11 @@ public:
   {
   }
 
-  // AppId/inBrowser arguments override those in SerializedLoadContext provided
-  // by child process.
+  // appId/inIsolatedMozBrowser arguments override those in SerializedLoadContext
+  // provided by child process.
   LoadContext(const IPC::SerializedLoadContext& aToCopy,
               uint64_t aNestedFrameId,
-              OriginAttributes& aAttrs)
+              DocShellOriginAttributes& aAttrs)
     : mTopFrameElement(nullptr)
     , mNestedFrameId(aNestedFrameId)
     , mIsContent(aToCopy.mIsContent)
@@ -77,7 +77,7 @@ public:
               bool aIsContent,
               bool aUsePrivateBrowsing,
               bool aUseRemoteTabs,
-              const OriginAttributes& aAttrs)
+              const DocShellOriginAttributes& aAttrs)
     : mTopFrameElement(do_GetWeakReference(aTopFrameElement))
     , mNestedFrameId(0)
     , mIsContent(aIsContent)
@@ -117,7 +117,7 @@ private:
   bool mIsContent;
   bool mUsePrivateBrowsing;
   bool mUseRemoteTabs;
-  OriginAttributes mOriginAttributes;
+  DocShellOriginAttributes mOriginAttributes;
 #ifdef DEBUG
   bool mIsNotNull;
 #endif

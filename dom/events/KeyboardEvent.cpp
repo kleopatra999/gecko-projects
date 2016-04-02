@@ -25,7 +25,7 @@ KeyboardEvent::KeyboardEvent(EventTarget* aOwner,
   }
   else {
     mEventIsInternal = true;
-    mEvent->time = PR_Now();
+    mEvent->mTime = PR_Now();
     mEvent->AsKeyboardEvent()->mKeyNameIndex = KEY_NAME_INDEX_USE_STRING;
   }
 }
@@ -134,6 +134,41 @@ void
 KeyboardEvent::GetCode(nsAString& aCodeName)
 {
   mEvent->AsKeyboardEvent()->GetDOMCodeName(aCodeName);
+}
+
+void KeyboardEvent::GetInitDict(KeyboardEventInit& aParam)
+{
+  GetKey(aParam.mKey);
+  GetCode(aParam.mCode);
+  aParam.mLocation = Location();
+  aParam.mRepeat = Repeat();
+  aParam.mIsComposing = IsComposing();
+
+  // legacy attributes
+  aParam.mKeyCode = KeyCode();
+  aParam.mCharCode = CharCode();
+  aParam.mWhich = Which();
+
+  // modifiers from EventModifierInit
+  aParam.mCtrlKey = CtrlKey();
+  aParam.mShiftKey = ShiftKey();
+  aParam.mAltKey = AltKey();
+  aParam.mMetaKey = MetaKey();
+
+  WidgetKeyboardEvent* internalEvent = mEvent->AsKeyboardEvent();
+  aParam.mModifierAltGraph = internalEvent->IsAltGraph();
+  aParam.mModifierCapsLock = internalEvent->IsCapsLocked();
+  aParam.mModifierFn = internalEvent->IsFn();
+  aParam.mModifierFnLock = internalEvent->IsFnLocked();
+  aParam.mModifierNumLock = internalEvent->IsNumLocked();
+  aParam.mModifierOS = internalEvent->IsOS();
+  aParam.mModifierScrollLock = internalEvent->IsScrollLocked();
+  aParam.mModifierSymbol = internalEvent->IsSymbol();
+  aParam.mModifierSymbolLock = internalEvent->IsSymbolLocked();
+
+  // EventInit
+  aParam.mBubbles =  internalEvent->mFlags.mBubbles;
+  aParam.mCancelable = internalEvent->mFlags.mCancelable;
 }
 
 NS_IMETHODIMP
@@ -260,9 +295,9 @@ KeyboardEvent::InitWithKeyboardEventInit(EventTarget* aOwner,
                                          ErrorResult& aRv)
 {
   bool trusted = Init(aOwner);
-  aRv = InitKeyEvent(aType, aParam.mBubbles, aParam.mCancelable,
-                     aParam.mView, false, false, false, false,
-                     aParam.mKeyCode, aParam.mCharCode);
+  InitKeyEvent(aType, aParam.mBubbles, aParam.mCancelable,
+               aParam.mView, false, false, false, false,
+               aParam.mKeyCode, aParam.mCharCode);
   InitModifiers(aParam);
   SetTrusted(trusted);
   mDetail = aParam.mDetail;
@@ -289,7 +324,7 @@ NS_IMETHODIMP
 KeyboardEvent::InitKeyEvent(const nsAString& aType,
                             bool aCanBubble,
                             bool aCancelable,
-                            nsIDOMWindow* aView,
+                            mozIDOMWindow* aView,
                             bool aCtrlKey,
                             bool aAltKey,
                             bool aShiftKey,
@@ -297,8 +332,7 @@ KeyboardEvent::InitKeyEvent(const nsAString& aType,
                             uint32_t aKeyCode,
                             uint32_t aCharCode)
 {
-  nsresult rv = UIEvent::InitUIEvent(aType, aCanBubble, aCancelable, aView, 0);
-  NS_ENSURE_SUCCESS(rv, rv);
+  UIEvent::InitUIEvent(aType, aCanBubble, aCancelable, aView, 0);
 
   WidgetKeyboardEvent* keyEvent = mEvent->AsKeyboardEvent();
   keyEvent->InitBasicModifiers(aCtrlKey, aAltKey, aShiftKey, aMetaKey);

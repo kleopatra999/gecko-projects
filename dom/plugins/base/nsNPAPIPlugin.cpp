@@ -169,7 +169,10 @@ static NPNetscapeFuncs sBrowserFuncs = {
   _convertpoint,
   nullptr, // handleevent, unimplemented
   nullptr, // unfocusinstance, unimplemented
-  _urlredirectresponse
+  _urlredirectresponse,
+  _initasyncsurface,
+  _finalizeasyncsurface,
+  _setcurrentasyncsurface
 };
 
 static Mutex *sPluginThreadAsyncCallLock = nullptr;
@@ -262,6 +265,8 @@ nsNPAPIPlugin::RunPluginOOP(const nsPluginTag *aPluginTag)
 inline PluginLibrary*
 GetNewPluginLibrary(nsPluginTag *aPluginTag)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+
   if (!aPluginTag) {
     return nullptr;
   }
@@ -280,6 +285,7 @@ GetNewPluginLibrary(nsPluginTag *aPluginTag)
 nsresult
 nsNPAPIPlugin::CreatePlugin(nsPluginTag *aPluginTag, nsNPAPIPlugin** aResult)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   *aResult = nullptr;
 
   if (!aPluginTag) {
@@ -527,7 +533,7 @@ GetChannelFromNPP(NPP npp)
   nsCOMPtr<nsIDocument> doc = GetDocumentFromNPP(npp);
   if (!doc)
     return nullptr;
-  nsCOMPtr<nsPIDOMWindow> domwindow = doc->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> domwindow = doc->GetWindow();
   nsCOMPtr<nsIChannel> channel;
   if (domwindow) {
     nsCOMPtr<nsIDocShell> docShell = domwindow->GetDocShell();
@@ -1052,11 +1058,11 @@ _getwindowobject(NPP npp)
   // we don't know what the plugin will do with it).
   nsIDocument* doc = GetDocumentFromNPP(npp);
   NS_ENSURE_TRUE(doc, nullptr);
-  nsCOMPtr<nsPIDOMWindow> outer = do_QueryInterface(doc->GetWindow());
+  nsCOMPtr<nsPIDOMWindowOuter> outer = doc->GetWindow();
   NS_ENSURE_TRUE(outer, nullptr);
 
   AutoJSContext cx;
-  JS::Rooted<JSObject*> global(cx, static_cast<nsGlobalWindow*>(outer.get())->GetGlobalJSObject());
+  JS::Rooted<JSObject*> global(cx, nsGlobalWindow::Cast(outer)->GetGlobalJSObject());
   return nsJSObjWrapper::GetNewOrUsed(npp, cx, global);
 }
 
@@ -1251,12 +1257,22 @@ _retainobject(NPObject* npobj)
 void
 _releaseobject(NPObject* npobj)
 {
+  // If nothing is passed, just return, even if we're on the wrong thread.
+  if (!npobj) {
+    return;
+  }
+
+  // THIS IS A KNOWN LEAK. SEE BUG 1221448.
+  // If releaseobject is called off the main thread and we have a valid pointer,
+  // we at least know it was created on the main thread (see _createobject
+  // implementation). However, forwarding the deletion back to the main thread
+  // without careful checking could cause bad memory management races. So, for
+  // now, we leak by warning and then just returning early. But it should fix
+  // java 7 crashes.
   if (!NS_IsMainThread()) {
     NPN_PLUGIN_LOG(PLUGIN_LOG_ALWAYS,("NPN_releaseobject called from the wrong thread\n"));
-    MOZ_CRASH("NPN_releaseobject called from the wrong thread");
-  }
-  if (!npobj)
     return;
+  }
 
   int32_t refCnt = PR_ATOMIC_DECREMENT((int32_t*)&npobj->referenceCount);
   NS_LOG_RELEASE(npobj, refCnt, "BrowserNPObject");
@@ -1334,14 +1350,13 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
   nsIDocument *doc = GetDocumentFromNPP(npp);
   NS_ENSURE_TRUE(doc, false);
 
-  nsGlobalWindow* win = static_cast<nsGlobalWindow*>(doc->GetInnerWindow());
+  nsGlobalWindow* win = nsGlobalWindow::Cast(doc->GetInnerWindow());
   if (NS_WARN_IF(!win || !win->FastGetGlobalJSObject())) {
     return false;
   }
 
   nsAutoMicroTask mt;
   dom::AutoEntryScript aes(win, "NPAPI NPN_evaluate");
-  aes.TakeOwnershipOfErrorReporting();
   JSContext* cx = aes.cx();
 
   JS::Rooted<JSObject*> obj(cx, nsNPObjWrapper::GetNewOrUsed(npp, cx, npobj));
@@ -1677,7 +1692,7 @@ _releasevariantvalue(NPVariant* variant)
         } else {
           void *p = (void *)s->UTF8Characters;
           DWORD nheaps = 0;
-          nsAutoTArray<HANDLE, 50> heaps;
+          AutoTArray<HANDLE, 50> heaps;
           nheaps = GetProcessHeaps(0, heaps.Elements());
           heaps.AppendElements(nheaps);
           GetProcessHeaps(nheaps, heaps.Elements());
@@ -2016,6 +2031,14 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
   }
 #endif
 
+  case NPNVCSSZoomFactor: {
+    nsNPAPIPluginInstance *inst =
+      (nsNPAPIPluginInstance *) (npp ? npp->ndata : nullptr);
+    double scaleFactor = inst ? inst->GetCSSZoomFactor() : 1.0;
+    *(double*)result = scaleFactor;
+    return NPERR_NO_ERROR;
+  }
+
 #ifdef MOZ_WIDGET_ANDROID
     case kLogInterfaceV0_ANPGetValue: {
       LOG("get log interface");
@@ -2026,23 +2049,17 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
 
     case kBitmapInterfaceV0_ANPGetValue: {
       LOG("get bitmap interface");
-      ANPBitmapInterfaceV0 *i = (ANPBitmapInterfaceV0 *) result;
-      InitBitmapInterface(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kMatrixInterfaceV0_ANPGetValue: {
       LOG("get matrix interface");
-      ANPMatrixInterfaceV0 *i = (ANPMatrixInterfaceV0 *) result;
-      InitMatrixInterface(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kPathInterfaceV0_ANPGetValue: {
       LOG("get path interface");
-      ANPPathInterfaceV0 *i = (ANPPathInterfaceV0 *) result;
-      InitPathInterface(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kTypefaceInterfaceV0_ANPGetValue: {
@@ -2089,9 +2106,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
 
     case kSystemInterfaceV0_ANPGetValue: {
       LOG("get system interface");
-      ANPSystemInterfaceV0* i = reinterpret_cast<ANPSystemInterfaceV0*>(result);
-      InitSystemInterface(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kSurfaceInterfaceV0_ANPGetValue: {
@@ -2103,12 +2118,11 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
 
     case kSupportedDrawingModel_ANPGetValue: {
       LOG("get supported drawing model");
-      uint32_t* bits = reinterpret_cast<uint32_t*>(result);
-      *bits = kBitmap_ANPDrawingModel && kSurface_ANPDrawingModel;
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kJavaContext_ANPGetValue: {
+      LOG("get java context");
       auto ret = widget::GeckoAppShell::GetContext();
       if (!ret)
         return NPERR_GENERIC_ERROR;
@@ -2133,16 +2147,12 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
 
     case kOpenGLInterfaceV0_ANPGetValue: {
       LOG("get openGL interface");
-      ANPOpenGLInterfaceV0 *i = (ANPOpenGLInterfaceV0*) result;
-      InitOpenGLInterface(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kWindowInterfaceV1_ANPGetValue: {
       LOG("get Window interface V1");
-      ANPWindowInterfaceV1 *i = (ANPWindowInterfaceV1 *) result;
-      InitWindowInterfaceV1(i);
-      return NPERR_NO_ERROR;
+      return NPERR_GENERIC_ERROR;
     }
 
     case kWindowInterfaceV2_ANPGetValue: {
@@ -2153,14 +2163,12 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
     }
 
     case kVideoInterfaceV0_ANPGetValue: {
-      LOG("get video interface");
-      ANPVideoInterfaceV0 *i = (ANPVideoInterfaceV0*) result;
-      InitVideoInterfaceV0(i);
-      return NPERR_NO_ERROR;
+      LOG("get video interface V0");
+      return NPERR_GENERIC_ERROR;
     }
 
     case kVideoInterfaceV1_ANPGetValue: {
-      LOG("get video interface");
+      LOG("get video interface V1");
       ANPVideoInterfaceV1 *i = (ANPVideoInterfaceV1*) result;
       InitVideoInterfaceV1(i);
       return NPERR_NO_ERROR;
@@ -2283,8 +2291,7 @@ _setvalue(NPP npp, NPPVariable variable, void *result)
       } else {
         float volume = 0.0;
         bool muted = true;
-        rv = agent->NotifyStartedPlaying(nsIAudioChannelAgent::AUDIO_AGENT_NOTIFY,
-                                         &volume, &muted);
+        rv = agent->NotifyStartedPlaying(&volume, &muted);
         if (NS_WARN_IF(NS_FAILED(rv))) {
           return NPERR_NO_ERROR;
         }
@@ -2778,6 +2785,39 @@ _urlredirectresponse(NPP instance, void* notifyData, NPBool allow)
   }
 
   inst->URLRedirectResponse(notifyData, allow);
+}
+
+NPError
+_initasyncsurface(NPP instance, NPSize *size, NPImageFormat format, void *initData, NPAsyncSurface *surface)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return NPERR_GENERIC_ERROR;
+  }
+
+  return inst->InitAsyncSurface(size, format, initData, surface);
+}
+
+NPError
+_finalizeasyncsurface(NPP instance, NPAsyncSurface *surface)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return NPERR_GENERIC_ERROR;
+  }
+
+  return inst->FinalizeAsyncSurface(surface);
+}
+
+void
+_setcurrentasyncsurface(NPP instance, NPAsyncSurface *surface, NPRect *changed)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return;
+  }
+
+  inst->SetCurrentAsyncSurface(surface, changed);
 }
 
 } /* namespace parent */

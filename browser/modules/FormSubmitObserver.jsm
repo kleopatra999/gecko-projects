@@ -42,7 +42,7 @@ FormSubmitObserver.prototype =
   {
     this._content = aWindow;
     this._tab = aTabChildGlobal;
-    this._mm = 
+    this._mm =
       this._content.QueryInterface(Ci.nsIInterfaceRequestor)
                    .getInterface(Ci.nsIDocShell)
                    .sameTypeRootTreeItem
@@ -103,7 +103,7 @@ FormSubmitObserver.prototype =
     if (!aInvalidElements.length) {
       return;
     }
-    
+
     // Insure that this is the FormSubmitObserver associated with the form
     // element / window this notification is about.
     if (this._content != aFormElement.ownerDocument.defaultView.top.document.defaultView) {
@@ -118,6 +118,9 @@ FormSubmitObserver.prototype =
       return;
     }
 
+    // Update validation message before showing notification
+    this._validationMessage = element.validationMessage;
+
     // Don't connect up to the same element more than once.
     if (this._element == element) {
       this._showPopup(element);
@@ -126,8 +129,6 @@ FormSubmitObserver.prototype =
     this._element = element;
 
     element.focus();
-
-    this._validationMessage = element.validationMessage;
 
     // Watch for input changes which may change the validation message.
     element.addEventListener("input", this, false);
@@ -142,7 +143,7 @@ FormSubmitObserver.prototype =
   /*
    * Internal
    */
-  
+
   /*
    * Handles input changes on the form element we've associated a popup
    * with. Updates the validation message or closes the popup if form data

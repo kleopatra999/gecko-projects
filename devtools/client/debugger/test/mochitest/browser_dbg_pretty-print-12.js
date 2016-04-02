@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure that we don't leave the pretty print button checked when we fail to
@@ -8,45 +10,38 @@
 
 const TAB_URL = EXAMPLE_URL + "doc_blackboxing.html";
 
-var gTab, gPanel, gDebugger;
-var gEditor, gSources;
-
 function test() {
   initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
-    gTab = aTab;
-    gPanel = aPanel;
-    gDebugger = gPanel.panelWin;
-    gEditor = gDebugger.DebuggerView.editor;
-    gSources = gDebugger.DebuggerView.Sources;
+    const gTab = aTab;
+    const gPanel = aPanel;
+    const gDebugger = gPanel.panelWin;
+    const gEditor = gDebugger.DebuggerView.editor;
+    const gSources = gDebugger.DebuggerView.Sources;
+    const queries = gDebugger.require('./content/queries');
+    const constants = gDebugger.require('./content/constants');
+    const actions = bindActionCreators(gPanel);
+    const getState = gDebugger.DebuggerController.getState;
 
-    waitForSourceShown(gPanel, "")
-      .then(() => {
-        let shown = ensureSourceIs(gPanel, TAB_URL, true);
-        gSources.selectedValue = getSourceActor(gSources, TAB_URL);
-        return shown;
-      })
-      .then(clickPrettyPrintButton)
-      .then(testButtonIsntChecked)
-      .then(() => closeDebuggerAndFinish(gPanel))
-      .then(null, aError => {
-        ok(false, "Got an error: " + DevToolsUtils.safeErrorString(aError));
-      });
+    Task.spawn(function*() {
+      yield waitForSourceShown(gPanel, "");
+      const source = getSourceForm(gSources, TAB_URL);
+      let shown = ensureSourceIs(gPanel, TAB_URL, true);
+      actions.selectSource(source);
+      yield shown;
+
+      try {
+        yield actions.togglePrettyPrint(source);
+        ok(false, "An error occurred while pretty-printing");
+      }
+      catch(err) {
+        is(err.message, "Can't prettify non-javascript files.",
+           "The promise was correctly rejected with a meaningful message.");
+      }
+
+      is(gDebugger.document.getElementById("pretty-print").checked, false,
+         "The button shouldn't be checked after trying to pretty print a non-js file.");
+
+      closeDebuggerAndFinish(gPanel);
+    })
   });
 }
-
-function clickPrettyPrintButton() {
-  gDebugger.document.getElementById("pretty-print").click();
-}
-
-function testButtonIsntChecked() {
-  is(gDebugger.document.getElementById("pretty-print").checked, false,
-     "The button shouldn't be checked after trying to pretty print a non-js file.");
-}
-
-registerCleanupFunction(function() {
-  gTab = null;
-  gPanel = null;
-  gDebugger = null;
-  gEditor = null;
-  gSources = null;
-});

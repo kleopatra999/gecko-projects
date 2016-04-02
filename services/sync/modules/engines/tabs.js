@@ -43,6 +43,11 @@ TabEngine.prototype = {
   _storeObj: TabStore,
   _trackerObj: TabTracker,
   _recordObj: TabSetRecord,
+  // A flag to indicate if we have synced in this session. This is to help
+  // consumers of remote tabs that may want to differentiate between "I've an
+  // empty tab list as I haven't yet synced" vs "I've an empty tab list
+  // as there really are no tabs"
+  hasSyncedThisSession: false,
 
   syncPriority: 3,
 
@@ -67,6 +72,7 @@ TabEngine.prototype = {
     SyncEngine.prototype._resetClient.call(this);
     this._store.wipe();
     this._tracker.modified = true;
+    this.hasSyncedThisSession = false;
   },
 
   removeClientData: function () {
@@ -94,7 +100,12 @@ TabEngine.prototype = {
     }
 
     return SyncEngine.prototype._reconcile.call(this, item);
-  }
+  },
+
+  _syncFinish() {
+    this.hasSyncedThisSession = true;
+    return SyncEngine.prototype._syncFinish.call(this);
+  },
 };
 
 
@@ -173,7 +184,9 @@ TabStore.prototype = {
         allTabs.push({
           title: current.title || "",
           urlHistory: urls,
-          icon: tabState.attributes && tabState.attributes.image || "",
+          icon: tabState.image ||
+                (tabState.attributes && tabState.attributes.image) ||
+                "",
           lastUsed: Math.floor((tabState.lastAccessed || 0) / 1000),
         });
       }
@@ -306,6 +319,10 @@ TabTracker.prototype = {
       window.addEventListener(topic, this.onTab, false);
     }
     window.addEventListener("unload", this._unregisterListeners, false);
+    // If it's got a tab browser we can listen for things like navigation.
+    if (window.gBrowser) {
+      window.gBrowser.addProgressListener(this);
+    }
   },
 
   _unregisterListeners: function (event) {
@@ -317,6 +334,9 @@ TabTracker.prototype = {
     window.removeEventListener("unload", this._unregisterListeners, false);
     for (let topic of this._topics) {
       window.removeEventListener(topic, this.onTab, false);
+    }
+    if (window.gBrowser) {
+      window.gBrowser.removeProgressListener(this);
     }
   },
 
@@ -371,6 +391,16 @@ TabTracker.prototype = {
     // events, always bump the score.
     if (event.type != "pageshow" || Math.random() < .1) {
       this.score += SCORE_INCREMENT_SMALL;
+    }
+  },
+
+  // web progress listeners.
+  onLocationChange: function (webProgress, request, location, flags) {
+    // We only care about top-level location changes which are not in the same
+    // document.
+    if (webProgress.isTopLevel &&
+        ((flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) == 0)) {
+      this.modified = true;
     }
   },
 };

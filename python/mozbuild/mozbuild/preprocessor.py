@@ -316,12 +316,20 @@ class Preprocessor:
         if defines:
             self.context.update(defines)
 
-    def warnUnused(self, file):
+    def failUnused(self, file):
+        msg = None
         if self.actionLevel == 0 and not self.silenceMissingDirectiveWarnings:
-            sys.stderr.write('{0}: WARNING: no preprocessor directives found\n'.format(file))
+            msg = 'no preprocessor directives found'
         elif self.actionLevel == 1:
-            sys.stderr.write('{0}: WARNING: no useful preprocessor directives found\n'.format(file))
-        pass
+            msg = 'no useful preprocessor directives found'
+        if msg:
+            class Fake(object): pass
+            fake = Fake()
+            fake.context = {
+                'FILE': file,
+                'LINE': None,
+            }
+            raise Preprocessor.Error(fake, msg, None)
 
     def setMarker(self, aMarker):
         """
@@ -377,7 +385,7 @@ class Preprocessor:
         self.out = output
 
         self.do_include(input, False)
-        self.warnUnused(input.name)
+        self.failUnused(input.name)
 
         if depfile:
             mk = Makefile()
@@ -448,7 +456,6 @@ class Preprocessor:
         options, args = p.parse_args(args=args)
         out = self.out
         depfile = None
-        includes = options.I
 
         if options.output:
             out = get_output_file(options.output)
@@ -467,10 +474,9 @@ class Preprocessor:
                 raise Preprocessor.Error(self, "--depend requires the "
                                                "mozbuild.makeutil module", None)
             depfile = get_output_file(options.depend)
-        includes.extend(args)
 
-        if includes:
-            for f in includes:
+        if args:
+            for f in args:
                 with open(f, 'rU') as input:
                     self.processFile(input=input, output=out)
             if depfile:
@@ -504,8 +510,6 @@ class Preprocessor:
         def handleSilenceDirectiveWarnings(option, opt, value, parse):
             self.setSilenceDirectiveWarnings(True)
         p = OptionParser()
-        p.add_option('-I', action='append', type="string", default = [],
-                     metavar="FILENAME", help='Include file')
         p.add_option('-D', action='callback', callback=handleD, type="string",
                      metavar="VAR[=VAL]", help='Define a variable')
         p.add_option('-U', action='callback', callback=handleU, type="string",
@@ -557,7 +561,7 @@ class Preprocessor:
         m = re.match('(?P<name>\w+)(?:\s(?P<value>.*))?', args, re.U)
         if not m:
             raise Preprocessor.Error(self, 'SYNTAX_DEF', args)
-        val = 1
+        val = ''
         if m.group('value'):
             val = self.applyFilters(m.group('value'))
             try:

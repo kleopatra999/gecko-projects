@@ -93,6 +93,34 @@ ChooseValidatorCompileOptions(const ShBuiltInResources& resources,
 
 ////////////////////////////////////////
 
+static ShShaderOutput
+ShaderOutput(gl::GLContext* gl)
+{
+    if (gl->IsGLES()) {
+        return SH_ESSL_OUTPUT;
+    } else {
+        uint32_t version = gl->ShadingLanguageVersion();
+        switch (version) {
+        case 100: return SH_GLSL_COMPATIBILITY_OUTPUT;
+        case 120: return SH_GLSL_COMPATIBILITY_OUTPUT;
+        case 130: return SH_GLSL_130_OUTPUT;
+        case 140: return SH_GLSL_140_OUTPUT;
+        case 150: return SH_GLSL_150_CORE_OUTPUT;
+        case 330: return SH_GLSL_330_CORE_OUTPUT;
+        case 400: return SH_GLSL_400_CORE_OUTPUT;
+        case 410: return SH_GLSL_410_CORE_OUTPUT;
+        case 420: return SH_GLSL_420_CORE_OUTPUT;
+        case 430: return SH_GLSL_430_CORE_OUTPUT;
+        case 440: return SH_GLSL_440_CORE_OUTPUT;
+        case 450: return SH_GLSL_450_CORE_OUTPUT;
+        default:
+            MOZ_CRASH("Unexpected GLSL version.");
+        }
+    }
+
+    return SH_GLSL_COMPATIBILITY_OUTPUT;
+}
+
 webgl::ShaderValidator*
 WebGLContext::CreateShaderValidator(GLenum shaderType) const
 {
@@ -101,7 +129,11 @@ WebGLContext::CreateShaderValidator(GLenum shaderType) const
 
     ShShaderSpec spec = IsWebGL2() ? SH_WEBGL2_SPEC : SH_WEBGL_SPEC;
     ShShaderOutput outputLanguage = gl->IsGLES() ? SH_ESSL_OUTPUT
-                                                 : SH_GLSL_OUTPUT;
+                                                 : SH_GLSL_COMPATIBILITY_OUTPUT;
+
+    // If we're using WebGL2 we want a more specific version of GLSL
+    if (IsWebGL2())
+        outputLanguage = ShaderOutput(gl);
 
     ShBuiltInResources resources;
     memset(&resources, 0, sizeof(resources));
@@ -116,7 +148,10 @@ WebGLContext::CreateShaderValidator(GLenum shaderType) const
     resources.MaxCombinedTextureImageUnits = mGLMaxTextureUnits;
     resources.MaxTextureImageUnits = mGLMaxTextureImageUnits;
     resources.MaxFragmentUniformVectors = mGLMaxFragmentUniformVectors;
-    resources.MaxDrawBuffers = mGLMaxDrawBuffers;
+
+    const bool hasMRTs = (IsWebGL2() ||
+                          IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers));
+    resources.MaxDrawBuffers = (hasMRTs ? mGLMaxDrawBuffers : 1);
 
     if (IsExtensionEnabled(WebGLExtensionID::EXT_frag_depth))
         resources.EXT_frag_depth = 1;
@@ -212,6 +247,15 @@ ShaderValidator::CanLinkTo(const ShaderValidator* prev, nsCString* const out_log
 {
     if (!prev) {
         nsPrintfCString error("Passed in NULL prev ShaderValidator.");
+        *out_log = error;
+        return false;
+    }
+
+    if (ShGetShaderVersion(prev->mHandle) != ShGetShaderVersion(mHandle)) {
+        nsPrintfCString error("Vertex shader version %d does not match"
+                              " fragment shader version %d.",
+                              ShGetShaderVersion(prev->mHandle),
+                              ShGetShaderVersion(mHandle));
         *out_log = error;
         return false;
     }
@@ -329,6 +373,12 @@ ShaderValidator::CalcNumSamplerUniforms() const
     return accum;
 }
 
+size_t
+ShaderValidator::NumAttributes() const
+{
+  return ShGetAttributes(mHandle)->size();
+}
+
 // Attribs cannot be structs or arrays, and neither can vertex inputs in ES3.
 // Therefore, attrib names are always simple.
 bool
@@ -339,6 +389,21 @@ ShaderValidator::FindAttribUserNameByMappedName(const std::string& mappedName,
     for (auto itr = attribs.begin(); itr != attribs.end(); ++itr) {
         if (itr->mappedName == mappedName) {
             *out_userName = &(itr->name);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool
+ShaderValidator::FindActiveOutputMappedNameByUserName(const std::string& userName,
+                                                      const std::string** const out_mappedName) const
+{
+    const std::vector<sh::OutputVariable>& varibles = *ShGetOutputVariables(mHandle);
+    for (auto itr = varibles.begin(); itr != varibles.end(); ++itr) {
+        if (itr->name == userName) {
+            *out_mappedName = &(itr->mappedName);
             return true;
         }
     }
@@ -362,6 +427,24 @@ ShaderValidator::FindAttribMappedNameByUserName(const std::string& userName,
 }
 
 bool
+ShaderValidator::FindVaryingByMappedName(const std::string& mappedName,
+                                         std::string* const out_userName,
+                                         bool* const out_isArray) const
+{
+    const std::vector<sh::Varying>& varyings = *ShGetVaryings(mHandle);
+    for (auto itr = varyings.begin(); itr != varyings.end(); ++itr) {
+        const sh::ShaderVariable* found;
+        if (!itr->findInfoByMappedName(mappedName, &found, out_userName))
+            continue;
+
+        *out_isArray = found->isArray();
+        return true;
+    }
+
+    return false;
+}
+
+bool
 ShaderValidator::FindVaryingMappedNameByUserName(const std::string& userName,
                                                  const std::string** const out_mappedName) const
 {
@@ -375,7 +458,6 @@ ShaderValidator::FindVaryingMappedNameByUserName(const std::string& userName,
 
     return false;
 }
-
 // This must handle names like "foo.bar[0]".
 bool
 ShaderValidator::FindUniformByMappedName(const std::string& mappedName,
@@ -392,6 +474,48 @@ ShaderValidator::FindUniformByMappedName(const std::string& mappedName,
         return true;
     }
 
+    const size_t dotPos = mappedName.find(".");
+
+    const std::vector<sh::InterfaceBlock>& interfaces = *ShGetInterfaceBlocks(mHandle);
+    for (const auto& interface : interfaces) {
+
+        std::string mappedFieldName;
+        const bool hasInstanceName = !interface.instanceName.empty();
+
+        // If the InterfaceBlock has an instanceName, all variables defined
+        // within the block are qualified with the block name, as opposed
+        // to being placed in the global scope.
+        if (hasInstanceName) {
+
+            // If mappedName has no block name prefix, skip
+            if (std::string::npos == dotPos)
+                continue;
+
+            // If mappedName has a block name prefix that doesn't match, skip
+            const std::string mappedInterfaceBlockName = mappedName.substr(0, dotPos);
+            if (interface.mappedName != mappedInterfaceBlockName)
+                continue;
+
+            mappedFieldName = mappedName.substr(dotPos + 1);
+        } else {
+            mappedFieldName = mappedName;
+        }
+
+        for (const auto& field : interface.fields) {
+            const sh::ShaderVariable* found;
+
+            if (!field.findInfoByMappedName(mappedFieldName, &found, out_userName))
+                continue;
+
+            if (hasInstanceName) {
+                // Prepend the user name of the interface that matched
+                *out_userName = interface.name + "." + *out_userName;
+            }
+
+            *out_isArray = found->isArray();
+            return true;
+        }
+    }
 
     return false;
 }

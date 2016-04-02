@@ -11,10 +11,12 @@ MOZ_PHOENIX=1
 if test "$OS_ARCH" = "WINNT"; then
   MOZ_MAINTENANCE_SERVICE=1
   if ! test "$HAVE_64BIT_BUILD"; then
-    if test "$MOZ_UPDATE_CHANNEL" = "nightly-oak" -o \
+    if test "$MOZ_UPDATE_CHANNEL" = "nightly" -o \
             "$MOZ_UPDATE_CHANNEL" = "aurora" -o \
             "$MOZ_UPDATE_CHANNEL" = "beta" -o \
-            "$MOZ_UPDATE_CHANNEL" = "release"; then
+            "$MOZ_UPDATE_CHANNEL" = "beta-dev" -o \
+            "$MOZ_UPDATE_CHANNEL" = "release" -o \
+            "$MOZ_UPDATE_CHANNEL" = "release-dev"; then
       if ! test "$MOZ_DEBUG"; then
         MOZ_STUB_INSTALLER=1
       fi
@@ -26,12 +28,10 @@ fi
 MOZ_ENABLE_SIGNMAR=1
 
 MOZ_CHROME_FILE_FORMAT=omni
-MOZ_DISABLE_EXPORT_JS=1
 MOZ_SAFE_BROWSING=1
 MOZ_SERVICES_COMMON=1
 MOZ_SERVICES_CRYPTO=1
 MOZ_SERVICES_HEALTHREPORT=1
-MOZ_SERVICES_METRICS=1
 MOZ_SERVICES_SYNC=1
 MOZ_SERVICES_CLOUDSYNC=1
 MOZ_APP_VERSION=$FIREFOX_VERSION
@@ -54,7 +54,6 @@ ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-central
 MAR_CHANNEL_ID=firefox-mozilla-central
 MOZ_PROFILE_MIGRATOR=1
 MOZ_APP_STATIC_INI=1
-MOZ_WEBAPP_RUNTIME=1
 MOZ_MEDIA_NAVIGATOR=1
 MOZ_WEBGL_CONFORMANT=1
 # Enable navigator.mozPay

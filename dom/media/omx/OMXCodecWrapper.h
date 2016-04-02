@@ -14,7 +14,6 @@
 
 #include "AudioSegment.h"
 #include "GonkNativeWindow.h"
-#include "GonkNativeWindowClient.h"
 #include "mozilla/media/MediaSystemResourceClient.h"
 #include "mozilla/RefPtr.h"
 
@@ -26,7 +25,7 @@ namespace android {
 class OMXCodecReservation : public RefBase
 {
 public:
-  OMXCodecReservation(bool aEncoder)
+  OMXCodecReservation(bool aEncoder) : mOwned(false)
   {
     mType = aEncoder ? mozilla::MediaSystemResourceType::VIDEO_ENCODER :
             mozilla::MediaSystemResourceType::VIDEO_DECODER;
@@ -45,6 +44,7 @@ public:
 
 private:
   mozilla::MediaSystemResourceType mType;
+  bool mOwned;  // We already own this resource
 
   RefPtr<mozilla::MediaSystemResourceClient> mClient;
 };

@@ -31,6 +31,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/net/ReferrerPolicy.h"
+#include "mozilla/Logging.h"
 #include "nsIContentPolicy.h"
 
 #if defined(XP_WIN)
@@ -60,7 +61,6 @@ class nsIDOMEvent;
 class nsIDOMHTMLInputElement;
 class nsIDOMKeyEvent;
 class nsIDOMNode;
-class nsIDOMWindow;
 class nsIDragSession;
 class nsIEditor;
 class nsIFragmentContentSink;
@@ -91,7 +91,8 @@ class nsIWidget;
 class nsIWordBreaker;
 class nsIXPConnect;
 class nsNodeInfoManager;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
+class nsPIDOMWindowOuter;
 class nsPresContext;
 class nsStringBuffer;
 class nsStringHashKey;
@@ -104,7 +105,6 @@ class nsITransferable;
 class nsPIWindowRoot;
 class nsIWindowProvider;
 
-struct JSPropertyDescriptor;
 struct JSRuntime;
 
 template<class E> class nsCOMArray;
@@ -121,6 +121,7 @@ class DocumentFragment;
 class Element;
 class EventTarget;
 class IPCDataTransfer;
+class IPCDataTransferItem;
 class NodeInfo;
 class nsIContentChild;
 class nsIContentParent;
@@ -168,15 +169,6 @@ struct EventNameMapping
   int32_t  mType;
   mozilla::EventMessage mMessage;
   mozilla::EventClassID mEventClassID;
-};
-
-struct nsShortcutCandidate {
-  nsShortcutCandidate(uint32_t aCharCode, bool aIgnoreShift) :
-    mCharCode(aCharCode), mIgnoreShift(aIgnoreShift)
-  {
-  }
-  uint32_t mCharCode;
-  bool     mIgnoreShift;
 };
 
 typedef void (*CallOnRemoteChildFunction) (mozilla::dom::TabParent* aTabParent,
@@ -236,11 +228,9 @@ public:
     return SubjectPrincipal();
   }
 
-  static bool     IsImageSrcSetDisabled();
-
   static bool LookupBindingMember(JSContext* aCx, nsIContent *aContent,
                                   JS::Handle<jsid> aId,
-                                  JS::MutableHandle<JSPropertyDescriptor> aDesc);
+                                  JS::MutableHandle<JS::PropertyDescriptor> aDesc);
 
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
   static bool ShouldResistFingerprinting(nsIDocShell* aDocShell);
@@ -481,7 +471,7 @@ public:
 
   // Check if the (JS) caller can access aWindow.
   // aWindow can be either outer or inner window.
-  static bool CanCallerAccess(nsPIDOMWindow* aWindow);
+  static bool CanCallerAccess(nsPIDOMWindowInner* aWindow);
 
   /**
    * GetDocumentFromCaller gets its document by looking at the last called
@@ -521,11 +511,6 @@ public:
   {
     return sSecurityManager;
   }
-
-  /**
-   * Get the ContentSecurityPolicy for a JS context.
-   **/
-  static bool GetContentSecurityPolicy(nsIContentSecurityPolicy** aCSP);
 
   // Returns the subject principal. Guaranteed to return non-null. May only
   // be called when nsContentUtils is initialized.
@@ -840,7 +825,15 @@ public:
    *   @param [aColumnNumber=0] (Optional) Column number within resource
               containing error.
               If aURI is null, then aDocument->GetDocumentURI() is used.
+   *   @param [aLocationMode] (Optional) Specifies the behavior if
+              error location information is omitted.
    */
+  enum MissingErrorLocationMode {
+    // Don't show location information in the error console.
+    eOMIT_LOCATION,
+    // Get location information from the currently executing script.
+    eUSE_CALLING_LOCATION
+  };
   static nsresult ReportToConsoleNonLocalized(const nsAString& aErrorText,
                                               uint32_t aErrorFlags,
                                               const nsACString& aCategory,
@@ -849,7 +842,9 @@ public:
                                               const nsAFlatString& aSourceLine
                                                 = EmptyString(),
                                               uint32_t aLineNumber = 0,
-                                              uint32_t aColumnNumber = 0);
+                                              uint32_t aColumnNumber = 0,
+                                              MissingErrorLocationMode aLocationMode
+                                                = eUSE_CALLING_LOCATION);
 
   /**
    * Report a localized error message to the error console.
@@ -900,8 +895,8 @@ public:
                                   uint32_t aLineNumber = 0,
                                   uint32_t aColumnNumber = 0);
 
-  static void LogMessageToConsole(const char* aMsg, ...);
-  
+  static void LogMessageToConsole(const char* aMsg);
+
   /**
    * Get the localized string named |aKey| in properties file |aFile|.
    */
@@ -923,6 +918,7 @@ public:
    */
   static nsresult GenerateUUIDInPlace(nsID& aUUID);
 
+  static bool PrefetchEnabled(nsIDocShell* aDocShell);
 
   /**
    * Fill (with the parameters given) the localized string named |aKey| in
@@ -992,18 +988,6 @@ public:
   static nsContentPolicyType InternalContentPolicyTypeToExternal(nsContentPolicyType aType);
 
   /**
-   * Map internal content policy types to external ones or script types:
-   *   * TYPE_INTERNAL_SCRIPT
-   *   * TYPE_INTERNAL_WORKER
-   *   * TYPE_INTERNAL_SHARED_WORKER
-   *   * TYPE_INTERNAL_SERVICE_WORKER
-   *
-   *
-   * Note: DO NOT call this function unless you know what you're doing!
-   */
-  static nsContentPolicyType InternalContentPolicyTypeToExternalOrScript(nsContentPolicyType aType);
-
-  /**
    * Map internal content policy types to external ones or preload types:
    *   * TYPE_INTERNAL_SCRIPT_PRELOAD
    *   * TYPE_INTERNAL_IMAGE_PRELOAD
@@ -1018,23 +1002,18 @@ public:
    *   * TYPE_INTERNAL_WORKER
    *   * TYPE_INTERNAL_SHARED_WORKER
    *   * TYPE_INTERNAL_SERVICE_WORKER
-   *   * TYPE_INTERNAL_SCRIPT_PRELOAD
-   *   * TYPE_INTERNAL_IMAGE_PRELOAD
-   *   * TYPE_INTERNAL_STYLESHEET_PRELOAD
-   *
-   * Note: DO NOT call this function unless you know what you're doing!
-   */
-  static nsContentPolicyType InternalContentPolicyTypeToExternalOrCSPInternal(nsContentPolicyType aType);
-
-  /**
-   * Map internal content policy types to external ones, worker, or preload types:
-   *   * TYPE_INTERNAL_WORKER
-   *   * TYPE_INTERNAL_SHARED_WORKER
-   *   * TYPE_INTERNAL_SERVICE_WORKER
    *
    * Note: DO NOT call this function unless you know what you're doing!
    */
   static nsContentPolicyType InternalContentPolicyTypeToExternalOrWorker(nsContentPolicyType aType);
+
+  /**
+   * Returns true if the content policy type is any of:
+   *   * TYPE_INTERNAL_SCRIPT_PRELOAD
+   *   * TYPE_INTERNAL_IMAGE_PRELOAD
+   *   * TYPE_INTERNAL_STYLESHEET_PRELOAD
+   */
+  static bool IsPreloadType(nsContentPolicyType aType);
 
   /**
    * Quick helper to determine whether there are any mutation listeners
@@ -1146,6 +1125,13 @@ public:
                                       bool aCancelable,
                                       bool *aDefaultAction = nullptr);
 
+  /**
+   * Helper function for dispatching a "DOMServiceWorkerFocusClient" event to
+   * the chrome event handler of the given DOM Window. This has the effect
+   * of focusing the corresponding tab and bringing the browser window
+   * to the foreground.
+   */
+  static nsresult DispatchFocusChromeEvent(nsPIDOMWindowOuter* aWindow);
 
   /**
    * This method creates and dispatches a trusted event.
@@ -1534,27 +1520,6 @@ public:
   static const nsDependentString GetLocalizedEllipsis();
 
   /**
-   * Get the candidates for accelkeys for aDOMKeyEvent.
-   *
-   * @param aDOMKeyEvent [in] the key event for accelkey handling.
-   * @param aCandidates [out] the candidate shortcut key combination list.
-   *                          the first item is most preferred.
-   */
-  static void GetAccelKeyCandidates(nsIDOMKeyEvent* aDOMKeyEvent,
-                                    nsTArray<nsShortcutCandidate>& aCandidates);
-
-  /**
-   * Get the candidates for accesskeys for aNativeKeyEvent.
-   *
-   * @param aNativeKeyEvent [in] the key event for accesskey handling.
-   * @param aCandidates [out] the candidate access key list.
-   *                          the first item is most preferred.
-   */
-  static void GetAccessKeyCandidates(
-                mozilla::WidgetKeyboardEvent* aNativeKeyEvent,
-                nsTArray<uint32_t>& aCandidates);
-
-  /**
    * Hide any XUL popups associated with aDocument, including any documents
    * displayed in child frames. Does nothing if aDocument is null.
    */
@@ -1587,14 +1552,6 @@ public:
   static bool URIIsLocalFile(nsIURI *aURI);
 
   /**
-   * Given a URI, return set beforeHash to the part before the '#', and
-   * afterHash to the remainder of the URI, including the '#'.
-   */
-  static nsresult SplitURIAtHash(nsIURI *aURI,
-                                 nsACString &aBeforeHash,
-                                 nsACString &aAfterHash);
-
-  /**
    * Get the application manifest URI for this document.  The manifest URI
    * is specified in the manifest= attribute of the root element of the
    * document.
@@ -1618,7 +1575,7 @@ public:
    * If offline-apps.allow_by_default is true, we set offline-app permission
    * for the principal and return true.  Otherwise false.
    */
-  static bool MaybeAllowOfflineAppByDefault(nsIPrincipal *aPrincipal, nsIDOMWindow *aWindow);
+  static bool MaybeAllowOfflineAppByDefault(nsIPrincipal *aPrincipal);
 
   /**
    * Increases the count of blockers preventing scripts from running.
@@ -1664,6 +1621,11 @@ public:
   // ipdl types in WindowWatcher.
   static nsIWindowProvider*
   GetWindowProviderForContentProcess();
+
+  // Returns the browser window with the most recent time stamp that is
+  // not in private browsing mode.
+  static already_AddRefed<nsPIDOMWindowOuter>
+  GetMostRecentNonPBWindow();
 
   /**
    * Call this function if !IsSafeToRunScript() and we fail to run the script
@@ -2014,14 +1976,6 @@ public:
   }
 
   /*
-   * Returns true if ServiceWorker Interception is enabled by pref.
-   */
-  static bool ServiceWorkerInterceptionEnabled()
-  {
-    return sSWInterceptionEnabled;
-  }
-
-  /*
    * Returns true if the frame timing APIs are enabled.
    */
   static bool IsFrameTimingEnabled();
@@ -2052,14 +2006,6 @@ public:
   {
     return sPrivacyResistFingerprinting;
   }
-
-  /**
-   * Returns true if the doc tree branch which contains aDoc contains any
-   * plugins which we don't control event dispatch for, i.e. do any plugins
-   * in the same tab as this document receive key events outside of our
-   * control? This always returns false on MacOSX.
-   */
-  static bool HasPluginWithUncontrolledEventDispatch(nsIDocument* aDoc);
 
   /**
    * Return true if this doc is controlled by a ServiceWorker.
@@ -2096,7 +2042,7 @@ public:
    * Returns true if aWin and the current pointer lock document
    * have common scriptable top window.
    */
-  static bool IsInPointerLockContext(nsPIDOMWindow* aWin);
+  static bool IsInPointerLockContext(nsPIDOMWindowOuter* aWin);
 
   /**
    * Returns the time limit on handling user input before
@@ -2143,7 +2089,7 @@ public:
    * @param aWindow the window the flush should start at
    *
    */
-  static void FlushLayoutForTree(nsIDOMWindow* aWindow);
+  static void FlushLayoutForTree(nsPIDOMWindowOuter* aWindow);
 
   /**
    * Returns true if content with the given principal is allowed to use XUL
@@ -2367,9 +2313,16 @@ public:
                                   const nsAString& aVersion);
 
   /**
-   * Return true if the browser.dom.window.dump.enabled pref is set.
+   * Returns true if the browser.dom.window.dump.enabled pref is set.
    */
   static bool DOMWindowDumpEnabled();
+
+  /**
+   * Returns a LogModule that dump calls from content script are logged to.
+   * This can be enabled with the 'Dump' module, and is useful for synchronizing
+   * content JS to other logging modules.
+   */
+  static mozilla::LogModule* DOMDumpLog();
 
   /**
    * Returns whether a content is an insertion point for XBL
@@ -2422,14 +2375,14 @@ public:
    * If the hostname for aURI is an IPv6 it encloses it in brackets,
    * otherwise it just outputs the hostname in aHost.
    */
-  static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost);
-  static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsCString& aHost);
+  static nsresult GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost);
+  static nsresult GetHostOrIPv6WithBrackets(nsIURI* aURI, nsCString& aHost);
 
   /*
    * Call the given callback on all remote children of the given top-level
    * window.
    */
-  static void CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
+  static void CallOnAllRemoteChildren(nsPIDOMWindowOuter* aWindow,
                                       CallOnRemoteChildFunction aCallback,
                                       void* aArg);
 
@@ -2447,6 +2400,21 @@ public:
    * The content type is returned in aType.
    */
   static bool IsFileImage(nsIFile* aFile, nsACString& aType);
+
+  /**
+   * Given an IPCDataTransferItem that has a flavor for which IsFlavorImage
+   * returns true and whose IPCDataTransferData is of type nsCString (raw image
+   * data), construct an imgIContainer for the image encoded by the transfer
+   * item.
+   */
+  static nsresult DataTransferItemToImage(const mozilla::dom::IPCDataTransferItem& aItem,
+                                          imgIContainer** aContainer);
+
+  /**
+   * Given a flavor obtained from an IPCDataTransferItem or nsITransferable,
+   * returns true if we should treat the data as an image.
+   */
+  static bool IsFlavorImage(const nsACString& aFlavor);
 
   static void TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
                                               nsTArray<mozilla::dom::IPCDataTransfer>& aIPC,
@@ -2534,7 +2502,8 @@ public:
    */
   static nsresult SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
                                                 nsIDocument* aDoc,
-                                                nsIHttpChannel* aChannel);
+                                                nsIHttpChannel* aChannel,
+                                                mozilla::net::ReferrerPolicy aReferrerPolicy);
 
   static bool PushEnabled(JSContext* aCx, JSObject* aObj);
 
@@ -2568,7 +2537,7 @@ public:
    * persistent storage which are available to web pages. Cookies don't use
    * this logic, and security logic related to them must be updated separately.
    */
-  static StorageAccess StorageAllowedForWindow(nsPIDOMWindow* aWindow);
+  static StorageAccess StorageAllowedForWindow(nsPIDOMWindowInner* aWindow);
 
   /*
    * Checks if storage for the given principal is permitted by the user's
@@ -2583,6 +2552,16 @@ public:
   static bool SerializeNodeToMarkup(nsINode* aRoot,
                                     bool aDescendentsOnly,
                                     nsAString& aOut);
+
+  /*
+   * Returns true iff the provided JSObject is a global, and its URI matches
+   * the provided about: URI.
+   * @param aGlobal the JSObject whose URI to check, if it is a global.
+   * @param aUri the URI to match, e.g. "about:feeds"
+   */
+  static bool IsSpecificAboutPage(JSObject* aGlobal, const char* aUri);
+
+  static void SetScrollbarsVisibility(nsIDocShell* aDocShell, bool aVisible);
 
 private:
   static bool InitializeEventTable();
@@ -2634,7 +2613,7 @@ private:
    * StorageAllowedForPrincipal.
    */
   static StorageAccess InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
-                                                          nsPIDOMWindow* aWindow);
+                                                          nsPIDOMWindowInner* aWindow);
 
   static nsIXPConnect *sXPConnect;
 
@@ -2701,7 +2680,6 @@ private:
   static bool sGettersDecodeURLHash;
   static bool sPrivacyResistFingerprinting;
   static bool sSendPerformanceTimingNotifications;
-  static bool sSWInterceptionEnabled;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
 
@@ -2724,6 +2702,7 @@ private:
 #if !(defined(DEBUG) || defined(MOZ_ENABLE_JS_DUMP))
   static bool sDOMWindowDumpEnabled;
 #endif
+  static mozilla::LazyLogModule sDOMDumpLog;
 };
 
 class MOZ_RAII nsAutoScriptBlocker {

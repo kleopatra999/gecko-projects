@@ -22,8 +22,11 @@
 #include "nsRepeatService.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/Telemetry.h"
+#include "mozilla/layers/ScrollInputMethods.h"
 
 using namespace mozilla;
+using mozilla::layers::ScrollInputMethod;
 
 //
 // NS_NewToolbarFrame
@@ -167,6 +170,10 @@ nsScrollbarButtonFrame::HandleButtonPress(nsPresContext* aPresContext,
     if (!weakFrame.IsAlive()) {
       return false;
     }
+
+    mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
+        (uint32_t) ScrollInputMethod::MainThreadScrollbarButtonClick);
+
     if (!m) {
       sb->MoveToNewPosition();
       if (!weakFrame.IsAlive()) {
@@ -222,22 +229,19 @@ void nsScrollbarButtonFrame::Notify()
 }
 
 void
-nsScrollbarButtonFrame::MouseClicked(nsPresContext* aPresContext,
-                                     WidgetGUIEvent* aEvent) 
+nsScrollbarButtonFrame::MouseClicked(WidgetGUIEvent* aEvent)
 {
-  nsButtonBoxFrame::MouseClicked(aPresContext, aEvent);
+  nsButtonBoxFrame::MouseClicked(aEvent);
   //MouseClicked();
 }
 
 nsresult
-nsScrollbarButtonFrame::GetChildWithTag(nsPresContext* aPresContext,
-                                        nsIAtom* atom, nsIFrame* start,
+nsScrollbarButtonFrame::GetChildWithTag(nsIAtom* atom, nsIFrame* start,
                                         nsIFrame*& result)
 {
   // recursively search our children
-  nsIFrame* childFrame = start->GetFirstPrincipalChild();
-  while (nullptr != childFrame) 
-  {    
+  for (nsIFrame* childFrame : start->PrincipalChildList())
+  {
     // get the content node
     nsIContent* child = childFrame->GetContent();
 
@@ -252,11 +256,9 @@ nsScrollbarButtonFrame::GetChildWithTag(nsPresContext* aPresContext,
     }
 
      // recursive search the child
-     GetChildWithTag(aPresContext, atom, childFrame, result);
+     GetChildWithTag(atom, childFrame, result);
      if (result != nullptr) 
        return NS_OK;
-
-    childFrame = childFrame->GetNextSibling();
   }
 
   result = nullptr;

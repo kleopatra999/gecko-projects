@@ -100,7 +100,7 @@ public:
   nsresult StartDrag(nsIDOMEvent* aEvent);
   nsresult StopDrag();
 
-  bool StartAPZDrag(mozilla::WidgetGUIEvent* aEvent);
+  bool StartAPZDrag();
 
   static int32_t GetCurrentPosition(nsIContent* content);
   static int32_t GetMinPosition(nsIContent* content);
@@ -194,6 +194,10 @@ private:
   // to process these events then the scroll position update would conflict
   // causing the scroll position to jump.
   bool mScrollingWithAPZ;
+
+  // true if displayport suppression is active, for more performant
+  // scrollbar-dragging behaviour.
+  bool mSuppressionActive;
 
   static bool gMiddlePref;
   static int32_t gSnapMultiplier;

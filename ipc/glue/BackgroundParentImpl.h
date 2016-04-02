@@ -50,11 +50,26 @@ protected:
   DeallocPBackgroundIDBFactoryParent(PBackgroundIDBFactoryParent* aActor)
                                      override;
 
+  virtual PBackgroundIndexedDBUtilsParent*
+  AllocPBackgroundIndexedDBUtilsParent() override;
+
+  virtual bool
+  DeallocPBackgroundIndexedDBUtilsParent(
+                                        PBackgroundIndexedDBUtilsParent* aActor)
+                                        override;
+
+  virtual bool
+  RecvFlushPendingFileDeletions() override;
+
   virtual PBlobParent*
   AllocPBlobParent(const BlobConstructorParams& aParams) override;
 
   virtual bool
   DeallocPBlobParent(PBlobParent* aActor) override;
+
+  virtual bool
+  RecvPBlobConstructor(PBlobParent* aActor,
+                       const BlobConstructorParams& params) override;
 
   virtual PFileDescriptorSetParent*
   AllocPFileDescriptorSetParent(const FileDescriptor& aFileDescriptor)
@@ -165,6 +180,12 @@ protected:
 
   virtual bool
   DeallocPAsmJSCacheEntryParent(PAsmJSCacheEntryParent* aActor) override;
+
+  virtual PQuotaParent*
+  AllocPQuotaParent() override;
+
+  virtual bool
+  DeallocPQuotaParent(PQuotaParent* aActor) override;
 };
 
 } // namespace ipc

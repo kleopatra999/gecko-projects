@@ -138,8 +138,10 @@ COMPUTED_STYLE_PROP(grid_auto_columns,             GridAutoColumns)
 COMPUTED_STYLE_PROP(grid_auto_flow,                GridAutoFlow)
 COMPUTED_STYLE_PROP(grid_auto_rows,                GridAutoRows)
 COMPUTED_STYLE_PROP(grid_column_end,               GridColumnEnd)
+COMPUTED_STYLE_PROP(grid_column_gap,               GridColumnGap)
 COMPUTED_STYLE_PROP(grid_column_start,             GridColumnStart)
 COMPUTED_STYLE_PROP(grid_row_end,                  GridRowEnd)
+COMPUTED_STYLE_PROP(grid_row_gap,                  GridRowGap)
 COMPUTED_STYLE_PROP(grid_row_start,                GridRowStart)
 COMPUTED_STYLE_PROP(grid_template_areas,           GridTemplateAreas)
 COMPUTED_STYLE_PROP(grid_template_columns,         GridTemplateColumns)
@@ -218,6 +220,10 @@ COMPUTED_STYLE_PROP(text_decoration,               TextDecoration)
 COMPUTED_STYLE_PROP(text_decoration_color,         TextDecorationColor)
 COMPUTED_STYLE_PROP(text_decoration_line,          TextDecorationLine)
 COMPUTED_STYLE_PROP(text_decoration_style,         TextDecorationStyle)
+//// COMPUTED_STYLE_PROP(text_emphasis,            TextEmphasis)
+COMPUTED_STYLE_PROP(text_emphasis_color,           TextEmphasisColor)
+COMPUTED_STYLE_PROP(text_emphasis_position,        TextEmphasisPosition)
+COMPUTED_STYLE_PROP(text_emphasis_style,           TextEmphasisStyle)
 COMPUTED_STYLE_PROP(text_indent,                   TextIndent)
 COMPUTED_STYLE_PROP(text_orientation,              TextOrientation)
 COMPUTED_STYLE_PROP(text_overflow,                 TextOverflow)
@@ -291,6 +297,12 @@ COMPUTED_STYLE_PROP(user_select,                   UserSelect)
 COMPUTED_STYLE_PROP(_moz_window_dragging,          WindowDragging)
 COMPUTED_STYLE_PROP(_moz_window_shadow,            WindowShadow)
 
+/* ********************************** *\
+ * Implementations of -webkit- styles *
+\* ********************************** */
+
+COMPUTED_STYLE_PROP(_webkit_text_fill_color,       WebkitTextFillColor)
+
 /* ***************************** *\
  * Implementations of SVG styles *
 \* ***************************** */
@@ -312,6 +324,16 @@ COMPUTED_STYLE_PROP(marker_end,                    MarkerEnd)
 COMPUTED_STYLE_PROP(marker_mid,                    MarkerMid)
 COMPUTED_STYLE_PROP(marker_start,                  MarkerStart)
 COMPUTED_STYLE_PROP(mask,                          Mask)
+#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
+COMPUTED_STYLE_PROP(mask_clip,                     MaskClip)
+COMPUTED_STYLE_PROP(mask_composite,                MaskComposite)
+COMPUTED_STYLE_PROP(mask_image,                    MaskImage)
+COMPUTED_STYLE_PROP(mask_mode,                     MaskMode)
+COMPUTED_STYLE_PROP(mask_origin,                   MaskOrigin)
+COMPUTED_STYLE_PROP(mask_position,                 MaskPosition)
+COMPUTED_STYLE_PROP(mask_repeat,                   MaskRepeat)
+COMPUTED_STYLE_PROP(mask_size,                     MaskSize)
+#endif
 COMPUTED_STYLE_PROP(mask_type,                     MaskType)
 COMPUTED_STYLE_PROP(paint_order,                   PaintOrder)
 COMPUTED_STYLE_PROP(shape_rendering,               ShapeRendering)

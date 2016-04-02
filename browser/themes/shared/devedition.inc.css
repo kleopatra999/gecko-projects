@@ -49,7 +49,6 @@
 
   /* Url and search bars */
   --url-and-searchbar-background-color: #171B1F;
-  --url-and-searchbar-color: #fff;
   --urlbar-separator-color: #5F6670;
   --urlbar-dropmarker-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
   --urlbar-dropmarker-region: rect(0px, 11px, 14px, 0px);
@@ -64,7 +63,8 @@
 :root[devtoolstheme="dark"] #identity-box {
   --identity-box-chrome-color: #46afe3;
   --identity-box-verified-background-color: transparent;
-  --identity-box-selected-background-color: rgba(231,230,230,.2);
+  --identity-box-hover-background-color: rgba(231,230,230,.2);
+  --identity-box-selected-background-color: rgba(211,210,210,.2);
 }
 
 :root[devtoolstheme="light"] {
@@ -75,7 +75,7 @@
   --chrome-secondary-background-color: #f5f6f7;
   --chrome-navigator-toolbox-separator-color: #cccccc;
   --chrome-nav-bar-separator-color: #B6B6B8;
-  --chrome-nav-buttons-background: #fcfcfc;
+  --chrome-nav-buttons-background: #ffffff; /* --theme-body-background */
   --chrome-nav-buttons-hover-background: #DADBDB;
   --chrome-nav-bar-controls-border-color: #ccc;
   --chrome-selection-color: #f5f7fa;
@@ -85,9 +85,7 @@
   --tab-hover-background-color: #D7D8DA;
   --tab-selection-color: #f5f7fa;
   --tab-selection-background-color: #4c9ed9;
-  --tab-selection-box-shadow: 0 2px 0 #9FDFFF inset,
-                              0 -2px 0 rgba(0,0,0,.05) inset,
-                              0 -1px 0 rgba(0,0,0,.2) inset;
+  --tab-selection-box-shadow: none;
   --pinned-tab-glow: radial-gradient(22px at center calc(100% - 2px), rgba(76,158,217,0.9) 13%, transparent 16%);
 
 
@@ -168,11 +166,6 @@
   color: var(--chrome-color);
 }
 
-.browserContainer > .findbar-textbox {
-  background-color: var(--url-and-searchbar-background-color) !important;
-  color: var(--url-and-searchbar-color);
-}
-
 /* Default findbar text color doesn't look good - Bug 1125677 */
 .browserContainer > findbar .findbar-find-status,
 .browserContainer > findbar .found-matches {
@@ -202,7 +195,7 @@ toolbar[brighttext] #downloads-indicator-counter {
 #navigator-toolbox .searchbar-textbox {
   background-color: var(--url-and-searchbar-background-color) !important;
   background-image: none !important;
-  color: var(--url-and-searchbar-color) !important;
+  color: inherit !important;
   border: 1px solid var(--chrome-nav-bar-controls-border-color) !important;
   box-shadow: none !important;
 }
@@ -279,7 +272,7 @@ window:not([chromehidden~="toolbar"]) #urlbar-wrapper {
   pointer-events: auto;
 }
 
-.tabbrowser-tab[image] > .tab-stack > .tab-content[attention]:not([visuallyselected="true"]),
+.tabbrowser-tab:-moz-any([image], [pinned]) > .tab-stack > .tab-content[attention]:not([visuallyselected="true"]),
 .tabbrowser-tab > .tab-stack > .tab-content[pinned][titlechanged]:not([visuallyselected="true"]) {
   background-image: var(--pinned-tab-glow);
   background-position: center;

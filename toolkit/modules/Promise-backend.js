@@ -56,6 +56,10 @@ if (Cu) {
   XPCOMUtils.defineLazyServiceGetter(this, "FinalizationWitnessService",
                                      "@mozilla.org/toolkit/finalizationwitness;1",
                                      "nsIFinalizationWitnessService");
+
+  // For now, we're worried about add-ons using Promises with CPOWs, so we'll
+  // permit them in this scope, but this support will go away soon.
+  Cu.permitCPOWsInScope(this);
 }
 
 const STATUS_PENDING = 0;
@@ -188,7 +192,7 @@ var PendingErrors = {
           stack = error.location;
         } else {
           // Components.stack to the rescue!
-          stack  = Components.stack;
+          stack = Components_.stack;
           // Remove those top frames that refer to Promise.jsm.
           while (stack) {
             if (!stack.filename.endsWith("/Promise.jsm")) {
@@ -236,8 +240,7 @@ var PendingErrors = {
   flush: function() {
     // Since we are going to modify the map while walking it,
     // let's copying the keys first.
-    let keys = [key for (key of this._map.keys())];
-    for (let key of keys) {
+    for (let key of Array.from(this._map.keys())) {
       this.report(key);
     }
   },

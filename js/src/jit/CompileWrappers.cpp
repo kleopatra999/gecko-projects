@@ -78,9 +78,9 @@ CompileRuntime::addressOfLastCachedNativeIterator()
 
 #ifdef JS_GC_ZEAL
 const void*
-CompileRuntime::addressOfGCZeal()
+CompileRuntime::addressOfGCZealModeBits()
 {
-    return runtime()->gc.addressOfZealMode();
+    return runtime()->gc.addressOfZealModeBits();
 }
 #endif
 
@@ -215,15 +215,9 @@ CompileZone::addressOfNeedsIncrementalBarrier()
 }
 
 const void*
-CompileZone::addressOfFreeListFirst(gc::AllocKind allocKind)
+CompileZone::addressOfFreeList(gc::AllocKind allocKind)
 {
-    return zone()->arenas.getFreeList(allocKind)->addressOfFirst();
-}
-
-const void*
-CompileZone::addressOfFreeListLast(gc::AllocKind allocKind)
-{
-    return zone()->arenas.getFreeList(allocKind)->addressOfLast();
+    return zone()->arenas.addressOfFreeList(allocKind);
 }
 
 JSCompartment*
@@ -256,6 +250,12 @@ CompileCompartment::addressOfEnumerators()
     return &compartment()->enumerators;
 }
 
+const void*
+CompileCompartment::addressOfRandomNumberGenerator()
+{
+    return compartment()->randomNumberGenerator.ptr();
+}
+
 const JitCompartment*
 CompileCompartment::jitCompartment()
 {
@@ -278,7 +278,7 @@ CompileCompartment::hasObjectMetadataCallback()
 void
 CompileCompartment::setSingletonsAsValues()
 {
-    return JS::CompartmentOptionsRef(compartment()).setSingletonsAsValues();
+    compartment()->behaviors().setSingletonsAsValues();
 }
 
 JitCompileOptions::JitCompileOptions()
@@ -290,8 +290,7 @@ JitCompileOptions::JitCompileOptions()
 
 JitCompileOptions::JitCompileOptions(JSContext* cx)
 {
-    JS::CompartmentOptions& options = cx->compartment()->options();
-    cloneSingletons_ = options.cloneSingletons();
+    cloneSingletons_ = cx->compartment()->creationOptions().cloneSingletons();
     spsSlowAssertionsEnabled_ = cx->runtime()->spsProfiler.enabled() &&
                                 cx->runtime()->spsProfiler.slowAssertionsEnabled();
     offThreadCompilationAvailable_ = OffThreadCompilationAvailable(cx);

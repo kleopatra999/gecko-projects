@@ -23,10 +23,14 @@ class nsPerformance;
 class nsIHttpChannel;
 
 namespace mozilla {
+
 class ErrorResult;
+
 namespace dom {
-  class PerformanceEntry;
-  class PerformanceObserver;
+
+class PerformanceEntry;
+class PerformanceObserver;
+
 } // namespace dom
 } // namespace mozilla
 
@@ -298,7 +302,7 @@ public:
                                            DOMEventTargetHelper)
 
   PerformanceBase();
-  explicit PerformanceBase(nsPIDOMWindow* aWindow);
+  explicit PerformanceBase(nsPIDOMWindowInner* aWindow);
 
   typedef mozilla::dom::PerformanceEntry PerformanceEntry;
   typedef mozilla::dom::PerformanceObserver PerformanceObserver;
@@ -344,8 +348,9 @@ protected:
 
   virtual void DispatchBufferFullEvent() = 0;
 
-  virtual DOMHighResTimeStamp
-  DeltaFromNavigationStart(DOMHighResTimeStamp aTime) = 0;
+  virtual mozilla::TimeStamp CreationTimeStamp() const = 0;
+
+  virtual DOMHighResTimeStamp CreationTime() const = 0;
 
   virtual bool IsPerformanceTimingAttribute(const nsAString& aName) = 0;
 
@@ -363,6 +368,8 @@ protected:
   void RunNotificationObserversTask();
   void QueueEntry(PerformanceEntry* aEntry);
 
+  DOMHighResTimeStamp RoundTime(double aTime) const;
+
   nsTObserverArray<PerformanceObserver*> mObservers;
 
 private:
@@ -378,7 +385,7 @@ private:
 class nsPerformance final : public PerformanceBase
 {
 public:
-  nsPerformance(nsPIDOMWindow* aWindow,
+  nsPerformance(nsPIDOMWindowInner* aWindow,
                 nsDOMNavigationTiming* aDOMTiming,
                 nsITimedChannel* aChannel,
                 nsPerformance* aParentPerformance);
@@ -433,7 +440,11 @@ public:
 
   IMPL_EVENT_HANDLER(resourcetimingbufferfull)
 
-private:
+  mozilla::TimeStamp CreationTimeStamp() const override;
+
+  DOMHighResTimeStamp CreationTime() const override;
+
+protected:
   ~nsPerformance();
 
   nsISupports* GetAsISupports() override
@@ -444,9 +455,6 @@ private:
   void InsertUserEntry(PerformanceEntry* aEntry) override;
 
   bool IsPerformanceTimingAttribute(const nsAString& aName) override;
-
-  DOMHighResTimeStamp
-  DeltaFromNavigationStart(DOMHighResTimeStamp aTime) override;
 
   DOMHighResTimeStamp
   GetPerformanceTimingFromString(const nsAString& aTimingName) override;

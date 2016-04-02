@@ -98,6 +98,7 @@ NS_EVENT_MESSAGE(eHashChange)
 NS_EVENT_MESSAGE(eImageAbort)
 NS_EVENT_MESSAGE(eLoadError)
 NS_EVENT_MESSAGE(ePopState)
+NS_EVENT_MESSAGE(eStorage)
 NS_EVENT_MESSAGE(eBeforeUnload)
 NS_EVENT_MESSAGE(eReadyStateChange)
  
@@ -311,11 +312,17 @@ NS_EVENT_MESSAGE(eGestureNotify)
 
 NS_EVENT_MESSAGE(eScrolledAreaChanged)
 
+// CSS Transition & Animation events:
 NS_EVENT_MESSAGE(eTransitionEnd)
-
 NS_EVENT_MESSAGE(eAnimationStart)
 NS_EVENT_MESSAGE(eAnimationEnd)
 NS_EVENT_MESSAGE(eAnimationIteration)
+
+// Webkit-prefixed versions of Transition & Animation events, for web compat:
+NS_EVENT_MESSAGE(eWebkitTransitionEnd)
+NS_EVENT_MESSAGE(eWebkitAnimationStart)
+NS_EVENT_MESSAGE(eWebkitAnimationEnd)
+NS_EVENT_MESSAGE(eWebkitAnimationIteration)
 
 NS_EVENT_MESSAGE(eSMILBeginEvent)
 NS_EVENT_MESSAGE(eSMILEndEvent)
@@ -338,6 +345,7 @@ NS_EVENT_MESSAGE(eOpen)
 
 // Device motion and orientation
 NS_EVENT_MESSAGE(eDeviceOrientation)
+NS_EVENT_MESSAGE(eAbsoluteDeviceOrientation)
 NS_EVENT_MESSAGE(eDeviceMotion)
 NS_EVENT_MESSAGE(eDeviceProximity)
 NS_EVENT_MESSAGE(eUserProximity)
@@ -351,6 +359,8 @@ NS_EVENT_MESSAGE(eShow)
 // Fullscreen DOM API
 NS_EVENT_MESSAGE(eFullscreenChange)
 NS_EVENT_MESSAGE(eFullscreenError)
+NS_EVENT_MESSAGE(eMozFullscreenChange)
+NS_EVENT_MESSAGE(eMozFullscreenError)
 
 NS_EVENT_MESSAGE(eTouchStart)
 NS_EVENT_MESSAGE(eTouchMove)
@@ -404,6 +414,9 @@ NS_EVENT_MESSAGE(eEditorInput)
 // selection events
 NS_EVENT_MESSAGE(eSelectStart)
 NS_EVENT_MESSAGE(eSelectionChange)
+
+// Details element events.
+NS_EVENT_MESSAGE(eToggle)
 
 #ifdef UNDEF_NS_EVENT_MESSAGE_FIRST_LAST
 #undef UNDEF_NS_EVENT_MESSAGE_FIRST_LAST

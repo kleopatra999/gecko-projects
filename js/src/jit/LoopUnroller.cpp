@@ -68,7 +68,7 @@ LoopUnroller::getReplacementDefinition(MDefinition* def)
         // the block itself.
         MOZ_ASSERT(def->isConstant());
 
-        MConstant* constant = MConstant::New(alloc, def->toConstant()->value());
+        MConstant* constant = new(alloc) MConstant(*def->toConstant());
         oldPreheader->insertBefore(*oldPreheader->begin(), constant);
         return constant;
     }
@@ -204,7 +204,7 @@ LoopUnroller::go(LoopIterationBound* bound)
 
     // The old preheader will go before the unrolled loop, and the old loop
     // will need a new empty preheader.
-    CompileInfo& info = oldPreheader->info();
+    const CompileInfo& info = oldPreheader->info();
     if (header->trackedPc()) {
         unrolledHeader =
             MBasicBlock::New(graph, nullptr, info,

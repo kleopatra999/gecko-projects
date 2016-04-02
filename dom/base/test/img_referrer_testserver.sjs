@@ -14,7 +14,7 @@ function createTestPage(aHead, aImgPolicy, aName) {
          <html>'+
             aHead +
            '<body>\n\
-             <img src="' + _createTestUrl('img') + '" referrer="' + aImgPolicy + '" id="image"></img>\n\
+             <img src="' + _createTestUrl('img') + '" referrerpolicy="' + aImgPolicy + '" id="image"></img>\n\
              <script>' +
 
                // LOAD EVENT (of the test)
@@ -52,9 +52,9 @@ function createTest3(aImgPolicy1, aImgPolicy2, aImgPolicy3, aName) {
   return '<!DOCTYPE HTML>\n\
          <html>\n\
            <body>\n\
-             <img src="' + createTestUrl(aImgPolicy1, 'test', aName + aImgPolicy1) + '" referrer="' + aImgPolicy1 + '" id="image"></img>\n\
-             <img src="' + createTestUrl(aImgPolicy2, 'test', aName + aImgPolicy2) + '" referrer="' + aImgPolicy2 + '" id="image"></img>\n\
-             <img src="' + createTestUrl(aImgPolicy3, 'test', aName + aImgPolicy3) + '" referrer="' + aImgPolicy3 + '" id="image"></img>\n\
+             <img src="' + createTestUrl(aImgPolicy1, 'test', aName + aImgPolicy1) + '" referrerpolicy="' + aImgPolicy1 + '" id="image"></img>\n\
+             <img src="' + createTestUrl(aImgPolicy2, 'test', aName + aImgPolicy2) + '" referrerpolicy="' + aImgPolicy2 + '" id="image"></img>\n\
+             <img src="' + createTestUrl(aImgPolicy3, 'test', aName + aImgPolicy3) + '" referrerpolicy="' + aImgPolicy3 + '" id="image"></img>\n\
              <script>\n\
                var _numLoads = 0;' +
 
@@ -140,7 +140,7 @@ function handleRequest(request, response) {
         let referrer = request.getHeader('Referer');
       if (referrer.indexOf("img_referrer_testserver") > 0) {
         referrerLevel = "full";
-      } else if (referrer == "http://mochi.test:8888") {
+      } else if (referrer == "http://mochi.test:8888/") {
         referrerLevel = "origin";
       }
       test.referrer = request.getHeader('Referer');

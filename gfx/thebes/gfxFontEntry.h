@@ -20,6 +20,7 @@
 #include "nsDataHashtable.h"
 #include "harfbuzz/hb.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/UniquePtr.h"
 
 typedef struct gr_face gr_face;
 
@@ -96,6 +97,8 @@ private:
 
 class gfxFontEntry {
 public:
+    typedef mozilla::gfx::DrawTarget DrawTarget;
+
     NS_INLINE_DECL_REFCOUNTING(gfxFontEntry)
 
     explicit gfxFontEntry(const nsAString& aName, bool aIsStandardFace = false);
@@ -179,7 +182,7 @@ public:
 
     bool TryGetSVGData(gfxFont* aFont);
     bool HasSVGGlyph(uint32_t aGlyphId);
-    bool GetSVGGlyphExtents(gfxContext *aContext, uint32_t aGlyphId,
+    bool GetSVGGlyphExtents(DrawTarget* aDrawTarget, uint32_t aGlyphId,
                             gfxRect *aResult);
     bool RenderSVGGlyph(gfxContext *aContext, uint32_t aGlyphId, int aDrawMode,
                         gfxTextContextPaint *aContextPaint);
@@ -334,7 +337,7 @@ public:
     // Pass nullptr for aBuffer to indicate that the table is not present and
     // nullptr will be returned.  Also returns nullptr on OOM.
     hb_blob_t *ShareFontTableAndGetBlob(uint32_t aTag,
-                                        FallibleTArray<uint8_t>* aTable);
+                                        nsTArray<uint8_t>* aTable);
 
     // Get the font's unitsPerEm from the 'head' table, in the case of an
     // sfnt resource. Will return kInvalidUPEM for non-sfnt fonts,
@@ -429,7 +432,7 @@ public:
 
     RefPtr<gfxCharacterMap> mCharacterMap;
     uint32_t         mUVSOffset;
-    nsAutoArrayPtr<uint8_t> mUVSData;
+    mozilla::UniquePtr<uint8_t[]> mUVSData;
     nsAutoPtr<gfxUserFontData> mUserFontData;
     nsAutoPtr<gfxSVGGlyphs> mSVGGlyphs;
     // list of gfxFonts that are using SVG glyphs
@@ -466,7 +469,7 @@ protected:
     // Copy a font table into aBuffer.
     // The caller will be responsible for ownership of the data.
     virtual nsresult CopyFontTable(uint32_t aTableTag,
-                                   FallibleTArray<uint8_t>& aBuffer) {
+                                   nsTArray<uint8_t>& aBuffer) {
         NS_NOTREACHED("forgot to override either GetFontTable or CopyFontTable?");
         return NS_ERROR_FAILURE;
     }
@@ -602,7 +605,7 @@ private:
         // recorded in the hashtable entry so that others may use the same
         // table.
         hb_blob_t *
-        ShareTableAndGetBlob(FallibleTArray<uint8_t>& aTable,
+        ShareTableAndGetBlob(nsTArray<uint8_t>&& aTable,
                              nsTHashtable<FontTableHashEntry> *aHashtable);
 
         // Return a strong reference to the blob.

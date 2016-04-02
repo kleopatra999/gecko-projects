@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Test that if we black box a source and then refresh, it is still black boxed.
@@ -29,8 +31,8 @@ function testBlackBoxSource() {
   const bbButton = getBlackBoxButton(gPanel);
   ok(!bbButton.checked, "Should not be black boxed by default");
 
-  return toggleBlackBoxing(gPanel).then(aSource => {
-    ok(aSource.isBlackBoxed, "The source should be black boxed now.");
+  return toggleBlackBoxing(gPanel).then(source => {
+    ok(source.isBlackBoxed, "The source should be black boxed now.");
     ok(bbButton.checked, "The checkbox should no longer be checked.");
   });
 }

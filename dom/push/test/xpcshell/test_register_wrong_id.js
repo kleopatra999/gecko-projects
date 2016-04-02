@@ -16,9 +16,6 @@ function run_test() {
     requestTimeout: 1000,
     retryBaseInterval: 150
   });
-  disableServiceWorkerEvents(
-    'https://example.com/mismatched'
-  );
   run_next_test();
 }
 
@@ -59,12 +56,14 @@ add_task(function* test_register_wrong_id() {
   });
 
   yield rejects(
-    PushNotificationService.register('https://example.com/mismatched',
-      ChromeUtils.originAttributesToSuffix({ appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inBrowser: false })),
+    PushService.register({
+      scope: 'https://example.com/mismatched',
+      originAttributes: ChromeUtils.originAttributesToSuffix(
+        { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
+    }),
     'Expected error for mismatched register reply'
   );
 
-  yield waitForPromise(helloPromise, DEFAULT_TIMEOUT,
-    'Reconnect after mismatched register reply timed out');
+  yield helloPromise;
   equal(registers, 1, 'Wrong register count');
 });

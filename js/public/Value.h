@@ -1395,7 +1395,7 @@ class Value
     friend jsval_layout (::JSVAL_TO_IMPL)(Value);
     friend Value JS_VALUE_CONSTEXPR (::IMPL_TO_JSVAL)(jsval_layout l);
     friend Value JS_VALUE_CONSTEXPR (JS::UndefinedValue)();
-};
+} JS_HAZ_GC_POINTER;
 
 inline bool
 IsOptimizedPlaceholderMagicValue(const Value& v)
@@ -1699,14 +1699,18 @@ JS_PUBLIC_API(void) HeapValuePostBarrier(Value* valuep, const Value& prev, const
 
 namespace js {
 
-template <> struct GCMethods<const JS::Value>
+template <>
+struct GCPolicy<JS::Value>
 {
     static JS::Value initial() { return JS::UndefinedValue(); }
+    static void trace(JSTracer* trc, JS::Value* v, const char* name) {
+        js::UnsafeTraceManuallyBarrieredEdge(trc, v, name);
+    }
 };
 
-template <> struct GCMethods<JS::Value>
+template <>
+struct BarrierMethods<JS::Value>
 {
-    static JS::Value initial() { return JS::UndefinedValue(); }
     static gc::Cell* asGCThingOrNull(const JS::Value& v) {
         return v.isMarkable() ? v.toGCThing() : nullptr;
     }

@@ -72,7 +72,7 @@ GetZeroValueForUnit(StyleAnimationValue::Unit aUnit)
 // with a eUnit_Float value.  (See comment below.)
 //
 // Returns true on success, or false.
-static const bool
+static bool
 FinalizeStyleAnimationValues(const StyleAnimationValue*& aValue1,
                              const StyleAnimationValue*& aValue2)
 {
@@ -359,9 +359,15 @@ ValueFromStringHelper(nsCSSProperty aPropID,
       subStringBegin = (uint32_t)absValuePos; // Start parsing after '-' sign
     }
   }
+  RefPtr<nsStyleContext> styleContext =
+    nsComputedDOMStyle::GetStyleContextForElement(aTargetElement, nullptr,
+                                                  aPresContext->PresShell());
+  if (!styleContext) {
+    return false;
+  }
   nsDependentSubstring subString(aString, subStringBegin);
-  if (!StyleAnimationValue::ComputeValue(aPropID, aTargetElement, subString,
-                                         true, aStyleAnimValue,
+  if (!StyleAnimationValue::ComputeValue(aPropID, aTargetElement, styleContext,
+                                         subString, true, aStyleAnimValue,
                                          aIsContextSensitive)) {
     return false;
   }

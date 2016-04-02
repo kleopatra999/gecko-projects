@@ -12,6 +12,7 @@
 #include "gfxMatrix.h"
 #include "gfxRect.h"
 #include "gfxSVGGlyphs.h"
+#include "gfxTextRun.h"
 #include "nsIContent.h" // for GetContent
 #include "nsStubMutationObserver.h"
 #include "nsSVGPaintServerFrame.h"
@@ -212,8 +213,7 @@ public:
 } // namespace mozilla
 
 /**
- * Frame class for SVG <text> elements, used when the
- * layout.svg.css-text.enabled is true.
+ * Frame class for SVG <text> elements.
  *
  * An SVGTextFrame manages SVG text layout, painting and interaction for
  * all descendent text content elements.  The frame tree will look like this:
@@ -259,6 +259,7 @@ class SVGTextFrame final : public SVGTextFrameBase
   friend class MutationObserver;
   friend class nsDisplaySVGText;
 
+  typedef gfxTextRun::Range Range;
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::Path Path;
   typedef mozilla::gfx::Point Point;
@@ -292,7 +293,7 @@ public:
 
   virtual nsContainerFrame* GetContentInsertionFrame() override
   {
-    return GetFirstPrincipalChild()->GetContentInsertionFrame();
+    return PrincipalChildList().FirstChild()->GetContentInsertionFrame();
   }
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,

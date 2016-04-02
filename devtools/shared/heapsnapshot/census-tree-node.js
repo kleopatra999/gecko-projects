@@ -11,10 +11,15 @@
 // HeapAnalysesWorker, and ensure that the **only** work that the main thread
 // has to do is strictly DOM rendering work.
 
-const { Visitor, walk } = require("resource://devtools/shared/heapsnapshot/CensusUtils.js");
+const {
+  Visitor,
+  walk,
+  basisTotalBytes,
+  basisTotalCount,
+} = require("resource://devtools/shared/heapsnapshot/CensusUtils.js");
 
 // Monotonically increasing integer for CensusTreeNode `id`s.
-let INC = 0;
+let censusTreeNodeIdCounter = 0;
 
 /**
  * Return true if the given object is a SavedFrame stack object, false otherwise.
@@ -277,6 +282,9 @@ function CensusTreeNodeVisitor() {
   // The stack of `CensusTreeNodeCache`s that we use to aggregate many
   // SavedFrame stacks into a single CensusTreeNode tree.
   this._cacheStack = [new CensusTreeNodeCache()];
+
+  // The current index in the DFS of the census report tree.
+  this._index = -1;
 }
 
 CensusTreeNodeVisitor.prototype = Object.create(Visitor);
@@ -288,24 +296,30 @@ CensusTreeNodeVisitor.prototype = Object.create(Visitor);
  * @overrides Visitor.prototype.enter
  */
 CensusTreeNodeVisitor.prototype.enter = function (breakdown, report, edge) {
+  this._index++;
+
   const cache = this._cacheStack[this._cacheStack.length - 1];
   makeCensusTreeNodeSubTree(breakdown, report, edge, cache, this._outParams);
   const { top, bottom } = this._outParams;
 
   if (!this._root) {
     this._root = bottom;
-  } else {
-    if (bottom) {
-      addChild(this._nodeStack[this._nodeStack.length - 1], bottom);
-    }
+  } else if (bottom) {
+    addChild(this._nodeStack[this._nodeStack.length - 1], bottom);
   }
 
-  this._cacheStack.push(new CensusTreeNodeCache);
+  this._cacheStack.push(new CensusTreeNodeCache());
   this._nodeStack.push(top);
 };
 
 function values(cache) {
   return Object.keys(cache).map(k => cache[k]);
+}
+
+function isNonEmpty(node) {
+  return (node.children !== undefined && node.children.length)
+      || node.bytes !== 0
+      || node.count !== 0;
 }
 
 /**
@@ -333,6 +347,9 @@ CensusTreeNodeVisitor.prototype.exit = function (breakdown, report, edge) {
     node.totalBytes = node.bytes;
 
     if (node.children) {
+      // Prune empty leaves.
+      node.children = node.children.filter(isNonEmpty);
+
       node.children.sort(compareByTotal);
 
       for (let i = 0, length = node.children.length; i < length; i++) {
@@ -352,6 +369,7 @@ CensusTreeNodeVisitor.prototype.exit = function (breakdown, report, edge) {
  */
 CensusTreeNodeVisitor.prototype.count = function (breakdown, report, edge) {
   const node = this._nodeStack[this._nodeStack.length - 1];
+  node.reportLeafIndex = this._index;
 
   if (breakdown.count) {
     node.count = report.count;
@@ -385,14 +403,55 @@ CensusTreeNodeVisitor.prototype.root = function () {
  * @param {null|String|SavedFrame} name
  */
 function CensusTreeNode(name) {
+  // Display name for this CensusTreeNode. Either null, a string, or a
+  // SavedFrame.
   this.name = name;
+
+  // The number of bytes occupied by matching things in the heap snapshot.
   this.bytes = 0;
+
+  // The sum of `this.bytes` and `child.totalBytes` for each child in
+  // `this.children`.
   this.totalBytes = 0;
+
+  // The number of things in the heap snapshot that match this node in the
+  // census tree.
   this.count = 0;
+
+  // The sum of `this.count` and `child.totalCount` for each child in
+  // `this.children`.
   this.totalCount = 0;
+
+  // An array of this node's children, or undefined if it has no children.
   this.children = undefined;
-  this.id = ++INC;
+
+  // The unique ID of this node.
+  this.id = ++censusTreeNodeIdCounter;
+
+  // If present, the unique ID of this node's parent. If this node does not have
+  // a parent, then undefined.
   this.parent = undefined;
+
+  // The `reportLeafIndex` property allows mapping a CensusTreeNode node back to
+  // a leaf in the census report it was generated from. It is always one of the
+  // following variants:
+  //
+  // * A `Number` index pointing a leaf report in a pre-order DFS traversal of
+  //   this CensusTreeNode's census report.
+  //
+  // * A `Set` object containing such indices, when this is part of an inverted
+  //   CensusTreeNode tree and multiple leaves in the report map onto this node.
+  //
+  // * Finally, `undefined` when no leaves in the census report correspond with
+  //   this node.
+  //
+  // The first and third cases are the common cases. The second case is rather
+  // uncommon, and to avoid doubling the number of allocations when creating
+  // CensusTreeNode trees, and objects that get structured cloned when sending
+  // such trees from the HeapAnalysesWorker to the main thread, we only allocate
+  // a Set object once a node actually does have multiple leaves it corresponds
+  // to.
+  this.reportLeafIndex = undefined;
 }
 
 CensusTreeNode.prototype = null;
@@ -408,10 +467,10 @@ CensusTreeNode.prototype = null;
  *          A number suitable for using with Array.prototype.sort.
  */
 function compareByTotal(node1, node2) {
-  return node2.totalBytes - node1.totalBytes
-      || node2.totalCount - node1.totalCount
-      || node2.bytes      - node1.bytes
-      || node2.count      - node1.count;
+  return Math.abs(node2.totalBytes) - Math.abs(node1.totalBytes)
+      || Math.abs(node2.totalCount) - Math.abs(node1.totalCount)
+      || Math.abs(node2.bytes)      - Math.abs(node1.bytes)
+      || Math.abs(node2.count)      - Math.abs(node1.count);
 }
 
 /**
@@ -425,10 +484,10 @@ function compareByTotal(node1, node2) {
  *          A number suitable for using with Array.prototype.sort.
  */
 function compareBySelf(node1, node2) {
-  return node2.bytes      - node1.bytes
-      || node2.count      - node1.count
-      || node2.totalBytes - node1.totalBytes
-      || node2.totalCount - node1.totalCount;
+  return Math.abs(node2.bytes)      - Math.abs(node1.bytes)
+      || Math.abs(node2.count)      - Math.abs(node1.count)
+      || Math.abs(node2.totalBytes) - Math.abs(node1.totalBytes)
+      || Math.abs(node2.totalCount) - Math.abs(node1.totalCount);
 }
 
 /**
@@ -452,14 +511,28 @@ function insertOrMergeNode(parentCacheValue, node) {
   let val = CensusTreeNodeCache.lookupNode(parentCacheValue.children, node);
 
   if (val) {
+    // When inverting, it is possible that multiple leaves in the census report
+    // get merged into a single CensusTreeNode node. When this occurs, switch
+    // from a single index to a set of indices.
+    if (val.node.reportLeafIndex !== undefined &&
+        val.node.reportLeafIndex !== node.reportLeafIndex) {
+      if (typeof val.node.reportLeafIndex === "number") {
+        const oldIndex = val.node.reportLeafIndex;
+        val.node.reportLeafIndex = new Set();
+        val.node.reportLeafIndex.add(oldIndex);
+        val.node.reportLeafIndex.add(node.reportLeafIndex);
+      } else {
+        val.node.reportLeafIndex.add(node.reportLeafIndex);
+      }
+    }
+
     val.node.count += node.count;
-    val.node.totalCount += node.totalCount;
     val.node.bytes += node.bytes;
-    val.node.totalBytes += node.totalBytes;
   } else {
     val = new CensusTreeNodeCacheValue();
 
     val.node = new CensusTreeNode(node.name);
+    val.node.reportLeafIndex = node.reportLeafIndex;
     val.node.count = node.count;
     val.node.totalCount = node.totalCount;
     val.node.bytes = node.bytes;
@@ -510,17 +583,9 @@ function invert(tree) {
     path.pop();
   }(tree));
 
-  // Next, do a depth-first search of the inverted tree and ensure that siblings
-  // are sorted by their self bytes/count.
-
-  (function ensureSorted(node) {
-    if (node.children) {
-      node.children.sort(compareBySelf);
-      for (let i = 0, length = node.children.length; i < length; i++) {
-        ensureSorted(node.children[i]);
-      }
-    }
-  }(inverted.node));
+  // Ensure that the root node always has the totals.
+  inverted.node.totalBytes = tree.totalBytes;
+  inverted.node.totalCount = tree.totalCount;
 
   return inverted.node;
 }
@@ -540,10 +605,6 @@ function invert(tree) {
 function filter(tree, predicate) {
   const filtered = new CensusTreeNodeCacheValue();
   filtered.node = new CensusTreeNode(null);
-  filtered.node.count = tree.count;
-  filtered.node.totalCount = tree.totalCount;
-  filtered.node.bytes = tree.bytes;
-  filtered.node.totalBytes = tree.totalBytes;
 
   // Do a DFS over the given tree. If the predicate returns true for any node,
   // add that node and its whole subtree to the filtered tree.
@@ -580,6 +641,11 @@ function filter(tree, predicate) {
       addMatchingNodes(tree.children[i]);
     }
   }
+
+  filtered.node.count = tree.count;
+  filtered.node.totalCount = tree.totalCount;
+  filtered.node.bytes = tree.bytes;
+  filtered.node.totalBytes = tree.totalBytes;
 
   return filtered.node;
 };
@@ -642,11 +708,41 @@ exports.censusReportToCensusTreeNode = function (breakdown, report,
                                                    invert: false,
                                                    filter: null
                                                  }) {
+  // Reset the counter so that turning the same census report into a
+  // CensusTreeNode tree repeatedly is idempotent.
+  censusTreeNodeIdCounter = 0;
+
   const visitor = new CensusTreeNodeVisitor();
   walk(breakdown, report, visitor);
-  const root = visitor.root();
-  const result = options.invert ? invert(root) : root;
-  return typeof options.filter === "string"
-    ? filter(result, makeFilterPredicate(options.filter))
-    : result;
+  let result = visitor.root();
+
+  if (options.invert) {
+    result = invert(result);
+  }
+
+  if (typeof options.filter === "string") {
+    result = filter(result, makeFilterPredicate(options.filter));
+  }
+
+  // If the report is a delta report that was generated by diffing two other
+  // reports, make sure to use the basis totals rather than the totals of the
+  // difference.
+  if (typeof report[basisTotalBytes] === "number") {
+    result.totalBytes = report[basisTotalBytes];
+    result.totalCount = report[basisTotalCount];
+  }
+
+  // Inverting and filtering could have messed up the sort order, so do a
+  // depth-first search of the tree and ensure that siblings are sorted.
+  const comparator = options.invert ? compareBySelf : compareByTotal;
+  (function ensureSorted(node) {
+    if (node.children) {
+      node.children.sort(comparator);
+      for (let i = 0, length = node.children.length; i < length; i++) {
+        ensureSorted(node.children[i]);
+      }
+    }
+  }(result));
+
+  return result;
 };

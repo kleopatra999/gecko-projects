@@ -53,7 +53,7 @@ nsXMLPrettyPrinter::PrettyPrint(nsIDocument* aDocument,
     }
 
     // check if we're in an invisible iframe
-    nsPIDOMWindow *internalWin = aDocument->GetWindow();
+    nsPIDOMWindowOuter *internalWin = aDocument->GetWindow();
     nsCOMPtr<Element> frameElem;
     if (internalWin) {
         frameElem = internalWin->GetFrameElementInternal();
@@ -62,15 +62,15 @@ nsXMLPrettyPrinter::PrettyPrint(nsIDocument* aDocument,
     if (frameElem) {
         nsCOMPtr<nsICSSDeclaration> computedStyle;
         if (nsIDocument* frameOwnerDoc = frameElem->OwnerDoc()) {
-            nsCOMPtr<nsIDOMWindow> window = frameOwnerDoc->GetDefaultView();
-            nsCOMPtr<nsPIDOMWindow> piWindow = do_QueryInterface(window);
-            if (piWindow) {
-                piWindow = piWindow->GetCurrentInnerWindow();
+            nsPIDOMWindowOuter* window = frameOwnerDoc->GetDefaultView();
+            if (window) {
+                nsCOMPtr<nsPIDOMWindowInner> innerWindow =
+                    window->GetCurrentInnerWindow();
 
                 ErrorResult dummy;
-                computedStyle = piWindow->GetComputedStyle(*frameElem,
-                                                           EmptyString(),
-                                                           dummy);
+                computedStyle = innerWindow->GetComputedStyle(*frameElem,
+                                                              EmptyString(),
+                                                              dummy);
                 dummy.SuppressException();
             }
         }
@@ -171,7 +171,7 @@ nsXMLPrettyPrinter::PrettyPrint(nsIDocument* aDocument,
     NS_ENSURE_SUCCESS(rv, rv);
     event->SetTrusted(true);
     bool dummy;
-    rv = rootCont->DispatchEvent(static_cast<Event*>(event), &dummy);
+    rv = rootCont->DispatchEvent(event, &dummy);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // Observe the document so we know when to switch to "normal" view

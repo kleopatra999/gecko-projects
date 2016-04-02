@@ -28,6 +28,48 @@ interface ChromeUtils : ThreadSafeChromeUtils {
   static boolean
   originAttributesMatchPattern(optional OriginAttributesDictionary originAttrs,
                                optional OriginAttributesPatternDictionary pattern);
+
+  /**
+   * Returns an OriginAttributesDictionary with all default attributes added
+   * and assigned default values.
+   *
+   * @returns                 An OriginAttributesDictionary populated with the
+   *                          default attributes added and assigned default values.
+   */
+  static OriginAttributesDictionary
+  createDefaultOriginAttributes();
+
+  /**
+   * Returns an OriginAttributesDictionary with values from the |origin| suffix
+   * and unspecified attributes added and assigned default values.
+   *
+   * @param origin            The origin URI to create from.
+   * @returns                 An OriginAttributesDictionary with values from
+   *                          the origin suffix and unspecified attributes
+   *                          added and assigned default values.
+   */
+  [Throws]
+  static OriginAttributesDictionary
+  createOriginAttributesFromOrigin(DOMString origin);
+
+  /**
+   * Returns an OriginAttributesDictionary that is a copy of |originAttrs| with
+   * unspecified attributes added and assigned default values.
+   *
+   * @param originAttrs       The origin attributes to copy.
+   * @returns                 An OriginAttributesDictionary copy of |originAttrs|
+   *                          with unspecified attributes added and assigned
+   *                          default values.
+   */
+  static OriginAttributesDictionary
+  createOriginAttributesFromDict(optional OriginAttributesDictionary originAttrs);
+
+  /**
+   * Returns true if the 2 OriginAttributes are equal.
+   */
+  static boolean
+  isOriginAttributesEqual(optional OriginAttributesDictionary aA,
+                          optional OriginAttributesDictionary aB);
 };
 
 /**
@@ -39,20 +81,20 @@ interface ChromeUtils : ThreadSafeChromeUtils {
  * IMPORTANT: If you add any members here, you need to do the following:
  * (1) Add them to both dictionaries.
  * (2) Update the methods on mozilla::OriginAttributes, including equality,
- *     serialization, and deserialization.
+ *     serialization, deserialization, and inheritance.
  * (3) Update the methods on mozilla::OriginAttributesPattern, including matching.
  */
 dictionary OriginAttributesDictionary {
   unsigned long appId = 0;
   unsigned long userContextId = 0;
-  boolean inBrowser = false;
+  boolean inIsolatedMozBrowser = false;
   DOMString addonId = "";
   DOMString signedPkg = "";
 };
 dictionary OriginAttributesPatternDictionary {
   unsigned long appId;
   unsigned long userContextId;
-  boolean inBrowser;
+  boolean inIsolatedMozBrowser;
   DOMString addonId;
   DOMString signedPkg;
 };

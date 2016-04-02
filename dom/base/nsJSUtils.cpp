@@ -83,19 +83,8 @@ nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(JSContext *aContext)
   if (!aContext)
     return 0;
 
-  uint64_t innerWindowID = 0;
-
-  JSObject *jsGlobal = JS::CurrentGlobalOrNull(aContext);
-  if (jsGlobal) {
-    nsIScriptGlobalObject *scriptGlobal = GetStaticScriptGlobal(jsGlobal);
-    if (scriptGlobal) {
-      nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(scriptGlobal);
-      if (win)
-        innerWindowID = win->WindowID();
-    }
-  }
-
-  return innerWindowID;
+  nsGlobalWindow* win = xpc::CurrentWindowOrNull(aContext);
+  return win ? win->WindowID() : 0;
 }
 
 nsresult
@@ -108,7 +97,6 @@ nsJSUtils::CompileFunction(AutoJSAPI& jsapi,
                            const nsAString& aBody,
                            JSObject** aFunctionObject)
 {
-  MOZ_ASSERT(jsapi.OwnsErrorReporting());
   JSContext* cx = jsapi.cx();
   MOZ_ASSERT(js::GetEnterCompartmentDepth(cx) > 0);
   MOZ_ASSERT_IF(aScopeChain.length() != 0,
@@ -233,7 +221,12 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   }
 
   if (!ok) {
-    rv = NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW;
+    if (JS_IsExceptionPending(aCx)) {
+      rv = NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW;
+    } else {
+      rv = NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW_UNCATCHABLE;
+    }
+
     if (!aCompileOptions.noScriptRval) {
       aRetValue.setUndefined();
     }

@@ -25,6 +25,39 @@ template<typename T, class D = DefaultDelete<T>> class UniquePtr;
 
 namespace mozilla {
 
+namespace detail {
+
+struct HasPointerTypeHelper
+{
+  template <class U> static double Test(...);
+  template <class U> static char Test(typename U::pointer* = 0);
+};
+
+template <class T>
+class HasPointerType : public IntegralConstant<bool, sizeof(HasPointerTypeHelper::Test<T>(0)) == 1>
+{
+};
+
+template <class T, class D, bool = HasPointerType<D>::value>
+struct PointerTypeImpl
+{
+  typedef typename D::pointer Type;
+};
+
+template <class T, class D>
+struct PointerTypeImpl<T, D, false>
+{
+  typedef T* Type;
+};
+
+template <class T, class D>
+struct PointerType
+{
+  typedef typename PointerTypeImpl<T, typename RemoveReference<D>::Type>::Type Type;
+};
+
+} // namespace detail
+
 /**
  * UniquePtr is a smart pointer that wholly owns a resource.  Ownership may be
  * transferred out of a UniquePtr through explicit action, but otherwise the
@@ -154,9 +187,9 @@ template<typename T, class D>
 class UniquePtr
 {
 public:
-  typedef T* Pointer;
   typedef T ElementType;
   typedef D DeleterType;
+  typedef typename detail::PointerType<T, DeleterType>::Type Pointer;
 
 private:
   Pair<Pointer, DeleterType> mTuple;
@@ -226,7 +259,7 @@ public:
   }
 
   UniquePtr(UniquePtr&& aOther)
-    : mTuple(aOther.release(), Forward<DeleterType>(aOther.getDeleter()))
+    : mTuple(aOther.release(), Forward<DeleterType>(aOther.get_deleter()))
   {}
 
   MOZ_IMPLICIT
@@ -247,7 +280,7 @@ public:
                                ? IsSame<D, E>::value
                                : IsConvertible<E, D>::value),
                               int>::Type aDummy = 0)
-    : mTuple(aOther.release(), Forward<E>(aOther.getDeleter()))
+    : mTuple(aOther.release(), Forward<E>(aOther.get_deleter()))
   {
   }
 
@@ -256,7 +289,7 @@ public:
   UniquePtr& operator=(UniquePtr&& aOther)
   {
     reset(aOther.release());
-    getDeleter() = Forward<DeleterType>(aOther.getDeleter());
+    get_deleter() = Forward<DeleterType>(aOther.get_deleter());
     return *this;
   }
 
@@ -270,7 +303,7 @@ public:
                   "can't assign from UniquePtr holding an array");
 
     reset(aOther.release());
-    getDeleter() = Forward<E>(aOther.getDeleter());
+    get_deleter() = Forward<E>(aOther.get_deleter());
     return *this;
   }
 
@@ -291,10 +324,10 @@ public:
 
   Pointer get() const { return ptr(); }
 
-  DeleterType& getDeleter() { return del(); }
-  const DeleterType& getDeleter() const { return del(); }
+  DeleterType& get_deleter() { return del(); }
+  const DeleterType& get_deleter() const { return del(); }
 
-  Pointer release()
+  MOZ_WARN_UNUSED_RESULT Pointer release()
   {
     Pointer p = ptr();
     ptr() = nullptr;
@@ -306,7 +339,7 @@ public:
     Pointer old = ptr();
     ptr() = aPtr;
     if (old != nullptr) {
-      getDeleter()(old);
+      get_deleter()(old);
     }
   }
 
@@ -395,7 +428,7 @@ public:
   = delete;
 
   UniquePtr(UniquePtr&& aOther)
-    : mTuple(aOther.release(), Forward<DeleterType>(aOther.getDeleter()))
+    : mTuple(aOther.release(), Forward<DeleterType>(aOther.get_deleter()))
   {}
 
   MOZ_IMPLICIT
@@ -411,7 +444,7 @@ public:
   UniquePtr& operator=(UniquePtr&& aOther)
   {
     reset(aOther.release());
-    getDeleter() = Forward<DeleterType>(aOther.getDeleter());
+    get_deleter() = Forward<DeleterType>(aOther.get_deleter());
     return *this;
   }
 
@@ -426,10 +459,10 @@ public:
   T& operator[](decltype(sizeof(int)) aIndex) const { return get()[aIndex]; }
   Pointer get() const { return mTuple.first(); }
 
-  DeleterType& getDeleter() { return mTuple.second(); }
-  const DeleterType& getDeleter() const { return mTuple.second(); }
+  DeleterType& get_deleter() { return mTuple.second(); }
+  const DeleterType& get_deleter() const { return mTuple.second(); }
 
-  Pointer release()
+  MOZ_WARN_UNUSED_RESULT Pointer release()
   {
     Pointer p = mTuple.first();
     mTuple.first() = nullptr;
@@ -463,7 +496,19 @@ public:
   void operator=(const UniquePtr& aOther) = delete; // assign using Move()!
 };
 
-/** A default deletion policy using plain old operator delete. */
+/**
+ * A default deletion policy using plain old operator delete.
+ *
+ * Note that this type can be specialized, but authors should beware of the risk
+ * that the specialization may at some point cease to match (either because it
+ * gets moved to a different compilation unit or the signature changes). If the
+ * non-specialized (|delete|-based) version compiles for that type but does the
+ * wrong thing, bad things could happen.
+ *
+ * This is a non-issue for types which are always incomplete (i.e. opaque handle
+ * types), since |delete|-ing such a type will always trigger a compilation
+ * error.
+ */
 template<typename T>
 class DefaultDelete
 {

@@ -8,10 +8,11 @@
 #include <limits>
 #include "Intervals.h"
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/Logging.h"
 
 #if defined(MOZ_FMP4)
-extern PRLogModuleInfo* GetDemuxerLog();
+extern mozilla::LogModule* GetDemuxerLog();
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -28,7 +29,7 @@ using namespace mozilla;
 
 bool
 MoofParser::RebuildFragmentedIndex(
-  const nsTArray<mozilla::MediaByteRange>& aByteRanges)
+  const MediaByteRangeSet& aByteRanges)
 {
   BoxContext context(mSource, aByteRanges);
   return RebuildFragmentedIndex(context);
@@ -41,11 +42,11 @@ MoofParser::RebuildFragmentedIndex(BoxContext& aContext)
   bool foundMdat = false;
 
   for (Box box(&aContext, mOffset); box.IsAvailable(); box = box.Next()) {
-    if (box.IsType("moov") && mInitRange.IsNull()) {
+    if (box.IsType("moov") && mInitRange.IsEmpty()) {
       mInitRange = MediaByteRange(0, box.Range().mEnd);
       ParseMoov(box);
     } else if (box.IsType("moof")) {
-      Moof moof(box, mTrex, mMvhd, mMdhd, mEdts, mSinf, mIsAudio);
+      Moof moof(box, mTrex, mMvhd, mMdhd, mEdts, mSinf, &mLastDecodeTime, mIsAudio);
 
       if (!moof.IsValid() && !box.Next().IsAvailable()) {
         // Moof isn't valid abort search for now.
@@ -68,7 +69,7 @@ MoofParser::RebuildFragmentedIndex(BoxContext& aContext)
       media::Interval<int64_t> mdat(box.Range().mStart, box.Range().mEnd, 0);
       if (datarange.Intersects(mdat)) {
         mMediaRanges.LastElement() =
-          mMediaRanges.LastElement().Extents(box.Range());
+          mMediaRanges.LastElement().Span(box.Range());
       }
     }
     mOffset = box.NextOffset();
@@ -128,15 +129,15 @@ MoofParser::BlockingReadNextMoof()
 {
   int64_t length = std::numeric_limits<int64_t>::max();
   mSource->Length(&length);
-  nsTArray<MediaByteRange> byteRanges;
-  byteRanges.AppendElement(MediaByteRange(0, length));
+  MediaByteRangeSet byteRanges;
+  byteRanges += MediaByteRange(0, length);
   RefPtr<mp4_demuxer::BlockingStream> stream = new BlockingStream(mSource);
 
   BoxContext context(stream, byteRanges);
   for (Box box(&context, mOffset); box.IsAvailable(); box = box.Next()) {
     if (box.IsType("moof")) {
       byteRanges.Clear();
-      byteRanges.AppendElement(MediaByteRange(mOffset, box.Range().mEnd));
+      byteRanges += MediaByteRange(mOffset, box.Range().mEnd);
       return RebuildFragmentedIndex(context);
     }
   }
@@ -149,8 +150,8 @@ MoofParser::ScanForMetadata(mozilla::MediaByteRange& aFtyp,
 {
   int64_t length = std::numeric_limits<int64_t>::max();
   mSource->Length(&length);
-  nsTArray<MediaByteRange> byteRanges;
-  byteRanges.AppendElement(MediaByteRange(0, length));
+  MediaByteRangeSet byteRanges;
+  byteRanges += MediaByteRange(0, length);
   RefPtr<mp4_demuxer::BlockingStream> stream = new BlockingStream(mSource);
 
   BoxContext context(stream, byteRanges);
@@ -164,7 +165,7 @@ MoofParser::ScanForMetadata(mozilla::MediaByteRange& aFtyp,
       break;
     }
   }
-  mInitRange = aFtyp.Extents(aMoov);
+  mInitRange = aFtyp.Span(aMoov);
 }
 
 bool
@@ -182,11 +183,20 @@ MoofParser::Metadata()
   MediaByteRange ftyp;
   MediaByteRange moov;
   ScanForMetadata(ftyp, moov);
-  if (!ftyp.Length() || !moov.Length()) {
+  CheckedInt<MediaByteBuffer::size_type> ftypLength = ftyp.Length();
+  CheckedInt<MediaByteBuffer::size_type> moovLength = moov.Length();
+  if (!ftypLength.isValid() || !moovLength.isValid()
+      || !ftypLength.value() || !moovLength.value()) {
+    // No ftyp or moov, or they cannot be used as array size.
+    return nullptr;
+  }
+  CheckedInt<MediaByteBuffer::size_type> totalLength = ftypLength + moovLength;
+  if (!totalLength.isValid()) {
+    // Addition overflow, or sum cannot be used as array size.
     return nullptr;
   }
   RefPtr<MediaByteBuffer> metadata = new MediaByteBuffer();
-  if (!metadata->SetLength(ftyp.Length() + moov.Length(), fallible)) {
+  if (!metadata->SetLength(totalLength.value(), fallible)) {
     // OOM
     return nullptr;
   }
@@ -194,20 +204,20 @@ MoofParser::Metadata()
   RefPtr<mp4_demuxer::BlockingStream> stream = new BlockingStream(mSource);
   size_t read;
   bool rv =
-    stream->ReadAt(ftyp.mStart, metadata->Elements(), ftyp.Length(), &read);
-  if (!rv || read != ftyp.Length()) {
+    stream->ReadAt(ftyp.mStart, metadata->Elements(), ftypLength.value(), &read);
+  if (!rv || read != ftypLength.value()) {
     return nullptr;
   }
   rv =
-    stream->ReadAt(moov.mStart, metadata->Elements() + ftyp.Length(), moov.Length(), &read);
-  if (!rv || read != moov.Length()) {
+    stream->ReadAt(moov.mStart, metadata->Elements() + ftypLength.value(), moovLength.value(), &read);
+  if (!rv || read != moovLength.value()) {
     return nullptr;
   }
   return metadata.forget();
 }
 
 Interval<Microseconds>
-MoofParser::GetCompositionRange(const nsTArray<MediaByteRange>& aByteRanges)
+MoofParser::GetCompositionRange(const MediaByteRangeSet& aByteRanges)
 {
   Interval<Microseconds> compositionRange;
   BoxContext context(mSource, aByteRanges);
@@ -336,13 +346,13 @@ MoofParser::ParseEncrypted(Box& aBox)
   }
 }
 
-Moof::Moof(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, Sinf& aSinf, bool aIsAudio)
+Moof::Moof(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, Sinf& aSinf, uint64_t* aDecodeTime, bool aIsAudio)
   : mRange(aBox.Range())
   , mMaxRoundingError(35000)
 {
   for (Box box = aBox.FirstChild(); box.IsAvailable(); box = box.Next()) {
     if (box.IsType("traf")) {
-      ParseTraf(box, aTrex, aMvhd, aMdhd, aEdts, aSinf, aIsAudio);
+      ParseTraf(box, aTrex, aMvhd, aMdhd, aEdts, aSinf, aDecodeTime, aIsAudio);
     }
   }
   if (IsValid()) {
@@ -415,8 +425,9 @@ Moof::ProcessCenc()
 }
 
 void
-Moof::ParseTraf(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, Sinf& aSinf, bool aIsAudio)
+Moof::ParseTraf(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, Sinf& aSinf, uint64_t* aDecodeTime, bool aIsAudio)
 {
+  MOZ_ASSERT(aDecodeTime);
   Tfhd tfhd(aTrex);
   Tfdt tfdt;
   for (Box box = aBox.FirstChild(); box.IsAvailable(); box = box.Next()) {
@@ -435,12 +446,9 @@ Moof::ParseTraf(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, S
   if (aTrex.mTrackId && tfhd.mTrackId != aTrex.mTrackId) {
     return;
   }
-  if (!tfdt.IsValid()) {
-    LOG(Moof, "Invalid tfdt dependency");
-    return;
-  }
   // Now search for TRUN boxes.
-  uint64_t decodeTime = tfdt.mBaseMediaDecodeTime;
+  uint64_t decodeTime =
+    tfdt.IsValid() ? tfdt.mBaseMediaDecodeTime : *aDecodeTime;
   for (Box box = aBox.FirstChild(); box.IsAvailable(); box = box.Next()) {
     if (box.IsType("trun")) {
       if (ParseTrun(box, tfhd, aMvhd, aMdhd, aEdts, &decodeTime, aIsAudio)) {
@@ -451,6 +459,7 @@ Moof::ParseTraf(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, S
       }
     }
   }
+  *aDecodeTime = decodeTime;
 }
 
 void
@@ -559,7 +568,7 @@ Moof::ParseTrun(Box& aBox, Tfhd& aTfhd, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, u
     // FIXME: Make this infallible after bug 968520 is done.
     MOZ_ALWAYS_TRUE(mIndex.AppendElement(sample, fallible));
 
-    mMdatRange = mMdatRange.Extents(sample.mByteRange);
+    mMdatRange = mMdatRange.Span(sample.mByteRange);
   }
   mMaxRoundingError += aMdhd.ToMicroseconds(sampleCount);
 
@@ -691,9 +700,10 @@ Tfhd::Tfhd(Box& aBox, Trex& aTrex)
   mFlags = reader->ReadU32();
   size_t need = sizeof(uint32_t) /* trackid */;
   uint8_t flag[] = { 1, 2, 8, 0x10, 0x20, 0 };
+  uint8_t flagSize[] = { sizeof(uint64_t), sizeof(uint32_t), sizeof(uint32_t), sizeof(uint32_t), sizeof(uint32_t) };
   for (size_t i = 0; flag[i]; i++) {
     if (mFlags & flag[i]) {
-      need += sizeof(uint32_t);
+      need += flagSize[i];
     }
   }
   if (reader->Remaining() < need) {
@@ -701,9 +711,9 @@ Tfhd::Tfhd(Box& aBox, Trex& aTrex)
         (uint64_t)reader->Remaining(), (uint64_t)need);
     return;
   }
-  mBaseDataOffset =
-    mFlags & 1 ? reader->ReadU32() : aBox.Parent()->Parent()->Offset();
   mTrackId = reader->ReadU32();
+  mBaseDataOffset =
+    mFlags & 1 ? reader->ReadU64() : aBox.Parent()->Parent()->Offset();
   if (mFlags & 2) {
     mDefaultSampleDescriptionIndex = reader->ReadU32();
   }

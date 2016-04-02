@@ -238,6 +238,7 @@ class UnboxedPlainObject : public JSObject
     uint8_t data_[1];
 
   public:
+    static const ObjectOps objectOps_;
     static const Class class_;
 
     static bool obj_lookupProperty(JSContext* cx, HandleObject obj,
@@ -245,7 +246,7 @@ class UnboxedPlainObject : public JSObject
                                    MutableHandleShape propp);
 
     static bool obj_defineProperty(JSContext* cx, HandleObject obj, HandleId id,
-                                   Handle<JSPropertyDescriptor> desc,
+                                   Handle<PropertyDescriptor> desc,
                                    ObjectOpResult& result);
 
     static bool obj_hasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* foundp);
@@ -257,7 +258,7 @@ class UnboxedPlainObject : public JSObject
                                 HandleValue receiver, ObjectOpResult& result);
 
     static bool obj_getOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
-                                             MutableHandle<JSPropertyDescriptor> desc);
+                                             MutableHandle<PropertyDescriptor> desc);
 
     static bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                    ObjectOpResult& result);
@@ -374,6 +375,7 @@ class UnboxedArrayObject : public JSObject
     static uint32_t exactCapacityIndex(uint32_t capacity);
 
   public:
+    static const ObjectOps objectOps_;
     static const Class class_;
 
     static bool obj_lookupProperty(JSContext* cx, HandleObject obj,
@@ -381,7 +383,7 @@ class UnboxedArrayObject : public JSObject
                                    MutableHandleShape propp);
 
     static bool obj_defineProperty(JSContext* cx, HandleObject obj, HandleId id,
-                                   Handle<JSPropertyDescriptor> desc,
+                                   Handle<PropertyDescriptor> desc,
                                    ObjectOpResult& result);
 
     static bool obj_hasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* foundp);
@@ -393,7 +395,7 @@ class UnboxedArrayObject : public JSObject
                                 HandleValue receiver, ObjectOpResult& result);
 
     static bool obj_getOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
-                                             MutableHandle<JSPropertyDescriptor> desc);
+                                             MutableHandle<PropertyDescriptor> desc);
 
     static bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                    ObjectOpResult& result);

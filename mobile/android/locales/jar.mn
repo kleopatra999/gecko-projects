@@ -7,19 +7,13 @@
 @AB_CD@.jar:
 % locale browser @AB_CD@ %locale/@AB_CD@/browser/
   locale/@AB_CD@/browser/about.dtd                (%chrome/about.dtd)
-#ifndef MOZ_ANDROID_NATIVE_ACCOUNT_UI
   locale/@AB_CD@/browser/aboutAccounts.dtd        (%chrome/aboutAccounts.dtd)
   locale/@AB_CD@/browser/aboutAccounts.properties (%chrome/aboutAccounts.properties)
-#endif
   locale/@AB_CD@/browser/aboutAddons.dtd          (%chrome/aboutAddons.dtd)
   locale/@AB_CD@/browser/aboutAddons.properties   (%chrome/aboutAddons.properties)
-#ifdef MOZ_DEVICES
-  locale/@AB_CD@/browser/aboutDevices.dtd         (%chrome/aboutDevices.dtd)
-#endif
   locale/@AB_CD@/browser/aboutCertError.dtd       (%chrome/aboutCertError.dtd)
   locale/@AB_CD@/browser/aboutDownloads.dtd       (%chrome/aboutDownloads.dtd)
   locale/@AB_CD@/browser/aboutDownloads.properties (%chrome/aboutDownloads.properties)
-  locale/@AB_CD@/browser/aboutFeedback.dtd        (%chrome/aboutFeedback.dtd)
   locale/@AB_CD@/browser/aboutHome.dtd            (%chrome/aboutHome.dtd)
   locale/@AB_CD@/browser/aboutHome.properties     (%chrome/aboutHome.properties)
   locale/@AB_CD@/browser/aboutPrivateBrowsing.dtd (%chrome/aboutPrivateBrowsing.dtd)
@@ -38,9 +32,7 @@
   locale/@AB_CD@/browser/prompt.dtd               (%chrome/prompt.dtd)
   locale/@AB_CD@/browser/feedback.dtd             (%chrome/feedback.dtd)
   locale/@AB_CD@/browser/phishing.dtd             (%chrome/phishing.dtd)
-  locale/@AB_CD@/browser/payments.properties      (%chrome/payments.properties)
   locale/@AB_CD@/browser/handling.properties      (%chrome/handling.properties)
-  locale/@AB_CD@/browser/webapp.properties        (%chrome/webapp.properties)
   locale/@AB_CD@/browser/aboutLogins.dtd          (%chrome/aboutLogins.dtd)
   locale/@AB_CD@/browser/aboutLogins.properties  (%chrome/aboutLogins.properties)
 #ifdef NIGHTLY_BUILD

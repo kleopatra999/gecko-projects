@@ -133,17 +133,17 @@ nsWindow::~nsWindow()
 }
 
 nsresult
-nsWindow::Create(nsIWidget        *aParent,
-                 nsNativeWidget    aNativeParent,
-                 const nsIntRect  &aRect,
-                 nsWidgetInitData *aInitData)
+nsWindow::Create(nsIWidget* aParent,
+                 nsNativeWidget aNativeParent,
+                 const LayoutDeviceIntRect& aRect,
+                 nsWidgetInitData* aInitData)
 {
     // only set the base parent if we're not going to be a dialog or a
     // toplevel
     nsIWidget *baseParent = aParent;
 
     // initialize all the common bits of this class
-    BaseCreate(baseParent, aRect, aInitData);
+    BaseCreate(baseParent, aInitData);
 
     mVisible = true;
 
@@ -597,7 +597,7 @@ nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& aConfigura
     for (uint32_t i = 0; i < aConfigurations.Length(); ++i) {
         const Configuration& configuration = aConfigurations[i];
 
-        nsWindow* w = static_cast<nsWindow*>(configuration.mChild);
+        nsWindow* w = static_cast<nsWindow*>(configuration.mChild.get());
         NS_ASSERTION(w->GetParent() == this,
                      "Configured widget is not a child");
 
@@ -613,10 +613,10 @@ nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& aConfigura
 }
 
 NS_IMETHODIMP
-nsWindow::Invalidate(const nsIntRect &aRect)
+nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 {
     LOGDRAW(("Invalidate (rect) [%p,%p]: %d %d %d %d\n", (void *)this,
-             (void*)mWidget,aRect.x, aRect.y, aRect.width, aRect.height));
+             (void*)mWidget, aRect.x, aRect.y, aRect.width, aRect.height));
 
     if (!mWidget) {
         return NS_OK;
@@ -659,6 +659,15 @@ nsWindow::GetNativeData(uint32_t aDataType)
     case NS_NATIVE_GRAPHIC:
     case NS_NATIVE_SHELLWIDGET: {
         break;
+    }
+    case NS_RAW_NATIVE_IME_CONTEXT: {
+        void* pseudoIMEContext = GetPseudoIMEContext();
+        if (pseudoIMEContext) {
+            return pseudoIMEContext;
+        }
+        // Our qt widget looks like using only one context per process.
+        // However, it's better to set the context's pointer.
+        return qApp->inputMethod();
     }
     default:
         NS_WARNING("nsWindow::GetNativeData called with bad value");
@@ -712,10 +721,6 @@ NS_IMETHODIMP_(InputContext)
 nsWindow::GetInputContext()
 {
     mInputContext.mIMEState.mOpen = IMEState::OPEN_STATE_NOT_SUPPORTED;
-    // Our qt widget looks like using only one context per process.
-    // However, it's better to set the context's pointer.
-    mInputContext.mNativeIMEContext = qApp->inputMethod();
-
     return mInputContext;
 }
 
@@ -871,7 +876,8 @@ nsWindow::OnPaint()
 
     switch (GetLayerManager()->GetBackendType()) {
         case mozilla::layers::LayersBackend::LAYERS_CLIENT: {
-            nsIntRegion region(nsIntRect(0, 0, mWidget->width(), mWidget->height()));
+            LayoutDeviceIntRegion region(
+              LayoutDeviceIntRect(0, 0, mWidget->width(), mWidget->height()));
             listener->PaintWindow(this, region);
             break;
         }
@@ -905,10 +911,10 @@ nsWindow::moveEvent(QMoveEvent* aEvent)
 nsEventStatus
 nsWindow::resizeEvent(QResizeEvent* aEvent)
 {
-    nsIntRect rect;
+    LayoutDeviceIntRect rect;
 
     // Generate XPFE resize event
-    GetBoundsUntyped(rect);
+    GetBounds(rect);
 
     rect.width = aEvent->size().width();
     rect.height = aEvent->size().height();
@@ -1100,10 +1106,10 @@ InitKeyEvent(WidgetKeyboardEvent& aEvent, QKeyEvent* aQEvent)
     aEvent.mIsRepeat =
         (aEvent.mMessage == eKeyDown || aEvent.mMessage == eKeyPress) &&
         aQEvent->isAutoRepeat();
-    aEvent.time = 0;
+    aEvent.mTime = 0;
 
     if (sAltGrModifier) {
-        aEvent.modifiers |= (MODIFIER_CONTROL | MODIFIER_ALT);
+        aEvent.mModifiers |= (MODIFIER_CONTROL | MODIFIER_ALT);
     }
 
     if (aQEvent->text().length() && aQEvent->text()[0].isPrint()) {
@@ -1260,7 +1266,7 @@ nsWindow::wheelEvent(QWheelEvent* aEvent)
 {
     // check to see if we should rollup
     WidgetWheelEvent wheelEvent(true, eWheel, this);
-    wheelEvent.deltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
+    wheelEvent.mDeltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
 
     // negative values for aEvent->delta indicate downward scrolling;
     // this is opposite Gecko usage.
@@ -1271,10 +1277,10 @@ nsWindow::wheelEvent(QWheelEvent* aEvent)
 
     switch (aEvent->orientation()) {
     case Qt::Vertical:
-        wheelEvent.deltaY = wheelEvent.lineOrPageDeltaY = delta;
+        wheelEvent.mDeltaY = wheelEvent.mLineOrPageDeltaY = delta;
         break;
     case Qt::Horizontal:
-        wheelEvent.deltaX = wheelEvent.lineOrPageDeltaX = delta;
+        wheelEvent.mDeltaX = wheelEvent.mLineOrPageDeltaX = delta;
         break;
     default:
         Q_ASSERT(0);
@@ -1288,7 +1294,7 @@ nsWindow::wheelEvent(QWheelEvent* aEvent)
                                   aEvent->modifiers() & Qt::AltModifier,
                                   aEvent->modifiers() & Qt::ShiftModifier,
                                   aEvent->modifiers() & Qt::MetaModifier);
-    wheelEvent.time = 0;
+    wheelEvent.mTime = 0;
 
     return DispatchEvent(&wheelEvent);
 }
@@ -1366,7 +1372,8 @@ nsWindow::DispatchDeactivateEventOnTopLevelWindow(void)
 }
 
 void
-nsWindow::DispatchResizeEvent(nsIntRect &aRect, nsEventStatus &aStatus)
+nsWindow::DispatchResizeEvent(LayoutDeviceIntRect& aRect,
+                              nsEventStatus& aStatus)
 {
     aStatus = nsEventStatus_eIgnore;
     if (mWidgetListener &&
@@ -1495,15 +1502,14 @@ void find_first_visible_parent(QWindow* aItem, QWindow*& aVisibleItem)
 }
 
 NS_IMETHODIMP
-nsWindow::GetScreenBoundsUntyped(nsIntRect &aRect)
+nsWindow::GetScreenBounds(LayoutDeviceIntRect& aRect)
 {
-    aRect = gfx::IntRect(gfx::IntPoint(0, 0), mBounds.Size());
+    aRect = LayoutDeviceIntRect(LayoutDeviceIntPoint(0, 0), mBounds.Size());
     if (mIsTopLevel) {
         QPoint pos = mWidget->position();
         aRect.MoveTo(pos.x(), pos.y());
-    }
-    else {
-        aRect.MoveTo(WidgetToScreenOffsetUntyped());
+    } else {
+        aRect.MoveTo(WidgetToScreenOffset());
     }
     LOG(("GetScreenBounds %d %d | %d %d | %d %d\n",
          aRect.x, aRect.y,
@@ -1592,7 +1598,7 @@ nsWindow::CheckForRollup(double aMouseX, double aMouseY,
         // the current submenu
         uint32_t popupsToRollup = UINT32_MAX;
         if (rollupListener) {
-            nsAutoTArray<nsIWidget*, 5> widgetChain;
+            AutoTArray<nsIWidget*, 5> widgetChain;
             uint32_t sameTypeCount = rollupListener->GetSubmenuWidgetChain(&widgetChain);
             for (uint32_t i=0; i<widgetChain.Length(); ++i) {
                 nsIWidget* widget =  widgetChain[i];

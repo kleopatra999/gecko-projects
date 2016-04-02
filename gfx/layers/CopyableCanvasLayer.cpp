@@ -18,6 +18,7 @@
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Tools.h"
 #include "mozilla/gfx/Point.h"          // for IntSize
+#include "mozilla/layers/AsyncCanvasRenderer.h"
 #include "mozilla/layers/PersistentBufferProvider.h"
 #include "nsDebug.h"                    // for NS_ASSERTION, NS_WARNING, etc
 #include "nsISupportsImpl.h"            // for gfxContext::AddRef, etc
@@ -69,7 +70,7 @@ CopyableCanvasLayer::Initialize(const Data& aData)
     mAsyncRenderer = aData.mRenderer;
     mOriginPos = gl::OriginPos::BottomLeft;
   } else {
-    MOZ_CRASH("CanvasLayer created without mSurface, mDrawTarget or mGLContext?");
+    MOZ_CRASH("GFX: CanvasLayer created without mSurface, mDrawTarget or mGLContext?");
   }
 
   mBounds.SetRect(0, 0, aData.mSize.width, aData.mSize.height);

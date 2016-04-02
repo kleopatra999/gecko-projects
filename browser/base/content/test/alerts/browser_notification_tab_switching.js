@@ -9,87 +9,72 @@ var notification;
 var notificationURL = "http://example.org/browser/browser/base/content/test/alerts/file_dom_notifications.html";
 var newWindowOpenedFromTab;
 
-function test () {
-  waitForExplicitFinish();
-
+add_task(function* test_notificationPreventDefaultAndSwitchTabs() {
   let pm = Services.perms;
-  registerCleanupFunction(function() {
-    pm.remove(makeURI(notificationURL), "desktop-notification");
-    gBrowser.removeTab(tab);
-    window.restore();
-  });
-
   pm.add(makeURI(notificationURL), "desktop-notification", pm.ALLOW_ACTION);
 
-  tab = gBrowser.addTab(notificationURL);
-  tab.linkedBrowser.addEventListener("load", onLoad, true);
-}
+  let originalTab = gBrowser.selectedTab;
+  yield BrowserTestUtils.withNewTab({
+    gBrowser,
+    url: notificationURL
+  }, function* dummyTabTask(aBrowser) {
+    // Put new tab in background so it is obvious when it is re-focused.
+    yield BrowserTestUtils.switchTab(gBrowser, originalTab);
+    isnot(gBrowser.selectedBrowser, aBrowser, "Notification page loaded as a background tab");
 
-function onLoad() {
-  isnot(gBrowser.selectedTab, tab, "Notification page loaded as a background tab");
-  tab.linkedBrowser.removeEventListener("load", onLoad, true);
-  let win = tab.linkedBrowser.contentWindow.wrappedJSObject;
-  win.newWindow = win.open("about:blank", "", "height=100,width=100");
-  newWindowOpenedFromTab = win.newWindow;
-  win.newWindow.addEventListener("load", function() {
-    info("new window loaded");
-    win.newWindow.addEventListener("blur", function b() {
-      info("new window got blur");
-      win.newWindow.removeEventListener("blur", b);
-      notification = win.showNotification1();
-      win.newWindow.addEventListener("focus", onNewWindowFocused);
-      notification.addEventListener("show", onAlertShowing);
-    });
-
-    function waitUntilNewWindowHasFocus() {
-      if (!win.newWindow.document.hasFocus()) {
-        setTimeout(waitUntilNewWindowHasFocus, 50);
-      } else {
-        // Focus another window so that new window gets blur event.
-        gBrowser.selectedBrowser.contentWindow.focus();
-      }
+    // First, show a notification that will be have the tab-switching prevented.
+    function promiseNotificationEvent(evt) {
+      return ContentTask.spawn(aBrowser, evt, function* (evt) {
+        return yield new Promise(resolve => {
+          let notification = content.wrappedJSObject._notification;
+          notification.addEventListener(evt, function l(event) {
+            notification.removeEventListener(evt, l);
+            resolve({ defaultPrevented: event.defaultPrevented });
+          });
+        });
+      });
     }
-    win.newWindow.focus();
-    waitUntilNewWindowHasFocus();
+    yield openNotification(aBrowser, "showNotification1");
+    info("Notification alert showing");
+    let alertWindow = Services.wm.getMostRecentWindow("alert:alert");
+    if (!alertWindow) {
+      ok(true, "Notifications don't use XUL windows on all platforms.");
+      yield closeNotification(aBrowser);
+      return;
+    }
+    info("Clicking on notification");
+    let promiseClickEvent = promiseNotificationEvent("click");
+
+    // NB: This executeSoon is needed to allow the non-e10s runs of this test
+    // a chance to set the event listener on the page. Otherwise, we
+    // synchronously fire the click event before we listen for the event.
+    executeSoon(() => {
+      EventUtils.synthesizeMouseAtCenter(alertWindow.document.getElementById("alertTitleLabel"),
+                                         {}, alertWindow);
+    });
+    let clickEvent = yield promiseClickEvent;
+    ok(clickEvent.defaultPrevented, "The event handler for the first notification cancels the event");
+    isnot(gBrowser.selectedBrowser, aBrowser, "Notification page still a background tab");
+    let notificationClosed = promiseNotificationEvent("close");
+    yield closeNotification(aBrowser);
+    yield notificationClosed;
+
+    // Second, show a notification that will cause the tab to get switched.
+    yield openNotification(aBrowser, "showNotification2");
+    alertWindow = Services.wm.getMostRecentWindow("alert:alert");
+    let promiseTabSelect = BrowserTestUtils.waitForEvent(gBrowser.tabContainer, "TabSelect");
+    EventUtils.synthesizeMouseAtCenter(alertWindow.document.getElementById("alertTitleLabel"),
+                                       {},
+                                       alertWindow);
+    yield promiseTabSelect;
+    is(gBrowser.selectedBrowser.currentURI.spec, notificationURL,
+       "Clicking on the second notification should select its originating tab");
+    notificationClosed = promiseNotificationEvent("close");
+    yield closeNotification(aBrowser);
+    yield notificationClosed;
   });
-}
+});
 
-function onAlertShowing() {
-  info("Notification alert showing");
-  notification.removeEventListener("show", onAlertShowing);
-
-  let alertWindow = Services.wm.getMostRecentWindow("alert:alert");
-  if (!alertWindow) {
-    ok(true, "Notifications don't use XUL windows on all platforms.");
-    notification.close();
-    newWindowOpenedFromTab.close();
-    finish();
-    return;
-  }
-  gBrowser.tabContainer.addEventListener("TabSelect", onTabSelect);
-  EventUtils.synthesizeMouseAtCenter(alertWindow.document.getElementById("alertTitleLabel"), {}, alertWindow);
-  info("Clicked on notification");
-  alertWindow.close();
-}
-
-function onNewWindowFocused(event) {
-  event.target.close();
-  isnot(gBrowser.selectedTab, tab, "Notification page loaded as a background tab");
-  // Using timeout to test that something do *not* happen!
-  setTimeout(openSecondNotification, 50);
-}
-
-function openSecondNotification() {
-  isnot(gBrowser.selectedTab, tab, "Notification page loaded as a background tab");
-  let win = tab.linkedBrowser.contentWindow.wrappedJSObject;
-  notification = win.showNotification2();
-  notification.addEventListener("show", onAlertShowing);
-}
-
-function onTabSelect() {
-  gBrowser.tabContainer.removeEventListener("TabSelect", onTabSelect);
-  is(gBrowser.selectedBrowser.contentWindow.location.href, notificationURL,
-     "Notification tab should be selected.");
-
-  finish();
-}
+add_task(function* cleanup() {
+  Services.perms.remove(makeURI(notificationURL), "desktop-notification");
+});

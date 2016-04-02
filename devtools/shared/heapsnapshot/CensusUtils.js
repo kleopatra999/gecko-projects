@@ -1,6 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
+
+const { flatten } = require("resource://devtools/shared/ThreadSafeDevToolsUtils.js");
 
 /*** Visitor ****************************************************************/
 
@@ -62,6 +65,10 @@ Visitor.prototype.count = function (breakdown, report, edge) { }
 const EDGES = Object.create(null);
 
 EDGES.count = function (breakdown, report) {
+  return [];
+};
+
+EDGES.bucket = function (breakdown, report) {
   return [];
 };
 
@@ -156,7 +163,7 @@ function recursiveWalk(breakdown, edge, report, visitor) {
  */
 function walk(breakdown, report, visitor) {
   recursiveWalk(breakdown, null, report, visitor);
-};
+}
 exports.walk = walk;
 
 /*** diff *******************************************************************/
@@ -181,6 +188,10 @@ function isMap(obj) {
 function DiffVisitor(otherCensus) {
   // The other census we are comparing against.
   this._otherCensus = otherCensus;
+
+  // The total bytes and count of the basis census we are traversing.
+  this._totalBytes = 0;
+  this._totalCount = 0;
 
   // Stack maintaining the current corresponding sub-report for the other
   // census we are comparing against.
@@ -280,6 +291,13 @@ DiffVisitor.prototype.count = function (breakdown, report, edge) {
   const other = this._otherCensusStack[this._otherCensusStack.length - 1];
   const results = this._resultsStack[this._resultsStack.length - 1];
 
+  if (breakdown.count) {
+    this._totalCount += report.count;
+  }
+  if (breakdown.bytes) {
+    this._totalBytes += report.bytes;
+  }
+
   if (other) {
     if (breakdown.count) {
       results.count = other.count - report.count;
@@ -297,6 +315,9 @@ DiffVisitor.prototype.count = function (breakdown, report, edge) {
   }
 };
 
+const basisTotalBytes = exports.basisTotalBytes = Symbol("basisTotalBytes");
+const basisTotalCount = exports.basisTotalCount = Symbol("basisTotalCount");
+
 /**
  * Get the resulting report of the difference between the traversed census
  * report and the other census report.
@@ -312,6 +333,9 @@ DiffVisitor.prototype.results = function () {
   if (this._resultsStack.length) {
     throw new Error("Attempt to get results while still computing diff!");
   }
+
+  this._results[basisTotalBytes] = this._totalBytes;
+  this._results[basisTotalCount] = this._totalCount;
 
   return this._results;
 };
@@ -331,12 +355,135 @@ DiffVisitor.prototype.results = function () {
  *        The second census report.
  *
  * @returns {Object}
- *          A delta report mirroring the structure of the two census reports
- *          (as specified by the given breakdown).
+ *          A delta report mirroring the structure of the two census reports (as
+ *          specified by the given breakdown). Has two additional properties:
+ *            - {Number} basisTotalBytes: the total number of bytes in the start
+ *                                        census.
+ *            - {Number} basisTotalCount: the total count in the start census.
  */
 function diff(breakdown, startCensus, endCensus) {
   const visitor = new DiffVisitor(endCensus);
   walk(breakdown, startCensus, visitor);
   return visitor.results();
 };
-exports.diff = diff
+exports.diff = diff;
+
+/**
+ * Creates a hash map mapping node IDs to its parent node.
+ *
+ * @param {CensusTreeNode} node
+ * @param {Object<number, TreeNode>} aggregator
+ *
+ * @return {Object<number, TreeNode>}
+ */
+const createParentMap = exports.createParentMap = function (node,
+                                                            getId = node => node.id,
+                                                            aggregator = Object.create(null)) {
+  if (node.children) {
+    for (let i = 0, length = node.children.length; i < length; i++) {
+      const child = node.children[i];
+      aggregator[getId(child)] = node;
+      createParentMap(child, getId, aggregator);
+    }
+  }
+
+  return aggregator;
+};
+
+const BUCKET = Object.freeze({ by: "bucket" });
+
+/**
+ * Convert a breakdown whose leaves are { by: "count" } to an identical
+ * breakdown, except with { by: "bucket" } leaves.
+ *
+ * @param {Object} breakdown
+ * @returns {Object}
+ */
+exports.countToBucketBreakdown = function(breakdown) {
+  if (typeof breakdown !== "object" || !breakdown) {
+    return breakdown;
+  }
+
+  if (breakdown.by === "count") {
+    return BUCKET;
+  }
+
+  const keys = Object.keys(breakdown);
+  const vals = keys.reduce((vs, k) => {
+    vs.push(exports.countToBucketBreakdown(breakdown[k]));
+    return vs;
+  }, []);
+
+  const result = {};
+  for (let i = 0, length = keys.length; i < length; i++) {
+    result[keys[i]] = vals[i];
+  }
+
+  return Object.freeze(result);
+};
+
+/**
+ * A Visitor for finding report leaves by their DFS index.
+ */
+function GetLeavesVisitor(targetIndices) {
+  this._index = -1;
+  this._targetIndices = targetIndices;
+  this._leaves = [];
+}
+
+GetLeavesVisitor.prototype = Object.create(Visitor.prototype);
+
+/**
+ * @overrides Visitor.prototype.enter
+ */
+GetLeavesVisitor.prototype.enter = function(breakdown, report, edge) {
+  this._index++;
+  if (this._targetIndices.has(this._index)) {
+    this._leaves.push(report);
+  }
+};
+
+/**
+ * Get the accumulated report leaves after traversal.
+ */
+GetLeavesVisitor.prototype.leaves = function() {
+  if (this._index === -1) {
+    throw new Error("Attempt to call `leaves` before traversing report!");
+  }
+  return this._leaves;
+};
+
+/**
+ * Given a set of indices of leaves in a pre-order depth-first traversal of the
+ * given census report, return the leaves.
+ *
+ * @param {Set<Number>} indices
+ * @param {Object} breakdown
+ * @param {Object} report
+ *
+ * @returns {Array<Object>}
+ */
+exports.getReportLeaves = function(indices, breakdown, report) {
+  const visitor = new GetLeavesVisitor(indices);
+  walk(breakdown, report, visitor);
+  return visitor.leaves();
+};
+
+/**
+ * Get a list of the individual node IDs that belong to the census report leaves
+ * of the given indices.
+ *
+ * @param {Set<Number>} indices
+ * @param {Object} breakdown
+ * @param {HeapSnapshot} snapshot
+ *
+ * @returns {Array<NodeId>}
+ */
+exports.getCensusIndividuals = function(indices, countBreakdown, snapshot) {
+  const bucketBreakdown = exports.countToBucketBreakdown(countBreakdown);
+  const bucketReport = snapshot.takeCensus({ breakdown: bucketBreakdown });
+  const buckets = exports.getReportLeaves(indices,
+                                          bucketBreakdown,
+                                          bucketReport);
+  return flatten(buckets);
+};

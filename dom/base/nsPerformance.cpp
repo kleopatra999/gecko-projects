@@ -428,7 +428,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 NS_IMPL_ADDREF_INHERITED(nsPerformance, PerformanceBase)
 NS_IMPL_RELEASE_INHERITED(nsPerformance, PerformanceBase)
 
-nsPerformance::nsPerformance(nsPIDOMWindow* aWindow,
+nsPerformance::nsPerformance(nsPIDOMWindowInner* aWindow,
                              nsDOMNavigationTiming* aDOMTiming,
                              nsITimedChannel* aChannel,
                              nsPerformance* aParentPerformance)
@@ -483,11 +483,7 @@ nsPerformance::DispatchBufferFullEvent()
 {
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
   // it bubbles, and it isn't cancelable
-  nsresult rv = event->InitEvent(NS_LITERAL_STRING("resourcetimingbufferfull"),
-                                 true, false);
-  if (NS_FAILED(rv)) {
-    return;
-  }
+  event->InitEvent(NS_LITERAL_STRING("resourcetimingbufferfull"), true, false);
   event->SetTrusted(true);
   DispatchDOMEvent(nullptr, event, nullptr, nullptr);
 }
@@ -504,12 +500,7 @@ nsPerformance::Navigation()
 DOMHighResTimeStamp
 nsPerformance::Now() const
 {
-  double nowTimeMs = GetDOMTiming()->TimeStampToDOMHighRes(TimeStamp::Now());
-  // Round down to the nearest 5us, because if the timer is too accurate people
-  // can do nasty timing attacks with it.  See similar code in the worker
-  // Performance implementation.
-  const double maxResolutionMs = 0.005;
-  return floor(nowTimeMs / maxResolutionMs) * maxResolutionMs;
+  return RoundTime(GetDOMTiming()->TimeStampToDOMHighRes(TimeStamp::Now()));
 }
 
 JSObject*
@@ -711,12 +702,12 @@ public:
   }
 };
 
-class PrefEnabledRunnable final : public WorkerMainThreadRunnable
+class PrefEnabledRunnable final : public WorkerCheckAPIExposureOnMainThreadRunnable
 {
 public:
   PrefEnabledRunnable(WorkerPrivate* aWorkerPrivate,
                       const nsCString& aPrefName)
-    : WorkerMainThreadRunnable(aWorkerPrivate)
+    : WorkerCheckAPIExposureOnMainThreadRunnable(aWorkerPrivate)
     , mEnabled(false)
     , mPrefName(aPrefName)
   { }
@@ -754,9 +745,7 @@ nsPerformance::IsEnabled(JSContext* aCx, JSObject* aGlobal)
   RefPtr<PrefEnabledRunnable> runnable =
     new PrefEnabledRunnable(workerPrivate,
                             NS_LITERAL_CSTRING("dom.enable_user_timing"));
-  runnable->Dispatch(workerPrivate->GetJSContext());
-
-  return runnable->IsEnabled();
+  return runnable->Dispatch() && runnable->IsEnabled();
 }
 
 /* static */ bool
@@ -773,9 +762,8 @@ nsPerformance::IsObserverEnabled(JSContext* aCx, JSObject* aGlobal)
   RefPtr<PrefEnabledRunnable> runnable =
     new PrefEnabledRunnable(workerPrivate,
                             NS_LITERAL_CSTRING("dom.enable_performance_observer"));
-  runnable->Dispatch(workerPrivate->GetJSContext());
 
-  return runnable->IsEnabled();
+  return runnable->Dispatch() && runnable->IsEnabled();
 }
 
 void
@@ -785,9 +773,15 @@ nsPerformance::InsertUserEntry(PerformanceEntry* aEntry)
 
   nsAutoCString uri;
   uint64_t markCreationEpoch = 0;
+
   if (nsContentUtils::IsUserTimingLoggingEnabled() ||
       nsContentUtils::SendPerformanceTimingNotifications()) {
-    nsresult rv = GetOwner()->GetDocumentURI()->GetHost(uri);
+    nsresult rv = NS_ERROR_FAILURE;
+    nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
+    if (owner && owner->GetDocumentURI()) {
+      rv = owner->GetDocumentURI()->GetHost(uri);
+    }
+
     if(NS_FAILED(rv)) {
       // If we have no URI, just put in "none".
       uri.AssignLiteral("none");
@@ -806,15 +800,16 @@ nsPerformance::InsertUserEntry(PerformanceEntry* aEntry)
   PerformanceBase::InsertUserEntry(aEntry);
 }
 
-DOMHighResTimeStamp
-nsPerformance::DeltaFromNavigationStart(DOMHighResTimeStamp aTime)
+TimeStamp
+nsPerformance::CreationTimeStamp() const
 {
-  // If the time we're trying to convert is equal to zero, it hasn't been set
-  // yet so just return 0.
-  if (aTime == 0) {
-    return 0;
-  }
-  return aTime - GetDOMTiming()->GetNavigationStart();
+  return GetDOMTiming()->GetNavigationStartTimeStamp();
+}
+
+DOMHighResTimeStamp
+nsPerformance::CreationTime() const
+{
+  return GetDOMTiming()->GetNavigationStart();
 }
 
 // PerformanceBase
@@ -837,7 +832,7 @@ PerformanceBase::PerformanceBase()
   MOZ_ASSERT(!NS_IsMainThread());
 }
 
-PerformanceBase::PerformanceBase(nsPIDOMWindow* aWindow)
+PerformanceBase::PerformanceBase(nsPIDOMWindowInner* aWindow)
   : DOMEventTargetHelper(aWindow)
   , mResourceTimingBufferSize(kDefaultResourceTimingBufferSize)
   , mPendingNotificationObserversTask(false)
@@ -926,6 +921,17 @@ PerformanceBase::ClearResourceTimings()
   mResourceEntries.Clear();
 }
 
+DOMHighResTimeStamp
+PerformanceBase::RoundTime(double aTime) const
+{
+  // Round down to the nearest 5us, because if the timer is too accurate people
+  // can do nasty timing attacks with it.  See similar code in the worker
+  // Performance implementation.
+  const double maxResolutionMs = 0.005;
+  return floor(aTime / maxResolutionMs) * maxResolutionMs;
+}
+
+
 void
 PerformanceBase::Mark(const nsAString& aName, ErrorResult& aRv)
 {
@@ -958,7 +964,7 @@ DOMHighResTimeStamp
 PerformanceBase::ResolveTimestampFromName(const nsAString& aName,
                                           ErrorResult& aRv)
 {
-  nsAutoTArray<RefPtr<PerformanceEntry>, 1> arr;
+  AutoTArray<RefPtr<PerformanceEntry>, 1> arr;
   DOMHighResTimeStamp ts;
   Optional<nsAString> typeParam;
   nsAutoString str;
@@ -980,7 +986,7 @@ PerformanceBase::ResolveTimestampFromName(const nsAString& aName,
     return 0;
   }
 
-  return DeltaFromNavigationStart(ts);
+  return ts - CreationTime();
 }
 
 void

@@ -37,7 +37,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository",
                                   "resource://gre/modules/addons/AddonRepository.jsm");
 
 // Shared code for suppressing bad cert dialogs.
-XPCOMUtils.defineLazyGetter(this, "CertUtils", function certUtilsLazyGetter() {
+XPCOMUtils.defineLazyGetter(this, "CertUtils", function() {
   let certUtils = {};
   Components.utils.import("resource://gre/modules/CertUtils.jsm", certUtils);
   return certUtils;
@@ -79,7 +79,7 @@ RDFSerializer.prototype = {
    * @return a string with all characters invalid in XML character data
    *         converted to entity references.
    */
-  escapeEntities: function RDFS_escapeEntities(aString) {
+  escapeEntities: function(aString) {
     aString = aString.replace(/&/g, "&amp;");
     aString = aString.replace(/</g, "&lt;");
     aString = aString.replace(/>/g, "&gt;");
@@ -97,8 +97,7 @@ RDFSerializer.prototype = {
    *         The current level of indent for pretty-printing
    * @return a string containing the serialized elements.
    */
-  serializeContainerItems: function RDFS_serializeContainerItems(aDs, aContainer,
-                                                                 aIndent) {
+  serializeContainerItems: function(aDs, aContainer, aIndent) {
     var result = "";
     var items = aContainer.GetElements();
     while (items.hasMoreElements()) {
@@ -124,9 +123,7 @@ RDFSerializer.prototype = {
    * @return a string containing the serialized properties.
    * @throws if the resource contains a property that cannot be serialized
    */
-  serializeResourceProperties: function RDFS_serializeResourceProperties(aDs,
-                                                                         aResource,
-                                                                         aIndent) {
+  serializeResourceProperties: function(aDs, aResource, aIndent) {
     var result = "";
     var items = [];
     var arcs = aDs.ArcLabelsOut(aResource);
@@ -180,7 +177,7 @@ RDFSerializer.prototype = {
    * @return a string containing the serialized resource.
    * @throws if the RDF data contains multiple references to the same resource.
    */
-  serializeResource: function RDFS_serializeResource(aDs, aResource, aIndent) {
+  serializeResource: function(aDs, aResource, aIndent) {
     if (this.resources.indexOf(aResource) != -1 ) {
       // We cannot output multiple references to the same resource.
       throw Components.Exception("Cannot serialize multiple references to " + aResource.Value);
@@ -277,8 +274,9 @@ function sanitizeUpdateURL(aUpdate, aRequest, aHashPattern, aHashString) {
  */
 function parseRDFManifest(aId, aUpdateKey, aRequest, aManifestData) {
   if (aManifestData.documentElement.namespaceURI != PREFIX_NS_RDF) {
-    throw Components.Exception("Update manifest had an unrecognised namespace: " + xml.documentElement.namespaceURI);
-    return;
+    throw Components.Exception("Update manifest had an unrecognised namespace: " +
+                               aManifestData.documentElement.namespaceURI);
+    return undefined;
   }
 
   function EM_R(aProp) {
@@ -323,9 +321,13 @@ function parseRDFManifest(aId, aUpdateKey, aRequest, aManifestData) {
   let extensionRes = gRDF.GetResource(PREFIX_EXTENSION + aId);
   let themeRes = gRDF.GetResource(PREFIX_THEME + aId);
   let itemRes = gRDF.GetResource(PREFIX_ITEM + aId);
-  let addonRes = ds.ArcLabelsOut(extensionRes).hasMoreElements() ? extensionRes
-               : ds.ArcLabelsOut(themeRes).hasMoreElements() ? themeRes
-               : itemRes;
+  let addonRes;
+  if (ds.ArcLabelsOut(extensionRes).hasMoreElements())
+    addonRes = extensionRes;
+  else if (ds.ArcLabelsOut(themeRes).hasMoreElements())
+    addonRes = themeRes;
+  else
+    addonRes = itemRes;
 
   // If we have an update key then the update manifest must be signed
   if (aUpdateKey) {
@@ -585,10 +587,9 @@ function UpdateParser(aId, aUpdateKey, aUrl, aObserver) {
     this.request.overrideMimeType("text/plain");
     this.request.setRequestHeader("Moz-XPI-Update", "1", true);
     this.request.timeout = TIMEOUT;
-    var self = this;
-    this.request.addEventListener("load", function loadEventListener(event) { self.onLoad() }, false);
-    this.request.addEventListener("error", function errorEventListener(event) { self.onError() }, false);
-    this.request.addEventListener("timeout", function timeoutEventListener(event) { self.onTimeout() }, false);
+    this.request.addEventListener("load", () => this.onLoad(), false);
+    this.request.addEventListener("error", () => this.onError(), false);
+    this.request.addEventListener("timeout", () => this.onTimeout(), false);
     this.request.send(null);
   }
   catch (e) {
@@ -606,7 +607,7 @@ UpdateParser.prototype = {
   /**
    * Called when the manifest has been successfully loaded.
    */
-  onLoad: function UP_onLoad() {
+  onLoad: function() {
     let request = this.request;
     this.request = null;
     this._doneAt = new Error("place holder");
@@ -649,7 +650,9 @@ UpdateParser.prototype = {
         let json = JSON.parse(request.responseText);
 
         parser = () => parseJSONManifest(this.id, this.updateKey, request, json);
-      } catch (e if e instanceof SyntaxError) {
+      } catch (e) {
+        if (!(e instanceof SyntaxError))
+          throw e;
         let domParser = Cc["@mozilla.org/xmlextras/domparser;1"].createInstance(Ci.nsIDOMParser);
         let xml = domParser.parseFromString(request.responseText, "text/xml");
 
@@ -700,7 +703,7 @@ UpdateParser.prototype = {
   /**
    * Called when the manifest failed to load.
    */
-  onError: function UP_onError() {
+  onError: function() {
     if (!Components.isSuccessCode(this.request.status)) {
       logger.warn("Request failed: " + this.url + " - " + this.request.status);
     }
@@ -729,7 +732,7 @@ UpdateParser.prototype = {
   /**
    * Helper method to notify the observer that an error occured.
    */
-  notifyError: function UP_notifyError(aStatus) {
+  notifyError: function(aStatus) {
     if ("onUpdateCheckError" in this.observer) {
       try {
         this.observer.onUpdateCheckError(aStatus);
@@ -743,7 +746,7 @@ UpdateParser.prototype = {
   /**
    * Called to cancel an in-progress update check.
    */
-  cancel: function UP_cancel() {
+  cancel: function() {
     if (!this.request) {
       logger.error("Trying to cancel already-complete request", this._doneAt);
       return;
@@ -837,12 +840,9 @@ this.AddonUpdateChecker = {
    *         Ignore strictCompatibility when testing if an update matches. Optional.
    * @return an update object if one matches or null if not
    */
-  getCompatibilityUpdate: function AUC_getCompatibilityUpdate(aUpdates, aVersion,
-                                                              aIgnoreCompatibility,
-                                                              aAppVersion,
-                                                              aPlatformVersion,
-                                                              aIgnoreMaxVersion,
-                                                              aIgnoreStrictCompat) {
+  getCompatibilityUpdate: function(aUpdates, aVersion, aIgnoreCompatibility,
+                                   aAppVersion, aPlatformVersion,
+                                   aIgnoreMaxVersion, aIgnoreStrictCompat) {
     if (!aAppVersion)
       aAppVersion = Services.appinfo.version;
     if (!aPlatformVersion)
@@ -883,12 +883,9 @@ this.AddonUpdateChecker = {
    *         Array of AddonCompatibilityOverride to take into account. Optional.
    * @return an update object if one matches or null if not
    */
-  getNewestCompatibleUpdate: function AUC_getNewestCompatibleUpdate(aUpdates,
-                                                                    aAppVersion,
-                                                                    aPlatformVersion,
-                                                                    aIgnoreMaxVersion,
-                                                                    aIgnoreStrictCompat,
-                                                                    aCompatOverrides) {
+  getNewestCompatibleUpdate: function(aUpdates, aAppVersion, aPlatformVersion,
+                                      aIgnoreMaxVersion, aIgnoreStrictCompat,
+                                      aCompatOverrides) {
     if (!aAppVersion)
       aAppVersion = Services.appinfo.version;
     if (!aPlatformVersion)
@@ -928,8 +925,7 @@ this.AddonUpdateChecker = {
    * @return UpdateParser so that the caller can use UpdateParser.cancel() to shut
    *         down in-progress update requests
    */
-  checkForUpdates: function AUC_checkForUpdates(aId, aUpdateKey, aUrl,
-                                                aObserver) {
+  checkForUpdates: function(aId, aUpdateKey, aUrl, aObserver) {
     return new UpdateParser(aId, aUpdateKey, aUrl, aObserver);
   }
 };

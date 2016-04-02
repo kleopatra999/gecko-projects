@@ -46,6 +46,7 @@ function* check_installed(inProfile, ...versions) {
       do_check_false(hasFlag(addon.permissions, AddonManager.PERM_CAN_UPGRADE));
       do_check_false(hasFlag(addon.permissions, AddonManager.PERM_CAN_UNINSTALL));
       do_check_true(addon.hidden);
+      do_check_true(addon.isSystem);
 
       // Verify the add-ons file is in the right place
       let file = expectedDir.clone();
@@ -281,7 +282,7 @@ add_task(function* test_bad_app_cert() {
   // Add-on will still be present
   let addon = yield promiseAddonByID("system1@tests.mozilla.org");
   do_check_neq(addon, null);
-  do_check_eq(addon.signedState, AddonManager.SIGNEDSTATE_BROKEN);
+  do_check_eq(addon.signedState, AddonManager.SIGNEDSTATE_NOT_REQUIRED);
 
   yield check_installed(false, "1.0", null, "1.0");
 

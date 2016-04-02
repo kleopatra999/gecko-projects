@@ -19,6 +19,7 @@
 #include "jsweakmap.h"
 #include "jswrapper.h"
 
+#include "builtin/Promise.h"
 #include "builtin/TestingFunctions.h"
 #include "js/Proxy.h"
 #include "proxy/DeadObjectProxy.h"
@@ -36,7 +37,6 @@ using namespace js;
 
 using mozilla::Move;
 using mozilla::PodArrayZero;
-using mozilla::UniquePtr;
 
 // Required by PerThreadDataFriendFields::getMainThread()
 JS_STATIC_ASSERT(offsetof(JSRuntime, mainThread) ==
@@ -52,12 +52,12 @@ PerThreadDataFriendFields::PerThreadDataFriendFields()
 }
 
 JS_FRIEND_API(void)
-js::SetSourceHook(JSRuntime* rt, UniquePtr<SourceHook> hook)
+js::SetSourceHook(JSRuntime* rt, mozilla::UniquePtr<SourceHook> hook)
 {
     rt->sourceHook = Move(hook);
 }
 
-JS_FRIEND_API(UniquePtr<SourceHook>)
+JS_FRIEND_API(mozilla::UniquePtr<SourceHook>)
 js::ForgetSourceHook(JSRuntime* rt)
 {
     return Move(rt->sourceHook);
@@ -139,8 +139,7 @@ JS_NewObjectWithUniqueType(JSContext* cx, const JSClass* clasp, HandleObject pro
 JS_FRIEND_API(JSObject*)
 JS_NewObjectWithoutMetadata(JSContext* cx, const JSClass* clasp, JS::Handle<JSObject*> proto)
 {
-    // Use an AutoEnterAnalysis to suppress invocation of the metadata callback.
-    AutoEnterAnalysis enter(cx);
+    AutoSuppressObjectMetadataCallback suppressMetadata(cx);
     return JS_NewObjectWithGivenProto(cx, clasp, proto);
 }
 
@@ -288,6 +287,8 @@ js::GetBuiltinClass(JSContext* cx, HandleObject obj, ESClassValue* classValue)
         *classValue = ESClass_Set;
     else if (obj->is<MapObject>())
         *classValue = ESClass_Map;
+    else if (obj->is<PromiseObject>())
+        *classValue = ESClass_Promise;
     else
         *classValue = ESClass_Other;
 
@@ -394,6 +395,11 @@ JS_FRIEND_API(JSFunction*)
 js::GetOutermostEnclosingFunctionOfScriptedCaller(JSContext* cx)
 {
     ScriptFrameIter iter(cx);
+
+    // Skip eval frames.
+    while (!iter.done() && iter.isEvalFrame())
+        ++iter;
+
     if (iter.done())
         return nullptr;
 
@@ -720,8 +726,12 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
         funname = fun->displayAtom();
 
     RootedValue thisVal(cx);
-    if (iter.hasUsableAbstractFramePtr() && iter.computeThis(cx)) {
-        thisVal = iter.computedThisValue();
+    if (iter.hasUsableAbstractFramePtr() &&
+        iter.isFunctionFrame() &&
+        fun && !fun->isArrow() && !fun->isDerivedClassConstructor())
+    {
+        if (!GetFunctionThis(cx, iter.abstractFramePtr(), &thisVal))
+            return nullptr;
     }
 
     // print the frame number and function name
@@ -751,13 +761,17 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
                         break;
                     }
                 }
-            } else if (script->argsObjAliasesFormals() && iter.hasArgsObj()) {
-                arg = iter.argsObj().arg(i);
-            } else {
-                if (iter.hasUsableAbstractFramePtr())
+            } else if (iter.hasUsableAbstractFramePtr()) {
+                if (script->analyzedArgsUsage() &&
+                    script->argsObjAliasesFormals() &&
+                    iter.hasArgsObj())
+                {
+                    arg = iter.argsObj().arg(i);
+                } else {
                     arg = iter.unaliasedActual(i, DONT_CHECK_ALIASING);
-                else
-                    arg = MagicValue(JS_OPTIMIZED_OUT);
+                }
+            } else {
+                arg = MagicValue(JS_OPTIMIZED_OUT);
             }
 
             JSAutoByteString valueBytes;
@@ -916,6 +930,28 @@ JS::FormatStackDump(JSContext* cx, char* buf, bool showArgs, bool showLocals, bo
     return buf;
 }
 
+extern JS_FRIEND_API(bool)
+JS::ForceLexicalInitialization(JSContext *cx, HandleObject obj)
+{
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    assertSameCompartment(cx, obj);
+
+    bool initializedAny = false;
+    NativeObject* nobj = &obj->as<NativeObject>();
+
+    for (Shape::Range<NoGC> r(nobj->lastProperty()); !r.empty(); r.popFront()) {
+        Shape* s = &r.front();
+        Value v = nobj->getSlot(s->slot());
+        if (s->hasSlot() && v.isMagic() && v.whyMagic() == JS_UNINITIALIZED_LEXICAL) {
+            nobj->setSlot(s->slot(), UndefinedValue());
+            initializedAny = true;
+        }
+
+    }
+    return initializedAny;
+}
+
 struct DumpHeapTracer : public JS::CallbackTracer, public WeakMapTracer
 {
     const char* prefix;
@@ -975,7 +1011,7 @@ DumpHeapVisitArena(JSRuntime* rt, void* data, gc::Arena* arena,
 {
     DumpHeapTracer* dtrc = static_cast<DumpHeapTracer*>(data);
     fprintf(dtrc->output, "# arena allockind=%u size=%u\n",
-            unsigned(arena->aheader.getAllocKind()), unsigned(thingSize));
+            unsigned(arena->getAllocKind()), unsigned(thingSize));
 }
 
 static void
@@ -1068,7 +1104,7 @@ JS::ObjectPtr::updateWeakPointerAfterGC()
 void
 JS::ObjectPtr::trace(JSTracer* trc, const char* name)
 {
-    JS_CallObjectTracer(trc, &value, name);
+    JS::TraceEdge(trc, &value, name);
 }
 
 JS_FRIEND_API(JSObject*)
@@ -1141,24 +1177,28 @@ js::detail::IdMatchesAtom(jsid id, JSAtom* atom)
     return id == INTERNED_STRING_TO_JSID(nullptr, atom);
 }
 
-JS_FRIEND_API(bool)
-js::PrepareScriptEnvironmentAndInvoke(JSRuntime* rt, HandleObject scope, ScriptEnvironmentPreparer::Closure& closure)
+JS_FRIEND_API(void)
+js::PrepareScriptEnvironmentAndInvoke(JSContext* cx, HandleObject scope, ScriptEnvironmentPreparer::Closure& closure)
 {
-    if (rt->scriptEnvironmentPreparer)
-        return rt->scriptEnvironmentPreparer->invoke(scope, closure);
+    MOZ_ASSERT(!cx->isExceptionPending());
 
-    MOZ_ASSERT(rt->contextList.getFirst() == rt->contextList.getLast());
-    JSContext* cx = rt->contextList.getFirst();
+    if (cx->runtime()->scriptEnvironmentPreparer) {
+        cx->runtime()->scriptEnvironmentPreparer->invoke(scope, closure);
+        return;
+    }
+
     JSAutoCompartment ac(cx, scope);
     bool ok = closure(cx);
 
+    MOZ_ASSERT_IF(ok, !cx->isExceptionPending());
+
     // NB: This does not affect Gecko, which has a prepareScriptEnvironment
     // callback.
-    if (JS_IsExceptionPending(cx)) {
+    if (!ok) {
         JS_ReportPendingException(cx);
     }
 
-    return ok;
+    MOZ_ASSERT(!cx->isExceptionPending());
 }
 
 JS_FRIEND_API(void)

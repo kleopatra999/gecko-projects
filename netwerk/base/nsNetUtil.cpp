@@ -4,9 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "mozilla/LoadContext.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/Telemetry.h"
 #include "nsNetUtil.h"
 #include "nsNetUtil.inl"
 #include "mozIApplicationClearPrivateDataParams.h"
@@ -45,6 +49,7 @@
 #include "nsISocketProviderService.h"
 #include "nsIStandardURL.h"
 #include "nsIStreamLoader.h"
+#include "nsIIncrementalStreamLoader.h"
 #include "nsIStreamTransportService.h"
 #include "nsStringStream.h"
 #include "nsISyncStreamListener.h"
@@ -57,6 +62,11 @@
 #include "nsInterfaceRequestorAgg.h"
 #include "plstr.h"
 #include "nsINestedURI.h"
+#include "mozilla/dom/nsCSPUtils.h"
+#include "mozilla/net/HttpBaseChannel.h"
+#include "nsIScriptError.h"
+#include "nsISiteSecurityService.h"
+#include "nsHttpHandler.h"
 
 #ifdef MOZ_WIDGET_GONK
 #include "nsINetworkManager.h"
@@ -64,6 +74,9 @@
 #endif
 
 #include <limits>
+
+using namespace mozilla;
+using namespace mozilla::net;
 
 nsresult /*NS_NewChannelWithNodeAndTriggeringPrincipal */
 NS_NewChannelWithTriggeringPrincipal(nsIChannel           **outChannel,
@@ -358,11 +371,7 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
                                  nsIURI             *aUri,
                                  const nsAString    &aData,
                                  const nsACString   &aContentType,
-                                 nsINode            *aLoadingNode,
-                                 nsIPrincipal       *aLoadingPrincipal,
-                                 nsIPrincipal       *aTriggeringPrincipal,
-                                 nsSecurityFlags     aSecurityFlags,
-                                 nsContentPolicyType aContentPolicyType,
+                                 nsILoadInfo        *aLoadInfo,
                                  bool                aIsSrcdocChannel /* = false */)
 {
   nsresult rv;
@@ -385,11 +394,7 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
                                         stream,
                                         aContentType,
                                         NS_LITERAL_CSTRING("UTF-8"),
-                                        aLoadingNode,
-                                        aLoadingPrincipal,
-                                        aTriggeringPrincipal,
-                                        aSecurityFlags,
-                                        aContentPolicyType);
+                                        aLoadInfo);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -400,6 +405,25 @@ NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
   }
   channel.forget(outChannel);
   return NS_OK;
+}
+
+nsresult
+NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
+                                 nsIURI             *aUri,
+                                 const nsAString    &aData,
+                                 const nsACString   &aContentType,
+                                 nsINode            *aLoadingNode,
+                                 nsIPrincipal       *aLoadingPrincipal,
+                                 nsIPrincipal       *aTriggeringPrincipal,
+                                 nsSecurityFlags     aSecurityFlags,
+                                 nsContentPolicyType aContentPolicyType,
+                                 bool                aIsSrcdocChannel /* = false */)
+{
+  nsCOMPtr<nsILoadInfo> loadInfo =
+      new mozilla::LoadInfo(aLoadingPrincipal, aTriggeringPrincipal,
+                            aLoadingNode, aSecurityFlags, aContentPolicyType);
+  return NS_NewInputStreamChannelInternal(outChannel, aUri, aData, aContentType,
+                                          loadInfo, aIsSrcdocChannel);
 }
 
 nsresult
@@ -546,21 +570,21 @@ NS_LoadGroupMatchesPrincipal(nsILoadGroup *aLoadGroup,
 
     // Verify load context appId and browser flag match the principal
     uint32_t contextAppId;
-    bool contextInBrowserElement;
+    bool contextInIsolatedBrowser;
     rv = loadContext->GetAppId(&contextAppId);
     NS_ENSURE_SUCCESS(rv, false);
-    rv = loadContext->GetIsInBrowserElement(&contextInBrowserElement);
+    rv = loadContext->GetIsInIsolatedMozBrowserElement(&contextInIsolatedBrowser);
     NS_ENSURE_SUCCESS(rv, false);
 
     uint32_t principalAppId;
-    bool principalInBrowserElement;
+    bool principalInIsolatedBrowser;
     rv = aPrincipal->GetAppId(&principalAppId);
     NS_ENSURE_SUCCESS(rv, false);
-    rv = aPrincipal->GetIsInBrowserElement(&principalInBrowserElement);
+    rv = aPrincipal->GetIsInIsolatedMozBrowserElement(&principalInIsolatedBrowser);
     NS_ENSURE_SUCCESS(rv, false);
 
     return contextAppId == principalAppId &&
-           contextInBrowserElement == principalInBrowserElement;
+           contextInIsolatedBrowser == principalInIsolatedBrowser;
 }
 
 nsresult
@@ -575,6 +599,23 @@ NS_NewDownloader(nsIStreamListener   **result,
         rv = downloader->Init(observer, downloadLocation);
         if (NS_SUCCEEDED(rv)) {
             downloader.forget(result);
+        }
+    }
+    return rv;
+}
+
+nsresult
+NS_NewIncrementalStreamLoader(nsIIncrementalStreamLoader        **result,
+                              nsIIncrementalStreamLoaderObserver *observer)
+{
+    nsresult rv;
+    nsCOMPtr<nsIIncrementalStreamLoader> loader =
+        do_CreateInstance(NS_INCREMENTALSTREAMLOADER_CONTRACTID, &rv);
+    if (NS_SUCCEEDED(rv)) {
+        rv = loader->Init(observer);
+        if (NS_SUCCEEDED(rv)) {
+            *result = nullptr;
+            loader.swap(*result);
         }
     }
     return rv;
@@ -1108,6 +1149,22 @@ NS_BufferOutputStream(nsIOutputStream *aOutputStream,
     return bos.forget();
 }
 
+already_AddRefed<nsIInputStream>
+NS_BufferInputStream(nsIInputStream *aInputStream,
+                      uint32_t aBufferSize)
+{
+    NS_ASSERTION(aInputStream, "No input stream given!");
+
+    nsCOMPtr<nsIInputStream> bis;
+    nsresult rv = NS_NewBufferedInputStream(getter_AddRefs(bis), aInputStream,
+                                            aBufferSize);
+    if (NS_SUCCEEDED(rv))
+        return bis.forget();
+
+    bis = aInputStream;
+    return bis.forget();
+}
+
 nsresult
 NS_ReadInputStreamToBuffer(nsIInputStream *aInputStream,
                            void **aDest,
@@ -1186,13 +1243,12 @@ bool
 NS_UsePrivateBrowsing(nsIChannel *channel)
 {
     bool isPrivate = false;
-    bool isOverriden = false;
     nsCOMPtr<nsIPrivateBrowsingChannel> pbChannel = do_QueryInterface(channel);
-    if (pbChannel &&
-        NS_SUCCEEDED(pbChannel->IsPrivateModeOverriden(&isPrivate, &isOverriden)) &&
-        isOverriden) {
+    if (pbChannel && NS_SUCCEEDED(pbChannel->GetIsChannelPrivate(&isPrivate))) {
         return isPrivate;
     }
+
+    // Some channels may not implement nsIPrivateBrowsingChannel
     nsCOMPtr<nsILoadContext> loadContext;
     NS_QueryNotificationCallbacks(channel, loadContext);
     return loadContext && loadContext->UsePrivateBrowsing();
@@ -1200,7 +1256,7 @@ NS_UsePrivateBrowsing(nsIChannel *channel)
 
 bool
 NS_GetOriginAttributes(nsIChannel *aChannel,
-                       mozilla::OriginAttributes &aAttributes)
+                       mozilla::NeckoOriginAttributes &aAttributes)
 {
     nsCOMPtr<nsILoadContext> loadContext;
     NS_QueryNotificationCallbacks(aChannel, loadContext);
@@ -1208,14 +1264,16 @@ NS_GetOriginAttributes(nsIChannel *aChannel,
         return false;
     }
 
-    loadContext->GetOriginAttributes(aAttributes);
+    DocShellOriginAttributes doa;
+    loadContext->GetOriginAttributes(doa);
+    aAttributes.InheritFromDocShellToNecko(doa);
     return true;
 }
 
 bool
 NS_GetAppInfo(nsIChannel *aChannel,
               uint32_t *aAppID,
-              bool *aIsInBrowserElement)
+              bool *aIsInIsolatedMozBrowserElement)
 {
     nsCOMPtr<nsILoadContext> loadContext;
     NS_QueryNotificationCallbacks(aChannel, loadContext);
@@ -1226,10 +1284,59 @@ NS_GetAppInfo(nsIChannel *aChannel,
     nsresult rv = loadContext->GetAppId(aAppID);
     NS_ENSURE_SUCCESS(rv, false);
 
-    rv = loadContext->GetIsInBrowserElement(aIsInBrowserElement);
+    rv = loadContext->GetIsInIsolatedMozBrowserElement(aIsInIsolatedMozBrowserElement);
     NS_ENSURE_SUCCESS(rv, false);
 
     return true;
+}
+
+bool
+NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport)
+{
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  MOZ_RELEASE_ASSERT(loadInfo, "Origin tracking only works for channels created with a loadinfo");
+
+  // Always treat tainted channels as cross-origin.
+  if (loadInfo->GetTainting() != LoadTainting::Basic) {
+    return true;
+  }
+
+  nsCOMPtr<nsIPrincipal> loadingPrincipal = loadInfo->LoadingPrincipal();
+  uint32_t mode = loadInfo->GetSecurityMode();
+  bool dataInherits =
+    mode == nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS ||
+    mode == nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS ||
+    mode == nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS;
+
+  bool aboutBlankInherits = dataInherits && loadInfo->GetAboutBlankInherits();
+
+  for (nsIPrincipal* principal : loadInfo->RedirectChain()) {
+    nsCOMPtr<nsIURI> uri;
+    principal->GetURI(getter_AddRefs(uri));
+    if (!uri) {
+      return true;
+    }
+
+    if (aboutBlankInherits && NS_IsAboutBlank(uri)) {
+      continue;
+    }
+
+    if (NS_FAILED(loadingPrincipal->CheckMayLoad(uri, aReport, dataInherits))) {
+      return true;
+    }
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
+  if (!uri) {
+    return true;
+  }
+
+  if (aboutBlankInherits && NS_IsAboutBlank(uri)) {
+    return false;
+  }
+
+  return NS_FAILED(loadingPrincipal->CheckMayLoad(uri, aReport, dataInherits));
 }
 
 nsresult
@@ -1551,9 +1658,10 @@ NS_SecurityHashURI(nsIURI *aURI)
     if (scheme.EqualsLiteral("file"))
         return schemeHash; // sad face
 
-    if (scheme.EqualsLiteral("imap") ||
-        scheme.EqualsLiteral("mailbox") ||
-        scheme.EqualsLiteral("news"))
+    bool hasFlag;
+    if (NS_FAILED(NS_URIChainHasFlags(baseURI,
+        nsIProtocolHandler::ORIGIN_IS_FULL_SPEC, &hasFlag)) ||
+        hasFlag)
     {
         nsAutoCString spec;
         uint32_t specHash;
@@ -1650,13 +1758,13 @@ NS_SecurityCompareURIs(nsIURI *aSourceURI,
         return NS_SUCCEEDED(rv) && filesAreEqual;
     }
 
-    // Special handling for mailnews schemes
-    if (targetScheme.EqualsLiteral("imap") ||
-        targetScheme.EqualsLiteral("mailbox") ||
-        targetScheme.EqualsLiteral("news"))
+    bool hasFlag;
+    if (NS_FAILED(NS_URIChainHasFlags(targetBaseURI,
+        nsIProtocolHandler::ORIGIN_IS_FULL_SPEC, &hasFlag)) ||
+        hasFlag)
     {
-        // Each message is a distinct trust domain; use the
-        // whole spec for comparison
+        // URIs with this flag have the whole spec as a distinct trust
+        // domain; use the whole spec for comparison
         nsAutoCString targetSpec;
         nsAutoCString sourceSpec;
         return ( NS_SUCCEEDED( targetBaseURI->GetSpec(targetSpec) ) &&
@@ -1823,28 +1931,10 @@ NS_IsHSTSUpgradeRedirect(nsIChannel *aOldChannel,
     return false;
   }
 
-  bool isHttps;
-  if (NS_FAILED(newURI->SchemeIs("https", &isHttps)) || !isHttps) {
-    return false;
-  }
-
   nsCOMPtr<nsIURI> upgradedURI;
-  if (NS_FAILED(oldURI->Clone(getter_AddRefs(upgradedURI)))) {
+  nsresult rv = NS_GetSecureUpgradedURI(oldURI, getter_AddRefs(upgradedURI));
+  if (NS_FAILED(rv)) {
     return false;
-  }
-
-  if (NS_FAILED(upgradedURI->SetScheme(NS_LITERAL_CSTRING("https")))) {
-    return false;
-  }
-
-  int32_t oldPort = -1;
-  if (NS_FAILED(oldURI->GetPort(&oldPort))) {
-    return false;
-  }
-  if (oldPort == 80 || oldPort == -1) {
-    upgradedURI->SetPort(-1);
-  } else {
-    upgradedURI->SetPort(oldPort);
   }
 
   bool res;
@@ -2139,6 +2229,134 @@ NS_IsSrcdocChannel(nsIChannel *aChannel)
     return isSrcdoc;
   }
   return false;
+}
+
+nsresult
+NS_ShouldSecureUpgrade(nsIURI* aURI,
+                       nsILoadInfo* aLoadInfo,
+                       nsIPrincipal* aChannelResultPrincipal,
+                       bool aPrivateBrowsing,
+                       bool aAllowSTS,
+                       bool& aShouldUpgrade)
+{
+  // Even if we're in private browsing mode, we still enforce existing STS
+  // data (it is read-only).
+  // if the connection is not using SSL and either the exact host matches or
+  // a superdomain wants to force HTTPS, do it.
+  bool isHttps = false;
+  nsresult rv = aURI->SchemeIs("https", &isHttps);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (!isHttps) {
+    // If any of the documents up the chain to the root doucment makes use of
+    // the CSP directive 'upgrade-insecure-requests', then it's time to fulfill
+    // the promise to CSP and mixed content blocking to upgrade the channel
+    // from http to https.
+    if (aLoadInfo) {
+      // Please note that cross origin top level navigations are not subject
+      // to upgrade-insecure-requests, see:
+      // http://www.w3.org/TR/upgrade-insecure-requests/#examples
+      bool crossOriginNavigation =
+        (aLoadInfo->GetExternalContentPolicyType() == nsIContentPolicy::TYPE_DOCUMENT) &&
+        (!aChannelResultPrincipal->Equals(aLoadInfo->LoadingPrincipal()));
+
+      if (aLoadInfo->GetUpgradeInsecureRequests() && !crossOriginNavigation) {
+        // let's log a message to the console that we are upgrading a request
+        nsAutoCString spec, scheme;
+        aURI->GetSpec(spec);
+        aURI->GetScheme(scheme);
+        // append the additional 's' for security to the scheme :-)
+        scheme.AppendASCII("s");
+        NS_ConvertUTF8toUTF16 reportSpec(spec);
+        NS_ConvertUTF8toUTF16 reportScheme(scheme);
+
+        const char16_t* params[] = { reportSpec.get(), reportScheme.get() };
+        uint32_t innerWindowId = aLoadInfo->GetInnerWindowID();
+        CSP_LogLocalizedStr(MOZ_UTF16("upgradeInsecureRequest"),
+                            params, ArrayLength(params),
+                            EmptyString(), // aSourceFile
+                            EmptyString(), // aScriptSample
+                            0, // aLineNumber
+                            0, // aColumnNumber
+                            nsIScriptError::warningFlag, "CSP",
+                            innerWindowId);
+
+        Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 4);
+        aShouldUpgrade = true;
+        return NS_OK;
+      }
+    }
+
+    // enforce Strict-Transport-Security
+    nsISiteSecurityService* sss = gHttpHandler->GetSSService();
+    NS_ENSURE_TRUE(sss, NS_ERROR_OUT_OF_MEMORY);
+
+    bool isStsHost = false;
+    uint32_t flags = aPrivateBrowsing ? nsISocketProvider::NO_PERMANENT_STORAGE : 0;
+    rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, aURI, flags,
+                          &isStsHost);
+
+    // if the SSS check fails, it's likely because this load is on a
+    // malformed URI or something else in the setup is wrong, so any error
+    // should be reported.
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (isStsHost) {
+      LOG(("nsHttpChannel::Connect() STS permissions found\n"));
+      if (aAllowSTS) {
+        Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 3);
+        aShouldUpgrade = true;
+        return NS_OK;
+      } else {
+        Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 2);
+      }
+    } else {
+      Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 1);
+    }
+  } else {
+    Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 0);
+  }
+  aShouldUpgrade = false;
+  return NS_OK;
+}
+
+nsresult
+NS_GetSecureUpgradedURI(nsIURI* aURI, nsIURI** aUpgradedURI)
+{
+  nsCOMPtr<nsIURI> upgradedURI;
+
+  nsresult rv = aURI->Clone(getter_AddRefs(upgradedURI));
+  NS_ENSURE_SUCCESS(rv,rv);
+
+  // Change the scheme to HTTPS:
+  upgradedURI->SetScheme(NS_LITERAL_CSTRING("https"));
+
+  // Change the default port to 443:
+  nsCOMPtr<nsIStandardURL> upgradedStandardURL = do_QueryInterface(upgradedURI);
+  if (upgradedStandardURL) {
+    upgradedStandardURL->SetDefaultPort(443);
+  } else {
+    // If we don't have a nsStandardURL, fall back to using GetPort/SetPort.
+    // XXXdholbert Is this function even called with a non-nsStandardURL arg,
+    // in practice?
+    int32_t oldPort = -1;
+    rv = aURI->GetPort(&oldPort);
+    if (NS_FAILED(rv)) return rv;
+
+    // Keep any nonstandard ports so only the scheme is changed.
+    // For example:
+    //  http://foo.com:80 -> https://foo.com:443
+    //  http://foo.com:81 -> https://foo.com:81
+
+    if (oldPort == 80 || oldPort == -1) {
+        upgradedURI->SetPort(-1);
+    } else {
+        upgradedURI->SetPort(oldPort);
+    }
+  }
+
+  upgradedURI.forget(aUpgradedURI);
+  return NS_OK;
 }
 
 namespace mozilla {

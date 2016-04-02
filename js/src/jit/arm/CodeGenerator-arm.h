@@ -123,6 +123,8 @@ class CodeGeneratorARM : public CodeGeneratorShared
     virtual void visitUrshD(LUrshD* ins);
 
     virtual void visitClzI(LClzI* ins);
+    virtual void visitCtzI(LCtzI* ins);
+    virtual void visitPopcntI(LPopcntI* ins);
 
     virtual void visitTestIAndBranch(LTestIAndBranch* test);
     virtual void visitCompare(LCompare* comp);
@@ -198,6 +200,8 @@ class CodeGeneratorARM : public CodeGeneratorShared
     void visitAtomicTypedArrayElementBinopForEffect(LAtomicTypedArrayElementBinopForEffect* lir);
     void visitCompareExchangeTypedArrayElement(LCompareExchangeTypedArrayElement* lir);
     void visitAtomicExchangeTypedArrayElement(LAtomicExchangeTypedArrayElement* lir);
+    void visitAsmSelect(LAsmSelect* ins);
+    void visitAsmReinterpret(LAsmReinterpret* ins);
     void visitAsmJSCall(LAsmJSCall* ins);
     void visitAsmJSLoadHeap(LAsmJSLoadHeap* ins);
     void visitAsmJSStoreHeap(LAsmJSStoreHeap* ins);
@@ -245,7 +249,6 @@ class CodeGeneratorARM : public CodeGeneratorShared
     void visitSimdReinterpretCast(LSimdReinterpretCast* ins) { MOZ_CRASH("NYI"); }
     void visitSimdExtractElementI(LSimdExtractElementI* ins) { MOZ_CRASH("NYI"); }
     void visitSimdExtractElementF(LSimdExtractElementF* ins) { MOZ_CRASH("NYI"); }
-    void visitSimdSignMaskX4(LSimdSignMaskX4* ins) { MOZ_CRASH("NYI"); }
     void visitSimdGeneralShuffleI(LSimdGeneralShuffleI* lir) { MOZ_CRASH("NYI"); }
     void visitSimdGeneralShuffleF(LSimdGeneralShuffleF* lir) { MOZ_CRASH("NYI"); }
     void visitSimdSwizzleI(LSimdSwizzleI* lir) { MOZ_CRASH("NYI"); }

@@ -19,7 +19,8 @@
 #include "mozilla/layers/TextureClientSharedSurface.h"
 
 #ifdef XP_WIN
-#include "SharedSurfaceANGLE.h"       // for SurfaceFactory_ANGLEShareHandle
+#include "SharedSurfaceANGLE.h"         // for SurfaceFactory_ANGLEShareHandle
+#include "SharedSurfaceD3D11Interop.h"  // for SurfaceFactory_D3D11Interop
 #include "gfxWindowsPlatform.h"
 #endif
 
@@ -80,7 +81,7 @@ GLScreenBuffer::CreateFactory(GLContext* gl,
 #elif defined(MOZ_WIDGET_GONK)
                 factory = MakeUnique<SurfaceFactory_Gralloc>(gl, caps, forwarder, flags);
 #elif defined(GL_PROVIDER_GLX)
-                if (sGLXLibrary.UseSurfaceSharing())
+                if (sGLXLibrary.UseTextureFromPixmap())
                   factory = SurfaceFactory_GLXDrawable::Create(gl, caps, forwarder, flags);
 #elif defined(MOZ_WIDGET_UIKIT)
                 factory = MakeUnique<SurfaceFactory_GLTexture>(mGLContext, caps, forwarder, mFlags);
@@ -103,12 +104,22 @@ GLScreenBuffer::CreateFactory(GLContext* gl,
                 {
                     factory = SurfaceFactory_ANGLEShareHandle::Create(gl, caps, forwarder, flags);
                 }
+
+                if (!factory && gfxPrefs::WebGLDXGLEnabled()) {
+                  factory = SurfaceFactory_D3D11Interop::Create(gl, caps, forwarder, flags);
+                }
 #endif
               break;
             }
             default:
               break;
         }
+
+#ifdef GL_PROVIDER_GLX
+        if (!factory && sGLXLibrary.UseTextureFromPixmap()) {
+            factory = SurfaceFactory_GLXDrawable::Create(gl, caps, forwarder, flags);
+        }
+#endif
     }
 
     return factory;
@@ -167,7 +178,7 @@ GLScreenBuffer::BindAsFramebuffer(GLContext* const gl, GLenum target) const
         break;
 
     default:
-        MOZ_CRASH("Bad `target` for BindFramebuffer.");
+        MOZ_CRASH("GFX: Bad `target` for BindFramebuffer.");
     }
 }
 
@@ -438,7 +449,7 @@ GLScreenBuffer::AssureBlitted()
         } else if (mGL->IsExtensionSupported(GLContext::APPLE_framebuffer_multisample)) {
             mGL->fResolveMultisampleFramebufferAPPLE();
         } else {
-            MOZ_CRASH("No available blit methods.");
+            MOZ_CRASH("GFX: No available blit methods.");
         }
         // Done!
     }
@@ -527,16 +538,18 @@ GLScreenBuffer::Swap(const gfx::IntSize& size)
     if (!newBack)
         return false;
 
+    // In the case of DXGL interop, the new surface needs to be acquired before
+    // it is attached so that the interop surface is locked, which populates
+    // the GL renderbuffer. This results in the renderbuffer being ready and
+    // attachment to framebuffer succeeds in Attach() call.
+    newBack->Surf()->ProducerAcquire();
+
     if (!Attach(newBack->Surf(), size))
         return false;
     // Attach was successful.
 
     mFront = mBack;
     mBack = newBack;
-
-    if (mBack) {
-        mBack->Surf()->ProducerAcquire();
-    }
 
     if (ShouldPreserveBuffer() &&
         mFront &&
@@ -650,7 +663,7 @@ GLScreenBuffer::SetDrawBuffer(GLenum mode)
         break;
 
     default:
-        MOZ_CRASH("Bad value.");
+        MOZ_CRASH("GFX: Bad value.");
     }
 
     mGL->MakeCurrent();
@@ -815,10 +828,7 @@ DrawBuffer::Create(GLContext* const gl,
     gl->fGenFramebuffers(1, &fb);
     gl->AttachBuffersToFB(0, colorMSRB, depthRB, stencilRB, fb);
 
-    GLsizei samples = formats.samples;
-    if (!samples)
-        samples = 1;
-
+    const GLsizei samples = formats.samples;
     UniquePtr<DrawBuffer> ret( new DrawBuffer(gl, size, samples, fb, colorMSRB,
                                               depthRB, stencilRB) );
 
@@ -833,7 +843,8 @@ DrawBuffer::Create(GLContext* const gl,
 
 DrawBuffer::~DrawBuffer()
 {
-    mGL->MakeCurrent();
+    if (!mGL->MakeCurrent())
+        return;
 
     GLuint fb = mFB;
     GLuint rbs[] = {
@@ -887,7 +898,7 @@ ReadBuffer::Create(GLContext* gl,
         colorRB = surf->ProdRenderbuffer();
         break;
     default:
-        MOZ_CRASH("Unknown attachment type?");
+        MOZ_CRASH("GFX: Unknown attachment type, create?");
     }
     MOZ_ASSERT(colorTex || colorRB);
 
@@ -910,7 +921,8 @@ ReadBuffer::Create(GLContext* gl,
 
 ReadBuffer::~ReadBuffer()
 {
-    mGL->MakeCurrent();
+    if (!mGL->MakeCurrent())
+        return;
 
     GLuint fb = mFB;
     GLuint rbs[] = {
@@ -945,7 +957,7 @@ ReadBuffer::Attach(SharedSurface* surf)
             colorRB = surf->ProdRenderbuffer();
             break;
         default:
-            MOZ_CRASH("Unknown attachment type?");
+            MOZ_CRASH("GFX: Unknown attachment type, attach?");
         }
 
         mGL->AttachBuffersToFB(colorTex, colorRB, 0, 0, mFB, target);
@@ -982,7 +994,7 @@ ReadBuffer::SetReadBuffer(GLenum userMode) const
         break;
 
     default:
-        MOZ_CRASH("Bad value.");
+        MOZ_CRASH("GFX: Bad value.");
     }
 
     mGL->MakeCurrent();

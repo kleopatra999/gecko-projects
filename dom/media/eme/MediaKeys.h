@@ -35,12 +35,6 @@ typedef nsRefPtrHashtable<nsUint32HashKey, dom::DetailedPromise> PromiseHashMap;
 typedef nsRefPtrHashtable<nsUint32HashKey, MediaKeySession> PendingKeySessionsHashMap;
 typedef uint32_t PromiseId;
 
-// Helper function to extract data coming in from JS in an
-// (ArrayBuffer or ArrayBufferView) IDL typed function argument.
-bool
-CopyArrayBufferViewOrArrayBufferData(const ArrayBufferViewOrArrayBuffer& aBufferOrView,
-                                     nsTArray<uint8_t>& aOutData);
-
 // This class is used on the main thread only.
 // Note: it's addref/release is not (and can't be) thread safe!
 class MediaKeys final : public nsISupports,
@@ -52,15 +46,17 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MediaKeys)
 
-  MediaKeys(nsPIDOMWindow* aParentWindow, const nsAString& aKeySystem, const nsAString& aCDMVersion);
+  MediaKeys(nsPIDOMWindowInner* aParentWindow,
+            const nsAString& aKeySystem, const nsAString& aCDMVersion);
 
   already_AddRefed<DetailedPromise> Init(ErrorResult& aRv);
 
-  nsPIDOMWindow* GetParentObject() const;
+  nsPIDOMWindowInner* GetParentObject() const;
 
-  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsresult Bind(HTMLMediaElement* aElement);
+  void Unbind();
 
   // Javascript: readonly attribute DOMString keySystem;
   void GetKeySystem(nsString& retval) const;
@@ -136,7 +132,7 @@ private:
 
   RefPtr<HTMLMediaElement> mElement;
 
-  nsCOMPtr<nsPIDOMWindow> mParent;
+  nsCOMPtr<nsPIDOMWindowInner> mParent;
   const nsString mKeySystem;
   const nsString mCDMVersion;
   nsCString mNodeId;

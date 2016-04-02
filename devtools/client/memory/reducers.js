@@ -4,8 +4,11 @@
 "use strict";
 
 exports.allocations = require("./reducers/allocations");
-exports.snapshots = require("./reducers/snapshots");
-exports.breakdown = require("./reducers/breakdown");
+exports.censusDisplay = require("./reducers/census-display");
+exports.diffing = require("./reducers/diffing");
+exports.dominatorTreeDisplay = require("./reducers/dominator-tree-display");
 exports.errors = require("./reducers/errors");
-exports.inverted = require("./reducers/inverted");
 exports.filter = require("./reducers/filter");
+exports.sizes = require("./reducers/sizes");
+exports.snapshots = require("./reducers/snapshots");
+exports.view = require("./reducers/view");

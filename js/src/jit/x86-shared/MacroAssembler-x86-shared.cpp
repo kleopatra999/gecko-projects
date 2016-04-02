@@ -78,7 +78,8 @@ MacroAssembler::restoreFrameAlignmentForICArguments(AfterICSaveLive& aic)
 bool
 MacroAssemblerX86Shared::buildOOLFakeExitFrame(void* fakeReturnAddr)
 {
-    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS,
+                                              ExitFrameLayout::Size());
     asMasm().Push(Imm32(descriptor));
     asMasm().Push(ImmPtr(fakeReturnAddr));
     return true;
@@ -104,14 +105,14 @@ MacroAssemblerX86Shared::branchNegativeZero(FloatRegister reg,
         zeroDouble(scratchDouble);
 
         // If reg is non-zero, jump to nonZero.
-        branchDouble(DoubleNotEqual, reg, scratchDouble, &nonZero);
+        asMasm().branchDouble(DoubleNotEqual, reg, scratchDouble, &nonZero);
     }
     // Input register is either zero or negative zero. Retrieve sign of input.
     vmovmskpd(reg, scratch);
 
     // If reg is 1 or 3, input is negative zero.
     // If reg is 0 or 2, input is a normal zero.
-    branchTest32(NonZero, scratch, Imm32(1), label);
+    asMasm().branchTest32(NonZero, scratch, Imm32(1), label);
 
     bind(&nonZero);
 #elif defined(JS_CODEGEN_X64)
@@ -156,9 +157,6 @@ MacroAssemblerX86Shared::compareExchangeToTypedIntArray(Scalar::Type arrayType, 
       case Scalar::Uint8:
         compareExchange8ZeroExtend(mem, oldval, newval, output.gpr());
         break;
-      case Scalar::Uint8Clamped:
-        compareExchange8ZeroExtend(mem, oldval, newval, output.gpr());
-        break;
       case Scalar::Int16:
         compareExchange16SignExtend(mem, oldval, newval, output.gpr());
         break;
@@ -201,9 +199,6 @@ MacroAssemblerX86Shared::atomicExchangeToTypedIntArray(Scalar::Type arrayType, c
       case Scalar::Uint8:
         atomicExchange8ZeroExtend(mem, value, output.gpr());
         break;
-      case Scalar::Uint8Clamped:
-        atomicExchange8ZeroExtend(mem, value, output.gpr());
-        break;
       case Scalar::Int16:
         atomicExchange16SignExtend(mem, value, output.gpr());
         break;
@@ -232,8 +227,103 @@ template void
 MacroAssemblerX86Shared::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
                                                        Register value, Register temp, AnyRegister output);
 
+template<class T, class Map>
+T*
+MacroAssemblerX86Shared::getConstant(const typename T::Pod& value, Map& map,
+                                     Vector<T, 0, SystemAllocPolicy>& vec)
+{
+    typedef typename Map::AddPtr AddPtr;
+    if (!map.initialized()) {
+        enoughMemory_ &= map.init();
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    size_t index;
+    if (AddPtr p = map.lookupForAdd(value)) {
+        index = p->value();
+    } else {
+        index = vec.length();
+        enoughMemory_ &= vec.append(T(value));
+        if (!enoughMemory_)
+            return nullptr;
+        enoughMemory_ &= map.add(p, value, index);
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    return &vec[index];
+}
+
+MacroAssemblerX86Shared::Float*
+MacroAssemblerX86Shared::getFloat(float f)
+{
+    return getConstant<Float, FloatMap>(f, floatMap_, floats_);
+}
+
+MacroAssemblerX86Shared::Double*
+MacroAssemblerX86Shared::getDouble(double d)
+{
+    return getConstant<Double, DoubleMap>(d, doubleMap_, doubles_);
+}
+
+MacroAssemblerX86Shared::SimdData*
+MacroAssemblerX86Shared::getSimdData(const SimdConstant& v)
+{
+    return getConstant<SimdData, SimdMap>(v, simdMap_, simds_);
+}
+
+template<class T, class Map>
+static bool
+MergeConstants(size_t delta, const Vector<T, 0, SystemAllocPolicy>& other,
+               Map& map, Vector<T, 0, SystemAllocPolicy>& vec)
+{
+    typedef typename Map::AddPtr AddPtr;
+    if (!map.initialized() && !map.init())
+        return false;
+
+    for (const T& c : other) {
+        size_t index;
+        if (AddPtr p = map.lookupForAdd(c.value)) {
+            index = p->value();
+        } else {
+            index = vec.length();
+            if (!vec.append(T(c.value)) || !map.add(p, c.value, index))
+                return false;
+        }
+        MacroAssemblerX86Shared::UsesVector& uses = vec[index].uses;
+        for (CodeOffset use : c.uses) {
+            use.offsetBy(delta);
+            if (!uses.append(use))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+bool
+MacroAssemblerX86Shared::asmMergeWith(const MacroAssemblerX86Shared& other)
+{
+    size_t sizeBefore = masm.size();
+    if (!Assembler::asmMergeWith(other))
+        return false;
+    if (!MergeConstants<Double, DoubleMap>(sizeBefore, other.doubles_, doubleMap_, doubles_))
+        return false;
+    if (!MergeConstants<Float, FloatMap>(sizeBefore, other.floats_, floatMap_, floats_))
+        return false;
+    if (!MergeConstants<SimdData, SimdMap>(sizeBefore, other.simds_, simdMap_, simds_))
+        return false;
+    return true;
+}
 
 //{{{ check_macroassembler_style
+// ===============================================================
+// MacroAssembler high-level usage.
+
+void
+MacroAssembler::flush()
+{
+}
+
 // ===============================================================
 // Stack manipulation functions.
 
@@ -263,9 +353,7 @@ MacroAssembler::PushRegsInMask(LiveRegisterSet set)
             storeDouble(reg, spillAddress);
         else if (reg.isSingle())
             storeFloat32(reg, spillAddress);
-        else if (reg.isInt32x4())
-            storeUnalignedInt32x4(reg, spillAddress);
-        else if (reg.isFloat32x4())
+        else if (reg.isSimd128())
             storeUnalignedFloat32x4(reg, spillAddress);
         else
             MOZ_CRASH("Unknown register type.");
@@ -299,9 +387,7 @@ MacroAssembler::PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore)
             loadDouble(spillAddress, reg);
         else if (reg.isSingle())
             loadFloat32(spillAddress, reg);
-        else if (reg.isInt32x4())
-            loadUnalignedInt32x4(spillAddress, reg);
-        else if (reg.isFloat32x4())
+        else if (reg.isSimd128())
             loadUnalignedFloat32x4(spillAddress, reg);
         else
             MOZ_CRASH("Unknown register type.");
@@ -336,28 +422,28 @@ void
 MacroAssembler::Push(const Operand op)
 {
     push(op);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(Register reg)
 {
     push(reg);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(const Imm32 imm)
 {
     push(imm);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(const ImmWord imm)
 {
     push(imm);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
@@ -370,54 +456,54 @@ void
 MacroAssembler::Push(const ImmGCPtr ptr)
 {
     push(ptr);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(FloatRegister t)
 {
     push(t);
-    framePushed_ += sizeof(double);
+    adjustFrame(sizeof(double));
 }
 
 void
 MacroAssembler::Pop(const Operand op)
 {
     pop(op);
-    framePushed_ -= sizeof(intptr_t);
+    implicitPop(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Pop(Register reg)
 {
     pop(reg);
-    framePushed_ -= sizeof(intptr_t);
+    implicitPop(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Pop(FloatRegister reg)
 {
     pop(reg);
-    framePushed_ -= sizeof(double);
+    implicitPop(sizeof(double));
 }
 
 void
 MacroAssembler::Pop(const ValueOperand& val)
 {
     popValue(val);
-    framePushed_ -= sizeof(Value);
+    implicitPop(sizeof(Value));
 }
 
 // ===============================================================
 // Simple call functions.
 
-CodeOffsetLabel
+CodeOffset
 MacroAssembler::call(Register reg)
 {
     return Assembler::call(reg);
 }
 
-CodeOffsetLabel
+CodeOffset
 MacroAssembler::call(Label* label)
 {
     return Assembler::call(label);
@@ -430,7 +516,7 @@ MacroAssembler::call(const Address& addr)
 }
 
 void
-MacroAssembler::call(AsmJSImmPtr target)
+MacroAssembler::call(wasm::SymbolicAddress target)
 {
     mov(target, eax);
     Assembler::call(eax);
@@ -455,7 +541,7 @@ MacroAssembler::call(JitCode* target)
     Assembler::call(target);
 }
 
-CodeOffsetLabel
+CodeOffset
 MacroAssembler::callWithPatch()
 {
     return Assembler::callWithPatch();
@@ -464,6 +550,24 @@ void
 MacroAssembler::patchCall(uint32_t callerOffset, uint32_t calleeOffset)
 {
     Assembler::patchCall(callerOffset, calleeOffset);
+}
+
+CodeOffset
+MacroAssembler::thunkWithPatch()
+{
+    return Assembler::thunkWithPatch();
+}
+
+void
+MacroAssembler::patchThunk(uint32_t thunkOffset, uint32_t targetOffset)
+{
+    Assembler::patchThunk(thunkOffset, targetOffset);
+}
+
+void
+MacroAssembler::repatchThunk(uint8_t* code, uint32_t thunkOffset, uint32_t targetOffset)
+{
+    Assembler::repatchThunk(code, thunkOffset, targetOffset);
 }
 
 void
@@ -486,9 +590,9 @@ MacroAssembler::pushFakeReturnAddress(Register scratch)
 {
     CodeLabel cl;
 
-    mov(cl.dest(), scratch);
+    mov(cl.patchAt(), scratch);
     Push(scratch);
-    bind(cl.src());
+    use(cl.target());
     uint32_t retAddr = currentOffset();
 
     addCodeLabel(cl);

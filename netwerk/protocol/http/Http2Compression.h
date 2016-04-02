@@ -48,9 +48,9 @@ public:
   uint32_t ByteCount() const;
   uint32_t Length() const;
   uint32_t VariableLength() const;
-  uint32_t StaticLength() const;
+  size_t StaticLength() const;
   void Clear();
-  const nvPair *operator[] (int32_t index) const;
+  const nvPair *operator[] (size_t index) const;
 
 private:
   uint32_t mByteCount;
@@ -117,10 +117,10 @@ private:
   nsresult CopyStringFromInput(uint32_t index, nsACString &val);
   uint8_t ExtractByte(uint8_t bitsLeft, uint32_t &bytesConsumed);
   nsresult CopyHuffmanStringFromInput(uint32_t index, nsACString &val);
-  nsresult DecodeHuffmanCharacter(HuffmanIncomingTable *table, uint8_t &c,
+  nsresult DecodeHuffmanCharacter(const HuffmanIncomingTable *table, uint8_t &c,
                                   uint32_t &bytesConsumed, uint8_t &bitsLeft);
-  nsresult DecodeFinalHuffmanCharacter(HuffmanIncomingTable *table, uint8_t &c,
-                                       uint8_t &bitsLeft);
+  nsresult DecodeFinalHuffmanCharacter(const HuffmanIncomingTable *table,
+                                       uint8_t &c, uint8_t &bitsLeft);
 
   Http2Compressor *mCompressor;
 

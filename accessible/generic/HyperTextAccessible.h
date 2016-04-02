@@ -60,7 +60,7 @@ public:
   virtual mozilla::a11y::role NativeRole() override;
   virtual uint64_t NativeState() override;
 
-  virtual void InvalidateChildren() override;
+  virtual void Shutdown() override;
   virtual bool RemoveChild(Accessible* aAccessible) override;
   virtual Relation RelationByType(RelationType aType) override;
 
@@ -258,7 +258,7 @@ public:
    * @param  aInvalidateAfter [in, optional] indicates whether invalidate
    *                           cached offsets for next siblings of the child
    */
-  int32_t GetChildOffset(Accessible* aChild,
+  int32_t GetChildOffset(const Accessible* aChild,
                          bool aInvalidateAfter = false) const
   {
     int32_t index = GetIndexOf(aChild);
@@ -335,7 +335,7 @@ public:
    * @param [out] the widget containing the caret
    * @return      the caret rect
    */
-  nsIntRect GetCaretRect(nsIWidget** aWidget);
+  mozilla::LayoutDeviceIntRect GetCaretRect(nsIWidget** aWidget);
 
   /**
    * Return selected regions count within the accessible.
@@ -434,7 +434,6 @@ protected:
 
   // Accessible
   virtual ENameValueFlag NativeName(nsString& aName) override;
-  virtual void CacheChildren() override;
 
   // HyperTextAccessible
 

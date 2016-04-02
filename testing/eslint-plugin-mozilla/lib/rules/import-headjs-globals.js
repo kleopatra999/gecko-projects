@@ -6,95 +6,58 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 "use strict";
 
-//------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Rule Definition
-//------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 var fs = require("fs");
 var path = require("path");
 var helpers = require("../helpers");
+var globals = require("../globals");
 
 module.exports = function(context) {
-  //--------------------------------------------------------------------------
-  // Helpers
-  //--------------------------------------------------------------------------
 
-  function checkFile(fileArray, context) {
-    var filePath = fileArray.pop();
-
-    while (filePath) {
-      var headText;
-
-      try {
-        headText = fs.readFileSync(filePath, "utf8");
-      } catch(e) {
-        // Couldn't find file, continue.
-        filePath = fileArray.pop();
-        continue;
+  function importHead(path, node) {
+    try {
+      let stats = fs.statSync(path);
+      if (!stats.isFile()) {
+        return;
       }
-
-      var ast = helpers.getAST(headText);
-      var globalVars = helpers.getGlobals(ast);
-
-      for (var i = 0; i < globalVars.length; i++) {
-        var name = globalVars[i];
-        helpers.addVarToScope(name, context);
-      }
-
-      for (var index in ast.body) {
-        var node = ast.body[index];
-        var source = helpers.getTextForNode(node, headText);
-        var name = helpers.getVarNameFromImportSource(source);
-
-        if (name) {
-          helpers.addVarToScope(name, context);
-          continue;
-        }
-
-        // Scripts loaded using loadSubScript or loadHelperScript
-        var matches =
-          source.match(/^(?:Services\.scriptloader\.|loader)?loadSubScript\((.+)[",]/);
-        if (!matches) {
-          matches = source.match(/^loadHelperScript\((.+)[",]/);
-        }
-        if (matches) {
-          var cwd = process.cwd();
-
-          filePath = matches[1];
-          filePath = filePath.replace("chrome://mochitests/content/browser", cwd + "/../../../..");
-          filePath = filePath.replace(/testdir\s*\+\s*["']/gi, cwd + "/");
-          filePath = filePath.replace(/test_dir\s*\+\s*["']/gi, cwd);
-          filePath = filePath.replace(/["']/gi, "");
-          filePath = path.normalize(filePath);
-
-          fileArray.push(filePath);
-        }
-      }
-
-      filePath = fileArray.pop();
+    } catch (e) {
+      return;
     }
+
+    let newGlobals = globals.getGlobalsForFile(path);
+    helpers.addGlobals(newGlobals, context.getScope());
   }
 
-  //--------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Public
-  //--------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   return {
     Program: function(node) {
-      var pathAndFilename = this.getFilename();
-      var processPath = process.cwd();
-      var isTest = /.*[\\/]browser_.+\.js$/.test(pathAndFilename);
-
-      if (!isTest) {
+      if (!helpers.getIsTest(this)) {
         return;
       }
 
-      var testFilename = path.basename(pathAndFilename);
-      var testPath = path.join(processPath, testFilename);
-      var headjs = path.join(processPath, "head.js");
-      checkFile([testPath, headjs], context);
+      var currentFilePath = helpers.getAbsoluteFilePath(context);
+      var dirName = path.dirname(currentFilePath);
+      importHead(path.resolve(dirName, "head.js"), node);
+
+      if (!helpers.getIsXpcshellTest(this)) {
+        return;
+      }
+
+      let names = fs.readdirSync(dirName);
+      for (let name of names) {
+        if (name.startsWith("head_") && name.endsWith(".js")) {
+          importHead(path.resolve(dirName, name), node);
+        }
+      }
     }
   };
 };

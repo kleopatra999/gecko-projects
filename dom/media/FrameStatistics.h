@@ -13,13 +13,14 @@ namespace mozilla {
 // Threadsafe.
 class FrameStatistics {
 public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FrameStatistics);
+
   FrameStatistics() :
       mReentrantMonitor("FrameStats"),
       mParsedFrames(0),
       mDecodedFrames(0),
       mPresentedFrames(0),
-      mDroppedFrames(0),
-      mCorruptFrames(0) {}
+      mDroppedFrames(0) {}
 
   // Returns number of frames which have been parsed from the media.
   // Can be called on any thread.
@@ -47,12 +48,7 @@ public:
   // compoisition deadline.
   uint32_t GetDroppedFrames() {
     ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-    return mDroppedFrames + mCorruptFrames;
-  }
-
-  uint32_t GetCorruptedFrames() {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-    return mCorruptFrames;
+    return mDroppedFrames;
   }
 
   // Increments the parsed and decoded frame counters by the passed in counts.
@@ -74,12 +70,8 @@ public:
     ++mPresentedFrames;
   }
 
-  void NotifyCorruptFrame() {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-    ++mCorruptFrames;
-  }
-
 private:
+  ~FrameStatistics() {}
 
   // ReentrantMonitor to protect access of playback statistics.
   ReentrantMonitor mReentrantMonitor;
@@ -97,8 +89,6 @@ private:
   uint32_t mPresentedFrames;
 
   uint32_t mDroppedFrames;
-
-  uint32_t mCorruptFrames;
 };
 
 } // namespace mozilla

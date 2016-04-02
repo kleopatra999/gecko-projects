@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that event listeners are properly displayed in the view.
@@ -12,20 +14,27 @@ function test() {
     let gDebugger = aPanel.panelWin;
     let gView = gDebugger.DebuggerView;
     let gEvents = gView.EventListeners;
-    let gStore = gDebugger.store;
+    let gController = gDebugger.DebuggerController;
     let constants = gDebugger.require('./content/constants');
 
     Task.spawn(function*() {
       yield waitForSourceShown(aPanel, ".html");
 
-      let fetched = afterDispatch(gStore, constants.FETCH_EVENT_LISTENERS);
+      let fetched = waitForDispatch(aPanel, constants.FETCH_EVENT_LISTENERS);
       gView.toggleInstrumentsPane({ visible: true, animated: false }, 1);
       yield fetched;
 
       is(gEvents.widget._parent.querySelectorAll(".side-menu-widget-group").length, 3,
         "There should be 3 groups shown in the view.");
-      is(gEvents.widget._parent.querySelectorAll(".side-menu-widget-group-checkbox").length, 3,
+
+      let groupCheckboxes = gEvents.widget._parent.querySelectorAll(
+        ".side-menu-widget-group-checkbox");
+      is(groupCheckboxes.length, 3,
         "There should be a checkbox for each group shown in the view.");
+      for (let cb of groupCheckboxes) {
+        isnot(cb.getAttribute("tooltiptext"), "undefined",
+          "A valid tooltip text should be defined on group checkboxes");
+      }
 
       is(gEvents.widget._parent.querySelectorAll(".side-menu-widget-item").length, 4,
         "There should be 4 items shown in the view.");

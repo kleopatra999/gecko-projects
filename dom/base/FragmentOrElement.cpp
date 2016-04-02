@@ -18,6 +18,7 @@
 #include "mozilla/dom/FragmentOrElement.h"
 
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/EffectSet.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStates.h"
@@ -111,7 +112,7 @@
 
 #include "mozAutoDocUpdate.h"
 
-#include "prprf.h"
+#include "mozilla/Snprintf.h"
 #include "nsDOMMutationObserver.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsCycleCollector.h"
@@ -238,10 +239,15 @@ dom::Element*
 nsIContent::GetEditingHost()
 {
   // If this isn't editable, return nullptr.
-  NS_ENSURE_TRUE(IsEditableInternal(), nullptr);
+  if (!IsEditableInternal()) {
+    return nullptr;
+  }
 
   nsIDocument* doc = GetComposedDoc();
-  NS_ENSURE_TRUE(doc, nullptr);
+  if (!doc) {
+    return nullptr;
+  }
+
   // If this is in designMode, we should return <body>
   if (doc->HasFlag(NODE_IS_EDITABLE) && !IsInShadowTree()) {
     return doc->GetBodyElement();
@@ -274,7 +280,7 @@ nsIContent::LookupNamespaceURIInternal(const nsAString& aNamespacePrefix,
 
   nsCOMPtr<nsIAtom> name;
   if (!aNamespacePrefix.IsEmpty()) {
-    name = do_GetAtom(aNamespacePrefix);
+    name = NS_Atomize(aNamespacePrefix);
     NS_ENSURE_TRUE(name, NS_ERROR_OUT_OF_MEMORY);
   }
   else {
@@ -302,7 +308,7 @@ nsIContent::GetBaseURI(bool aTryUseXHRDocBaseURI) const
   // faster for the far more common case of there not being any such
   // attributes.
   // Also check for SVG elements which require special handling
-  nsAutoTArray<nsString, 5> baseAttrs;
+  AutoTArray<nsString, 5> baseAttrs;
   nsString attr;
   const nsIContent *elem = this;
   do {
@@ -509,7 +515,6 @@ nsNodeSupportsWeakRefTearoff::GetWeakReference(nsIWeakReference** aInstancePtr)
   nsINode::nsSlots* slots = mNode->Slots();
   if (!slots->mWeakReference) {
     slots->mWeakReference = new nsNodeWeakReference(mNode);
-    NS_ENSURE_TRUE(slots->mWeakReference, NS_ERROR_OUT_OF_MEMORY);
   }
 
   NS_ADDREF(*aInstancePtr = slots->mWeakReference);
@@ -589,7 +594,9 @@ FragmentOrElement::nsDOMSlots::Unlink(bool aIsXUL)
   }
   if (aIsXUL)
     NS_IF_RELEASE(mControllers);
-  mXBLBinding = nullptr;
+
+  MOZ_ASSERT(!mXBLBinding);
+
   mXBLInsertionParent = nullptr;
   mShadowRoot = nullptr;
   mContainingShadow = nullptr;
@@ -842,7 +849,7 @@ nsIContent::PreHandleEvent(EventChainPreVisitor& aVisitor)
       // the event to chrome (nsPIDOMWindow::GetParentTarget()).
       // The load event is special in that we don't ever propagate it
       // to chrome.
-      nsCOMPtr<nsPIDOMWindow> win = OwnerDoc()->GetWindow();
+      nsCOMPtr<nsPIDOMWindowOuter> win = OwnerDoc()->GetWindow();
       EventTarget* parentTarget = win && aVisitor.mEvent->mMessage != eLoad
         ? win->GetParentTarget() : nullptr;
 
@@ -1175,7 +1182,8 @@ void
 FragmentOrElement::DestroyContent()
 {
   nsIDocument *document = OwnerDoc();
-  document->BindingManager()->RemovedFromDocument(this, document);
+  document->BindingManager()->RemovedFromDocument(this, document,
+                                                  nsBindingManager::eRunDtor);
   document->ClearBoxObjectFor(this);
 
   // XXX We really should let cycle collection do this, but that currently still
@@ -1323,7 +1331,7 @@ public:
   }
 
 private:
-  nsAutoTArray<nsCOMPtr<nsIContent>,
+  AutoTArray<nsCOMPtr<nsIContent>,
                SUBTREE_UNBINDINGS_PER_RUNNABLE> mSubtreeRoots;
   RefPtr<ContentUnbinder>                     mNext;
   ContentUnbinder*                              mLast;
@@ -1351,6 +1359,12 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
       nsIAtom*** props = Element::HTMLSVGPropertiesToTraverseAndUnlink();
       for (uint32_t i = 0; props[i]; ++i) {
         tmp->DeleteProperty(*props[i]);
+      }
+      if (tmp->MayHaveAnimations()) {
+        nsIAtom** effectProps = EffectSet::GetEffectSetPropertyAtoms();
+        for (uint32_t i = 0; effectProps[i]; ++i) {
+          tmp->DeleteProperty(effectProps[i]);
+        }
       }
     }
   }
@@ -1385,6 +1399,10 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
   // containing shadow root pointer.
   tmp->UnsetFlags(NODE_IS_IN_SHADOW_TREE);
 
+  nsIDocument* doc = tmp->OwnerDoc();
+  doc->BindingManager()->RemovedFromDocument(tmp, doc,
+                                             nsBindingManager::eDoNotRunDtor);
+
   // Unlink any DOM slots of interest.
   {
     nsDOMSlots *slots = tmp->GetExistingDOMSlots();
@@ -1393,12 +1411,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
     }
   }
 
-  {
-    nsIDocument *doc;
-    if (!tmp->GetParentNode() && (doc = tmp->OwnerDoc())) {
-      doc->BindingManager()->RemovedFromDocument(tmp, doc);
-    }
-  }
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(FragmentOrElement)
@@ -1517,11 +1529,11 @@ FragmentOrElement::CanSkipInCC(nsINode* aNode)
 
   // nodesToUnpurple contains nodes which will be removed
   // from the purple buffer if the DOM tree is black.
-  nsAutoTArray<nsIContent*, 1020> nodesToUnpurple;
+  AutoTArray<nsIContent*, 1020> nodesToUnpurple;
   // grayNodes need script traverse, so they aren't removed from
   // the purple buffer, but are marked to be in black subtree so that
   // traverse is faster.
-  nsAutoTArray<nsINode*, 1020> grayNodes;
+  AutoTArray<nsINode*, 1020> grayNodes;
 
   bool foundBlack = root->IsBlack();
   if (root != currentDoc) {
@@ -1587,8 +1599,8 @@ FragmentOrElement::CanSkipInCC(nsINode* aNode)
   return !NeedsScriptTraverse(aNode);
 }
 
-nsAutoTArray<nsINode*, 1020>* gPurpleRoots = nullptr;
-nsAutoTArray<nsIContent*, 1020>* gNodesToUnbind = nullptr;
+AutoTArray<nsINode*, 1020>* gPurpleRoots = nullptr;
+AutoTArray<nsIContent*, 1020>* gNodesToUnbind = nullptr;
 
 void ClearCycleCollectorCleanupData()
 {
@@ -1691,7 +1703,7 @@ FragmentOrElement::CanSkip(nsINode* aNode, bool aRemovingAllowed)
 
   // nodesToClear contains nodes which are either purple or
   // gray.
-  nsAutoTArray<nsIContent*, 1020> nodesToClear;
+  AutoTArray<nsIContent*, 1020> nodesToClear;
 
   bool foundBlack = root->IsBlack();
   bool domOnlyCycle = false;
@@ -1740,7 +1752,7 @@ FragmentOrElement::CanSkip(nsINode* aNode, bool aRemovingAllowed)
     root->SetIsPurpleRoot(true);
     if (domOnlyCycle) {
       if (!gNodesToUnbind) {
-        gNodesToUnbind = new nsAutoTArray<nsIContent*, 1020>();
+        gNodesToUnbind = new AutoTArray<nsIContent*, 1020>();
       }
       gNodesToUnbind->AppendElement(static_cast<nsIContent*>(root));
       for (uint32_t i = 0; i < nodesToClear.Length(); ++i) {
@@ -1752,7 +1764,7 @@ FragmentOrElement::CanSkip(nsINode* aNode, bool aRemovingAllowed)
       return true;
     } else {
       if (!gPurpleRoots) {
-        gPurpleRoots = new nsAutoTArray<nsINode*, 1020>();
+        gPurpleRoots = new AutoTArray<nsINode*, 1020>();
       }
       gPurpleRoots->AppendElement(root);
     }
@@ -1871,13 +1883,13 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
     }
 
     const char* nsuri = nsid < ArrayLength(kNSURIs) ? kNSURIs[nsid] : "";
-    PR_snprintf(name, sizeof(name), "FragmentOrElement%s %s%s%s%s %s",
-                nsuri,
-                localName.get(),
-                NS_ConvertUTF16toUTF8(id).get(),
-                NS_ConvertUTF16toUTF8(classes).get(),
-                orphan.get(),
-                uri.get());
+    snprintf_literal(name, "FragmentOrElement%s %s%s%s%s %s",
+                     nsuri,
+                     localName.get(),
+                     NS_ConvertUTF16toUTF8(id).get(),
+                     NS_ConvertUTF16toUTF8(classes).get(),
+                     orphan.get(),
+                     uri.get());
     cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
   }
   else {
@@ -1894,6 +1906,14 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
 
   tmp->OwnerDoc()->BindingManager()->Traverse(tmp, cb);
 
+  // Check that whenever we have effect properties, MayHaveAnimations is set.
+#ifdef DEBUG
+  nsIAtom** effectProps = EffectSet::GetEffectSetPropertyAtoms();
+  for (uint32_t i = 0; effectProps[i]; ++i) {
+    MOZ_ASSERT_IF(tmp->GetProperty(effectProps[i]), tmp->MayHaveAnimations());
+  }
+#endif
+
   if (tmp->HasProperties()) {
     if (tmp->IsHTMLElement() || tmp->IsSVGElement()) {
       nsIAtom*** props = Element::HTMLSVGPropertiesToTraverseAndUnlink();
@@ -1901,6 +1921,16 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
         nsISupports* property =
           static_cast<nsISupports*>(tmp->GetProperty(*props[i]));
         cb.NoteXPCOMChild(property);
+      }
+      if (tmp->MayHaveAnimations()) {
+        nsIAtom** effectProps = EffectSet::GetEffectSetPropertyAtoms();
+        for (uint32_t i = 0; effectProps[i]; ++i) {
+          EffectSet* effectSet =
+            static_cast<EffectSet*>(tmp->GetProperty(effectProps[i]));
+          if (effectSet) {
+            effectSet->Traverse(cb);
+          }
+        }
       }
     }
   }

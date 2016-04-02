@@ -59,6 +59,7 @@ public:
 
   // nsIStyleRule interface
   virtual void MapRuleInfoInto(nsRuleData* aRuleData) override;
+  virtual bool MightMapInheritedStyleData() override;
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -101,6 +102,7 @@ public:
 
   // nsIStyleRule implementation
   virtual void MapRuleInfoInto(nsRuleData *aRuleData) override;
+  virtual bool MightMapInheritedStyleData() override;
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -148,14 +150,6 @@ public:
    * @param aName The variable name (i.e., without the "--" prefix).
    */
   void RemoveVariableDeclaration(const nsAString& aName);
-
-  /**
-   * Returns whether a custom property declaration for a variable with
-   * a given name exists on this object.
-   *
-   * @param aName The variable name (i.e., without the "--" prefix).
-   */
-  bool HasVariableDeclaration(const nsAString& aName) const;
 
   /**
    * Gets the string value for a custom property declaration of a variable
@@ -231,6 +225,8 @@ public:
       mImportantVariables->MapRuleInfoInto(aRuleData);
     }
   }
+
+  bool MapsImportantInheritedStyleData() const;
 
   /**
    * Attempt to replace the value for |aProperty| stored in this
@@ -321,7 +317,7 @@ public:
     mContainer.mOwningRule = aRule;
   }
 
-  Rule* GetOwningRule() {
+  Rule* GetOwningRule() const {
     if (mContainer.mRaw & 0x1) {
       return nullptr;
     }
@@ -337,7 +333,7 @@ public:
     }
   }
 
-  nsHTMLCSSStyleSheet* GetHTMLCSSStyleSheet() {
+  nsHTMLCSSStyleSheet* GetHTMLCSSStyleSheet() const {
     if (!(mContainer.mRaw & 0x1)) {
       return nullptr;
     }
@@ -373,6 +369,11 @@ private:
   // a variable with the specified name
   void AppendVariableAndValueToString(const nsAString& aName,
                                       nsAString& aResult) const;
+
+  void GetImageLayerValue(nsCSSCompressedDataBlock *data,
+                          nsAString& aValue,
+                          nsCSSValue::Serialization aSerialization,
+                          const nsCSSProperty aTable[]) const;
 
 public:
   /**
@@ -410,7 +411,7 @@ private:
   // Subtracting eCSSProperty_COUNT from those values that represent custom
   // properties results in an index into mVariableOrder, which identifies the
   // specific variable the custom property declaration is for.
-  nsAutoTArray<uint32_t, 8> mOrder;
+  AutoTArray<uint32_t, 8> mOrder;
 
   // variable names of custom properties found in mOrder
   nsTArray<nsString> mVariableOrder;

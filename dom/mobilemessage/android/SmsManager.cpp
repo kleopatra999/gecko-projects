@@ -10,8 +10,8 @@
 #include "mozilla/dom/mobilemessage/SmsParent.h"
 #include "mozilla/dom/mobilemessage/SmsTypes.h"
 #include "mozilla/dom/mobilemessage/Types.h"
-#include "mozilla/dom/MobileMessageThread.h"
-#include "mozilla/dom/SmsMessage.h"
+#include "MobileMessageThreadInternal.h"
+#include "SmsMessageInternal.h"
 #include "mozilla/Services.h"
 #include "nsIMobileMessageDatabaseService.h"
 #include "nsIObserverService.h"
@@ -24,24 +24,26 @@ namespace mozilla {
 
 /*static*/
 void
-SmsManager::NotifySmsReceived(jni::String::Param aSender,
+SmsManager::NotifySmsReceived(int32_t aId,
+                              jni::String::Param aSender,
                               jni::String::Param aBody,
                               int32_t aMessageClass,
+                              int64_t aSentTimestamp,
                               int64_t aTimestamp)
 {
     // TODO Need to correct the message `threadId` parameter value. Bug 859098
     SmsMessageData message;
-    message.id() = 0;
+    message.id() = aId;
     message.threadId() = 0;
     message.iccId() = EmptyString();
     message.delivery() = eDeliveryState_Received;
     message.deliveryStatus() = eDeliveryStatus_Success;
-    message.sender() = aSender ? nsString(aSender) : EmptyString();
+    message.sender() = aSender ? aSender->ToString() : EmptyString();
     message.receiver() = EmptyString();
-    message.body() = aBody ? nsString(aBody) : EmptyString();
+    message.body() = aBody ? aBody->ToString() : EmptyString();
     message.messageClass() = static_cast<MessageClass>(aMessageClass);
     message.timestamp() = aTimestamp;
-    message.sentTimestamp() = aTimestamp;
+    message.sentTimestamp() = aSentTimestamp;
     message.deliveryTimestamp() = aTimestamp;
     message.read() = false;
 
@@ -51,7 +53,7 @@ SmsManager::NotifySmsReceived(jni::String::Param aSender,
             return;
         }
 
-        nsCOMPtr<nsIDOMMozSmsMessage> domMessage = new SmsMessage(message);
+        nsCOMPtr<nsISmsMessage> domMessage = new SmsMessageInternal(message);
         obs->NotifyObservers(domMessage, kSmsReceivedObserverTopic, nullptr);
     });
     NS_DispatchToMainThread(runnable);
@@ -74,8 +76,8 @@ SmsManager::NotifySmsSent(int32_t aId,
     message.delivery() = eDeliveryState_Sent;
     message.deliveryStatus() = eDeliveryStatus_Pending;
     message.sender() = EmptyString();
-    message.receiver() = aReceiver ? nsString(aReceiver) : EmptyString();
-    message.body() = aBody ? nsString(aBody) : EmptyString();
+    message.receiver() = aReceiver ? aReceiver->ToString() : EmptyString();
+    message.body() = aBody ? aBody->ToString() : EmptyString();
     message.messageClass() = eMessageClass_Normal;
     message.timestamp() = aTimestamp;
     message.sentTimestamp() = aTimestamp;
@@ -92,7 +94,7 @@ SmsManager::NotifySmsSent(int32_t aId,
             return;
         }
 
-        nsCOMPtr<nsIDOMMozSmsMessage> domMessage = new SmsMessage(message);
+        nsCOMPtr<nsISmsMessage> domMessage = new SmsMessageInternal(message);
         obs->NotifyObservers(domMessage, kSmsSentObserverTopic, nullptr);
 
         nsCOMPtr<nsIMobileMessageCallback> request =
@@ -123,8 +125,8 @@ SmsManager::NotifySmsDelivery(int32_t aId,
     message.delivery() = eDeliveryState_Sent;
     message.deliveryStatus() = static_cast<DeliveryStatus>(aDeliveryStatus);
     message.sender() = EmptyString();
-    message.receiver() = aReceiver ? nsString(aReceiver) : EmptyString();
-    message.body() = aBody ? nsString(aBody) : EmptyString();
+    message.receiver() = aReceiver ? aReceiver->ToString() : EmptyString();
+    message.body() = aBody ? aBody->ToString() : EmptyString();
     message.messageClass() = eMessageClass_Normal;
     message.timestamp() = aTimestamp;
     message.sentTimestamp() = aTimestamp;
@@ -137,7 +139,7 @@ SmsManager::NotifySmsDelivery(int32_t aId,
             return;
         }
 
-        nsCOMPtr<nsIDOMMozSmsMessage> domMessage = new SmsMessage(message);
+        nsCOMPtr<nsISmsMessage> domMessage = new SmsMessageInternal(message);
         const char* topic = (message.deliveryStatus() == eDeliveryStatus_Success)
                             ? kSmsDeliverySuccessObserverTopic
                             : kSmsDeliveryErrorObserverTopic;
@@ -173,7 +175,7 @@ SmsManager::NotifyGetSms(int32_t aId,
                          bool aRead,
                          int32_t aRequestId)
 {
-    nsString receiver(aReceiver);
+    nsString receiver(aReceiver->ToString());
     DeliveryState state = receiver.IsEmpty() ? eDeliveryState_Received
                                              : eDeliveryState_Sent;
 
@@ -185,9 +187,9 @@ SmsManager::NotifyGetSms(int32_t aId,
     message.iccId() = EmptyString();
     message.delivery() = state;
     message.deliveryStatus() = static_cast<DeliveryStatus>(aDeliveryStatus);
-    message.sender() = aSender ? nsString(aSender) : EmptyString();
+    message.sender() = aSender ? aSender->ToString() : EmptyString();
     message.receiver() = receiver;
-    message.body() = aBody ? nsString(aBody) : EmptyString();
+    message.body() = aBody ? aBody->ToString() : EmptyString();
     message.messageClass() = eMessageClass_Normal;
     message.timestamp() = aTimestamp;
     message.sentTimestamp() = aTimestamp;
@@ -201,7 +203,7 @@ SmsManager::NotifyGetSms(int32_t aId,
             return;
         }
 
-        nsCOMPtr<nsIDOMMozSmsMessage> domMessage = new SmsMessage(message);
+        nsCOMPtr<nsISmsMessage> domMessage = new SmsMessageInternal(message);
         request->NotifyMessageGot(domMessage);
     });
     NS_DispatchToMainThread(runnable);
@@ -287,9 +289,9 @@ SmsManager::NotifyThreadCursorResult(int64_t aId,
     ThreadData thread;
     thread.id() = aId;
     thread.lastMessageSubject() = aLastMessageSubject ?
-                                    nsString(aLastMessageSubject) :
+                                    aLastMessageSubject->ToString() :
                                     EmptyString();
-    thread.body() = aBody ? nsString(aBody) : EmptyString();
+    thread.body() = aBody ? aBody->ToString() : EmptyString();
     thread.unreadCount() = aUnreadCount;
     thread.timestamp() = aTimestamp;
     thread.lastMessageType() = eMessageType_SMS;
@@ -313,10 +315,10 @@ SmsManager::NotifyThreadCursorResult(int64_t aId,
             return;
         }
 
-        nsCOMArray<nsIDOMMozMobileMessageThread> arr;
-        arr.AppendElement(new MobileMessageThread(thread));
+        nsCOMArray<nsIMobileMessageThread> arr;
+        arr.AppendElement(new MobileMessageThreadInternal(thread));
 
-        nsIDOMMozMobileMessageThread** elements;
+        nsIMobileMessageThread** elements;
         int32_t size;
         size = arr.Forget(&elements);
 
@@ -338,7 +340,7 @@ SmsManager::NotifyMessageCursorResult(int32_t aMessageId,
                                       bool aRead,
                                       int32_t aRequestId)
 {
-    nsString receiver = nsString(aReceiver);
+    nsString receiver = aReceiver->ToString();
     DeliveryState state = receiver.IsEmpty() ? eDeliveryState_Received
                                              : eDeliveryState_Sent;
 
@@ -349,9 +351,9 @@ SmsManager::NotifyMessageCursorResult(int32_t aMessageId,
     message.iccId() = EmptyString();
     message.delivery() = state;
     message.deliveryStatus() = static_cast<DeliveryStatus>(aDeliveryStatus);
-    message.sender() = aSender ? nsString(aSender) : EmptyString();
+    message.sender() = aSender ? aSender->ToString() : EmptyString();
     message.receiver() = receiver;
-    message.body() = aBody ? nsString(aBody) : EmptyString();
+    message.body() = aBody ? aBody->ToString() : EmptyString();
     message.messageClass() = eMessageClass_Normal;
     message.timestamp() = aTimestamp;
     message.sentTimestamp() = aTimestamp;
@@ -365,10 +367,10 @@ SmsManager::NotifyMessageCursorResult(int32_t aMessageId,
             return;
         }
 
-        nsCOMArray<nsIDOMMozSmsMessage> arr;
-        arr.AppendElement(new SmsMessage(message));
+        nsCOMArray<nsISmsMessage> arr;
+        arr.AppendElement(new SmsMessageInternal(message));
 
-        nsIDOMMozSmsMessage** elements;
+        nsISmsMessage** elements;
         int32_t size;
         size = arr.Forget(&elements);
 

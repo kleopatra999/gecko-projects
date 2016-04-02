@@ -38,7 +38,6 @@
 #include "nsWrapperCacheInlines.h"
 #include "nsIXPConnect.h"
 #include "nsDOMCID.h"
-#include "nsIDOMScriptObjectFactory.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsTHashtable.h"
 
@@ -83,36 +82,20 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsBindingManager)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 
-static PLDHashOperator
-DocumentInfoHashtableTraverser(nsIURI* key,
-                               nsXBLDocumentInfo* di,
-                               void* userArg)
-{
-  nsCycleCollectionTraversalCallback *cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(userArg);
-  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mDocumentTable value");
-  cb->NoteXPCOMChild(di);
-  return PL_DHASH_NEXT;
-}
-
-static PLDHashOperator
-LoadingDocHashtableTraverser(nsIURI* key,
-                             nsIStreamListener* sl,
-                             void* userArg)
-{
-  nsCycleCollectionTraversalCallback *cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(userArg);
-  NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mLoadingDocTable value");
-  cb->NoteXPCOMChild(sl);
-  return PL_DHASH_NEXT;
-}
-
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsBindingManager)
   // The hashes keyed on nsIContent are traversed from the nsIContent itself.
-  if (tmp->mDocumentTable)
-      tmp->mDocumentTable->EnumerateRead(&DocumentInfoHashtableTraverser, &cb);
-  if (tmp->mLoadingDocTable)
-      tmp->mLoadingDocTable->EnumerateRead(&LoadingDocHashtableTraverser, &cb);
+  if (tmp->mDocumentTable) {
+    for (auto iter = tmp->mDocumentTable->Iter(); !iter.Done(); iter.Next()) {
+      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mDocumentTable value");
+      cb.NoteXPCOMChild(iter.UserData());
+    }
+  }
+  if (tmp->mLoadingDocTable) {
+    for (auto iter = tmp->mLoadingDocTable->Iter(); !iter.Done(); iter.Next()) {
+      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mLoadingDocTable value");
+      cb.NoteXPCOMChild(iter.UserData());
+    }
+  }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAttachedStack)
   // No need to traverse mProcessAttachedQueueEvent, since it'll just
   // fire at some point or become revoke and drop its ref to us.
@@ -213,7 +196,8 @@ nsBindingManager::SetWrappedJS(nsIContent* aContent, nsIXPConnectWrappedJS* aWra
 
 void
 nsBindingManager::RemovedFromDocumentInternal(nsIContent* aContent,
-                                              nsIDocument* aOldDocument)
+                                              nsIDocument* aOldDocument,
+                                              DestructorHandling aDestructorHandling)
 {
   NS_PRECONDITION(aOldDocument != nullptr, "no old document");
 
@@ -224,7 +208,7 @@ nsBindingManager::RemovedFromDocumentInternal(nsIContent* aContent,
     // BindingDetached (which may invoke a XBL destructor) and
     // ChangeDocument, but we still want to clear out the binding
     // and insertion parent that may hold references.
-    if (!mDestroyed) {
+    if (!mDestroyed && aDestructorHandling == eRunDtor) {
       binding->PrototypeBinding()->BindingDetached(binding->GetBoundElement());
       binding->ChangeDocument(aOldDocument, nullptr);
     }
@@ -788,7 +772,7 @@ nsBindingManager::MediumFeaturesChanged(nsPresContext* aPresContext,
 }
 
 void
-nsBindingManager::AppendAllSheets(nsTArray<CSSStyleSheet*>& aArray)
+nsBindingManager::AppendAllSheets(nsTArray<StyleSheetHandle>& aArray)
 {
   if (!mBoundContentSet) {
     return;

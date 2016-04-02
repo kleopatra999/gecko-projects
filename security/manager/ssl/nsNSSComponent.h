@@ -82,6 +82,10 @@ public:
 
   NS_IMETHOD IsNSSInitialized(bool* initialized) = 0;
 
+#ifdef DEBUG
+  NS_IMETHOD IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result) = 0;
+#endif
+
   virtual ::already_AddRefed<mozilla::psm::SharedCertVerifier>
     GetDefaultCertVerifier() = 0;
 };
@@ -132,6 +136,10 @@ public:
 
   NS_IMETHOD IsNSSInitialized(bool* initialized) override;
 
+#ifdef DEBUG
+  NS_IMETHOD IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result) override;
+#endif
+
   ::already_AddRefed<mozilla::psm::SharedCertVerifier>
     GetDefaultCertVerifier() override;
 
@@ -160,11 +168,7 @@ private:
   nsresult ConfigureInternalPKCS11Token();
   nsresult RegisterObservers();
 
-  // Methods that we use to handle the profile change notifications (and to
-  // synthesize a full profile change when we're just doing a profile startup):
-  void DoProfileChangeNetTeardown();
-  void DoProfileBeforeChange(nsISupports* aSubject);
-  void DoProfileChangeNetRestore();
+  void DoProfileBeforeChange();
 
   mozilla::Mutex mutex;
 
@@ -176,7 +180,10 @@ private:
 #ifndef MOZ_NO_SMART_CARDS
   SmartCardThreadList* mThreadList;
 #endif
-  bool mIsNetworkDown;
+
+#ifdef DEBUG
+  nsAutoString mTestBuiltInRootHash;
+#endif
 
   void deleteBackgroundThreads();
   void createBackgroundThreads();

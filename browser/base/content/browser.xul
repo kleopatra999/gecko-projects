@@ -8,7 +8,7 @@
 
 <?xml-stylesheet href="chrome://browser/content/browser.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/content/places/places.css" type="text/css"?>
-<?xml-stylesheet href="chrome://devtools/skin/common.css" type="text/css"?>
+<?xml-stylesheet href="chrome://devtools/skin/devtools-browser.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/controlcenter/panel.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/customizableui/panelUIOverlay.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
@@ -69,6 +69,8 @@
 
 <script type="application/javascript" src="chrome://global/content/contentAreaUtils.js"/>
 
+<script type="application/javascript" src="chrome://browser/content/downloads/downloads.js"/>
+<script type="application/javascript" src="chrome://browser/content/downloads/indicator.js"/>
 <script type="application/javascript" src="chrome://browser/content/places/editBookmarkOverlay.js"/>
 
 # All sets except for popupsets (commands, keys, stringbundles and broadcasters) *must* go into the
@@ -91,15 +93,6 @@
       <menuitem id="context_unpinTab" label="&unpinTab.label;" hidden="true"
                 accesskey="&unpinTab.accesskey;"
                 oncommand="gBrowser.unpinTab(TabContextMenu.contextTab);"/>
-      <menu id="context_tabViewMenu" label="&moveToGroup.label;"
-            accesskey="&moveToGroup.accesskey;">
-        <menupopup id="context_tabViewMenuPopup"
-                   onpopupshowing="if (event.target == this) TabView.moveToGroupPopupShowing(event);">
-          <menuseparator id="context_tabViewNamedGroups" hidden="true"/>
-          <menuitem id="context_tabViewNewGroup" label="&moveToNewGroup.label;"
-                    oncommand="TabView.moveTabTo(TabContextMenu.contextTab, null);"/>
-        </menupopup>
-      </menu>
       <menuitem id="context_openTabInWindow" label="&moveToNewWindow.label;"
                 accesskey="&moveToNewWindow.accesskey;"
                 tbattr="tabbrowser-multiple"
@@ -189,12 +182,6 @@
         <vbox>
           <label id="editBookmarkPanelTitle"/>
           <description id="editBookmarkPanelDescription"/>
-          <hbox>
-            <button id="editBookmarkPanelRemoveButton"
-                    class="editBookmarkPanelHeaderButton"
-                    oncommand="StarUI.removeBookmarkButtonCommand();"
-                    accesskey="&editBookmark.removeBookmark.accessKey;"/>
-          </hbox>
         </vbox>
       </row>
       <vbox id="editBookmarkPanelContent" flex="1" hidden="true"/>
@@ -205,15 +192,15 @@
                 label="&editBookmark.done.label;"
                 default="true"
                 oncommand="StarUI.panel.hidePopup();"/>
-        <button id="editBookmarkPanelDeleteButton"
+        <button id="editBookmarkPanelRemoveButton"
                 class="editBookmarkPanelBottomButton"
-                label="&editBookmark.cancel.label;"
-                oncommand="StarUI.cancelButtonOnCommand();"/>
+                oncommand="StarUI.removeBookmarkButtonCommand();"
+                accesskey="&editBookmark.removeBookmark.accessKey;"/>
 #else
-        <button id="editBookmarkPanelDeleteButton"
+        <button id="editBookmarkPanelRemoveButton"
                 class="editBookmarkPanelBottomButton"
-                label="&editBookmark.cancel.label;"
-                oncommand="StarUI.cancelButtonOnCommand();"/>
+                oncommand="StarUI.removeBookmarkButtonCommand();"
+                accesskey="&editBookmark.removeBookmark.accessKey;"/>
         <button id="editBookmarkPanelDoneButton"
                 class="editBookmarkPanelBottomButton"
                 label="&editBookmark.done.label;"
@@ -473,15 +460,44 @@
     <tooltip id="dynamic-shortcut-tooltip"
              onpopupshowing="UpdateDynamicShortcutTooltipText(this);"/>
 
-    <menupopup id="emeNotificationsPopup">
-      <menuitem id="emeNotificationsNotNow"
-                label="&emeNotificationsNotNow.label;"
-                acceskey="&emeNotificationsNotNow.accesskey;"
-                oncommand="gEMEHandler.onNotNow(this);"/>
-      <menuitem id="emeNotificationsDontAskAgain"
-                label="&emeNotificationsDontAskAgain.label;"
-                acceskey="&emeNotificationsDontAskAgain.accesskey;"
-                oncommand="gEMEHandler.onDontAskAgain(this);"/>
+    <menupopup id="SyncedTabsSidebarContext">
+      <menuitem label="&syncedTabs.context.openTab.label;"
+                accesskey="&syncedTabs.context.openTab.accesskey;"
+                id="syncedTabsOpenSelected"/>
+      <menuitem label="&syncedTabs.context.bookmarkSingleTab.label;"
+                accesskey="&syncedTabs.context.bookmarkSingleTab.accesskey;"
+                id="syncedTabsBookmarkSelected"/>
+      <menuseparator/>
+      <menuitem label="&syncSyncNowItem.label;"
+                accesskey="&syncSyncNowItem.accesskey;"
+                id="syncedTabsRefresh"/>
+    </menupopup>
+    <menupopup id="SyncedTabsSidebarTabsFilterContext"
+               class="textbox-contextmenu">
+      <menuitem label="&undoCmd.label;"
+                accesskey="&undoCmd.accesskey;"
+                cmd="cmd_undo"/>
+      <menuseparator/>
+      <menuitem label="&cutCmd.label;"
+                accesskey="&cutCmd.accesskey;"
+                cmd="cmd_cut"/>
+      <menuitem label="&copyCmd.label;"
+                accesskey="&copyCmd.accesskey;"
+                cmd="cmd_copy"/>
+      <menuitem label="&pasteCmd.label;"
+                accesskey="&pasteCmd.accesskey;"
+                cmd="cmd_paste"/>
+      <menuitem label="&deleteCmd.label;"
+                accesskey="&deleteCmd.accesskey;"
+                cmd="cmd_delete"/>
+      <menuseparator/>
+      <menuitem label="&selectAllCmd.label;"
+                accesskey="&selectAllCmd.accesskey;"
+                cmd="cmd_selectAll"/>
+      <menuseparator/>
+      <menuitem label="&syncSyncNowItem.label;"
+                accesskey="&syncSyncNowItem.accesskey;"
+                id="syncedTabsRefreshFilter"/>
     </menupopup>
   </popupset>
 
@@ -590,12 +606,6 @@
                      removable="false">
         <menupopup id="alltabs-popup"
                    position="after_end">
-          <menuitem id="menu_tabview"
-                    class="menuitem-iconic"
-                    key="key_tabview"
-                    label="&viewTabGroups.label;"
-                    command="Browser:ToggleTabView"
-                    observes="tabviewGroupsNumber"/>
           <menuitem id="alltabs_undoCloseTab"
                     class="menuitem-iconic"
                     key="key_undoCloseTab"
@@ -635,9 +645,9 @@
              fullscreentoolbar="true" mode="icons" customizable="true"
              iconsize="small"
 #ifdef MOZ_DEV_EDITION
-             defaultset="urlbar-container,search-container,developer-button,bookmarks-menu-button,pocket-button,downloads-button,home-button,loop-button"
+             defaultset="urlbar-container,search-container,developer-button,bookmarks-menu-button,downloads-button,home-button,loop-button"
 #else
-             defaultset="urlbar-container,search-container,bookmarks-menu-button,pocket-button,downloads-button,home-button,loop-button"
+             defaultset="urlbar-container,search-container,bookmarks-menu-button,downloads-button,home-button,loop-button"
 #endif
              customizationtarget="nav-bar-customization-target"
              overflowable="true"
@@ -685,10 +695,6 @@
               <box id="notification-popup-box" hidden="true" align="center">
                 <image id="default-notification-icon" class="notification-anchor-icon" role="button"
                        aria-label="&urlbar.defaultNotificationAnchor.label;"/>
-                <!-- NB: the identity-notification-icon is used for persona-based auth and preffed
-                     off by default. It hasn't been updated for some time and liable to being
-                     removed.-->
-                <image id="identity-notification-icon" class="notification-anchor-icon" role="button"/>
                 <image id="geo-notification-icon" class="notification-anchor-icon" role="button"
                        aria-label="&urlbar.geolocationNotificationAnchor.label;"/>
                 <image id="addons-notification-icon" class="notification-anchor-icon" role="button"
@@ -699,12 +705,10 @@
                        aria-label="&urlbar.loginFillNotificationAnchor.label;"/>
                 <image id="password-notification-icon" class="notification-anchor-icon" role="button"
                        aria-label="&urlbar.passwordNotificationAnchor.label;"/>
-                <image id="webapps-notification-icon" class="notification-anchor-icon" role="button"
-                       aria-label="&urlbar.webappsNotificationAnchor.label;"/>
                 <image id="plugins-notification-icon" class="notification-anchor-icon" role="button"
                        aria-label="&urlbar.pluginsNotificationAnchor.label;"/>
                 <image id="web-notifications-notification-icon" class="notification-anchor-icon" role="button"
-                       aria-label="&urlbar.webNotsNotificationAnchor2.label;"/>
+                       aria-label="&urlbar.webNotsNotificationAnchor3.label;"/>
                 <image id="webRTC-shareDevices-notification-icon" class="notification-anchor-icon" role="button"
                        aria-label="&urlbar.webRTCShareDevicesNotificationAnchor.label;"/>
                 <image id="webRTC-sharingDevices-notification-icon" class="notification-anchor-icon" role="button"
@@ -738,13 +742,11 @@
                    onclick="gIdentityHandler.handleIdentityButtonEvent(event);"
                    onkeypress="gIdentityHandler.handleIdentityButtonEvent(event);"
                    ondragstart="gIdentityHandler.onDragStart(event);">
-                <hbox id="identity-icons"
-                      consumeanchor="identity-box">
-                  <image id="tracking-protection-icon"/>
-                  <image id="page-proxy-favicon"
-                         onclick="PageProxyClickHandler(event);"
-                         pageproxystate="invalid"/>
-                </hbox>
+                <image id="identity-icon"
+                       consumeanchor="identity-box"
+                       onclick="PageProxyClickHandler(event);"/>
+                <image id="tracking-protection-icon"/>
+                <image id="connection-icon"/>
                 <hbox id="identity-icon-labels">
                   <label id="identity-icon-label" class="plain" flex="1"/>
                   <label id="identity-icon-country-label" class="plain"/>
@@ -815,7 +817,6 @@
                      oncommand="BookmarksEventHandler.onCommand(event, this.parentNode._placesView);"
                      onclick="BookmarksEventHandler.onClick(event, this.parentNode._placesView);"
                      onpopupshowing="BookmarkingUI.onPopupShowing(event);
-                                     BookmarkingUI.updatePocketItemVisibility('BMB_');
                                      BookmarkingUI.attachPlacesView(event, this);"
                      tooltip="bhTooltip" popupsinherittooltip="true">
             <menuitem id="BMB_viewBookmarksSidebar"
@@ -832,34 +833,10 @@
                       command="Browser:ShowAllBookmarks"
                       key="manBookmarkKb"/>
             <menuseparator/>
-            <menuitem id="BMB_pocket"
-                      class="menuitem-iconic bookmark-item subviewbutton"
-                      label="&pocketMenuitem.label;"
-                      oncommand="openUILink(Pocket.listURL, event);"/>
-            <menuseparator id="BMB_pocketSeparator"/>
-            <menuitem id="BMB_subscribeToPageMenuitem"
-#ifndef XP_MACOSX
-                      class="menuitem-iconic subviewbutton"
-#else
-                      class="subviewbutton"
-#endif
-                      label="&subscribeToPageMenuitem.label;"
-                      oncommand="return FeedHandler.subscribeToFeed(null, event);"
-                      onclick="checkForMiddleClick(this, event);"
-                      observes="singleFeedMenuitemState"/>
-            <menu id="BMB_subscribeToPageMenupopup"
-#ifndef XP_MACOSX
-                  class="menu-iconic subviewbutton"
-#else
-                  class="subviewbutton"
-#endif
-                  label="&subscribeToPageMenupopup.label;"
-                  observes="multipleFeedsMenuState">
-              <menupopup id="BMB_subscribeToPageSubmenuMenupopup"
-                         onpopupshowing="return FeedHandler.buildFeedList(event.target);"
-                         oncommand="return FeedHandler.subscribeToFeed(null, event);"
-                         onclick="checkForMiddleClick(this, event);"/>
-            </menu>
+            <menuitem label="&recentBookmarks.label;"
+                      id="BMB_recentBookmarks"
+                      disabled="true"
+                      class="subviewbutton"/>
             <menuseparator/>
             <menu id="BMB_bookmarksToolbar"
                   class="menu-iconic bookmark-item subviewbutton"
@@ -883,7 +860,7 @@
             </menu>
             <menu id="BMB_unsortedBookmarks"
                   class="menu-iconic bookmark-item subviewbutton"
-                  label="&bookmarksMenuButton.unsorted.label;"
+                  label="&bookmarksMenuButton.other.label;"
                   container="true">
               <menupopup id="BMB_unsortedBookmarksPopup"
                          placespopup="true"
@@ -1055,23 +1032,8 @@
                      type="checkbox"
                      label="&fullScreenCmd.label;"
                      tooltip="dynamic-shortcut-tooltip"/>
-
-#ifdef MOZ_SERVICES_SYNC
-      <toolbarbutton id="sync-button"
-                     class="toolbarbutton-1 chromeclass-toolbar-additional"
-                     label="&syncToolbarButton.label;"
-                     oncommand="gSyncUI.handleToolbarButton()"/>
-#endif
-
-      <toolbarbutton id="tabview-button" class="toolbarbutton-1 chromeclass-toolbar-additional"
-                     label="&tabGroupsButton.label;"
-                     command="Browser:ToggleTabView"
-                     tooltip="dynamic-shortcut-tooltip"
-                     observes="tabviewGroupsNumber"/>
     </toolbarpalette>
   </toolbox>
-
-  <hbox id="fullscr-toggler" hidden="true"/>
 
   <deck id="content-deck" flex="1">
     <hbox flex="1" id="browser">
@@ -1172,29 +1134,6 @@
 
   <vbox id="browser-bottombox" layer="true">
     <notificationbox id="global-notificationbox" notificationside="bottom"/>
-    <toolbar id="developer-toolbar"
-             hidden="true">
-#ifdef XP_MACOSX
-          <toolbarbutton id="developer-toolbar-closebutton"
-                         class="devtools-closebutton"
-                         oncommand="DeveloperToolbar.hide();"
-                         tooltiptext="&devToolbarCloseButton.tooltiptext;"/>
-#endif
-          <stack class="gclitoolbar-stack-node" flex="1">
-            <textbox class="gclitoolbar-input-node" rows="1"/>
-            <hbox class="gclitoolbar-complete-node"/>
-          </stack>
-          <toolbarbutton id="developer-toolbar-toolbox-button"
-                         class="developer-toolbar-button"
-                         observes="devtoolsMenuBroadcaster_DevToolbox"
-                         tooltiptext="&devToolbarToolsButton.tooltip;"/>
-#ifndef XP_MACOSX
-          <toolbarbutton id="developer-toolbar-closebutton"
-                         class="devtools-closebutton"
-                         oncommand="DeveloperToolbar.hide();"
-                         tooltiptext="&devToolbarCloseButton.tooltiptext;"/>
-#endif
-   </toolbar>
   </vbox>
 
   <svg:svg height="0">
@@ -1218,5 +1157,8 @@
 #     Introducing the iframe dynamically, as needed, was found to be better than
 #     starting with an empty iframe here in browser.xul from a Ts standpoint.
 </deck>
+
+# Put it at the very end to make sure it is not covered by anything.
+<hbox id="fullscr-toggler" hidden="true"/>
 
 </window>

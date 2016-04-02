@@ -1,15 +1,13 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-#ifdef MOZ_SERVICES_CLOUDSYNC
-XPCOMUtils.defineLazyModuleGetter(this, "CloudSync",
-                                  "resource://gre/modules/CloudSync.jsm");
-#else
-var CloudSync = null;
-#endif
+if (AppConstants.MOZ_SERVICES_CLOUDSYNC) {
+  XPCOMUtils.defineLazyModuleGetter(this, "CloudSync",
+                                    "resource://gre/modules/CloudSync.jsm");
+}
 
 XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
@@ -78,6 +76,12 @@ var gSyncUI = {
     this._obs.forEach(function(topic) {
       Services.obs.addObserver(this, topic, true);
     }, this);
+
+    // initial label for the sync buttons.
+    let broadcaster = document.getElementById("sync-status");
+    broadcaster.setAttribute("label", this._stringBundle.GetStringFromName("syncnow.label"));
+
+    this.maybeMoveSyncedTabsButton();
 
     this.updateUI();
   },
@@ -178,14 +182,10 @@ var gSyncUI = {
 
     this.log.debug("onActivityStart with numActive", this._numActiveSyncTasks);
     if (++this._numActiveSyncTasks == 1) {
-      let button = document.getElementById("sync-button");
-      if (button) {
-        button.setAttribute("status", "active");
-      }
-      let container = document.getElementById("PanelUI-footer-fxa");
-      if (container) {
-        container.setAttribute("syncstatus", "active");
-      }
+      let broadcaster = document.getElementById("sync-status");
+      broadcaster.setAttribute("syncstatus", "active");
+      broadcaster.setAttribute("label", this._stringBundle.GetStringFromName("syncing2.label"));
+      broadcaster.setAttribute("disabled", "true");
     }
     this.updateUI();
   },
@@ -205,14 +205,10 @@ var gSyncUI = {
       return; // active tasks are still ongoing...
     }
 
-    let syncButton = document.getElementById("sync-button");
-    if (syncButton) {
-      syncButton.removeAttribute("status");
-    }
-    let fxaContainer = document.getElementById("PanelUI-footer-fxa");
-    if (fxaContainer) {
-      fxaContainer.removeAttribute("syncstatus");
-    }
+    let broadcaster = document.getElementById("sync-status");
+    broadcaster.removeAttribute("syncstatus");
+    broadcaster.removeAttribute("disabled");
+    broadcaster.setAttribute("label", this._stringBundle.GetStringFromName("syncnow.label"));
     this.updateUI();
   },
 
@@ -315,8 +311,47 @@ var gSyncUI = {
     gFxAccounts.openSignInAgainPage(entryPoint);
   },
 
-  /* Update the tooltip for the Sync Toolbar button and the Sync spinner in the
-     FxA hamburger area.
+  openSyncedTabsPanel() {
+    let placement = CustomizableUI.getPlacementOfWidget("sync-button");
+    let area = placement ? placement.area : CustomizableUI.AREA_NAVBAR;
+    let anchor = document.getElementById("sync-button") ||
+                 document.getElementById("PanelUI-menu-button");
+    if (area == CustomizableUI.AREA_PANEL) {
+      // The button is in the panel, so we need to show the panel UI, then our
+      // subview.
+      PanelUI.show().then(() => {
+        PanelUI.showSubView("PanelUI-remotetabs", anchor, area);
+      }).catch(Cu.reportError);
+    } else {
+      // It is placed somewhere else - just try and show it.
+      PanelUI.showSubView("PanelUI-remotetabs", anchor, area);
+    }
+  },
+
+  /* After Sync is initialized we perform a once-only check for the sync
+     button being in "customize purgatory" and if so, move it to the panel.
+     This is done primarily for profiles created before SyncedTabs landed,
+     where the button defaulted to being in that purgatory.
+     We use a preference to ensure we only do it once, so people can still
+     customize it away and have it stick.
+  */
+  maybeMoveSyncedTabsButton() {
+    const prefName = "browser.migrated-sync-button";
+    let migrated = false;
+    try {
+      migrated = Services.prefs.getBoolPref(prefName);
+    } catch (_) {}
+    if (migrated) {
+      return;
+    }
+    if (!CustomizableUI.getPlacementOfWidget("sync-button")) {
+      CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
+    }
+    Services.prefs.setBoolPref(prefName, true);
+  },
+
+  /* Update the tooltip for the sync-status broadcaster (which will update the
+     Sync Toolbar button and the Sync spinner in the FxA hamburger area.)
      If Sync is configured, the tooltip is when the last sync occurred,
      otherwise the tooltip reflects the fact that Sync needs to be
      (re-)configured.
@@ -351,7 +386,8 @@ var gSyncUI = {
       try {
         let lastSync = new Date(Services.prefs.getCharPref("services.sync.lastSync"));
         // Show the day-of-week and time (HH:MM) of last sync
-        let lastSyncDateString = lastSync.toLocaleFormat("%a %H:%M");
+        let lastSyncDateString = lastSync.toLocaleDateString(undefined,
+          {weekday: 'long', hour: 'numeric', minute: 'numeric'});
         tooltiptext = this._stringBundle.formatStringFromName("lastSync2.label", [lastSyncDateString], 1);
       }
       catch (e) {
@@ -366,16 +402,13 @@ var gSyncUI = {
     // sure it hasn't been torn down since we started.
     if (!gBrowser)
       return;
-    let syncButton = document.getElementById("sync-button");
-    let statusButton = document.getElementById("PanelUI-fxa-icon");
 
-    for (let button of [syncButton, statusButton]) {
-      if (button) {
-        if (tooltiptext) {
-          button.setAttribute("tooltiptext", tooltiptext);
-        } else {
-          button.removeAttribute("tooltiptext");
-        }
+    let broadcaster = document.getElementById("sync-status");
+    if (broadcaster) {
+      if (tooltiptext) {
+        broadcaster.setAttribute("tooltiptext", tooltiptext);
+      } else {
+        broadcaster.removeAttribute("tooltiptext");
       }
     }
   }),

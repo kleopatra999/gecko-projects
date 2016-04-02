@@ -94,23 +94,31 @@ struct PCMappingIndexEntry
     uint32_t bufferOffset;
 };
 
-// Describes a single AsmJSModule which jumps (via an FFI exit with the given
-// index) directly to a BaselineScript or IonScript.
-struct DependentAsmJSModuleExit
+// Describes a single wasm::Module::ImportExit which jumps (via an import with
+// the given index) directly to a BaselineScript or IonScript.
+struct DependentWasmModuleImport
 {
-    const AsmJSModule* module;
-    size_t exitIndex;
+    wasm::Module* module;
+    size_t importIndex;
 
-    DependentAsmJSModuleExit(const AsmJSModule* module, size_t exitIndex)
+    DependentWasmModuleImport(wasm::Module* module, size_t importIndex)
       : module(module),
-        exitIndex(exitIndex)
+        importIndex(importIndex)
     { }
 };
 
 struct BaselineScript
 {
   public:
+    // Largest script that the baseline compiler will attempt to compile.
+#if defined(JS_CODEGEN_ARM)
+    // ARM branches can only reach 32MB, and the macroassembler doesn't mitigate
+    // that limitation. Use a stricter limit on the acceptable script size to
+    // avoid crashing when branches go out of range.
+    static const uint32_t MAX_JSSCRIPT_LENGTH = 1000000u;
+#else
     static const uint32_t MAX_JSSCRIPT_LENGTH = 0x0fffffffu;
+#endif
 
     // Limit the locals on a given script so that stack check on baseline frames
     // doesn't overflow a uint32_t value.
@@ -129,9 +137,9 @@ struct BaselineScript
     // Allocated space for fallback stubs.
     FallbackICStubSpace fallbackStubSpace_;
 
-    // If non-null, the list of AsmJSModules that contain an optimized call
+    // If non-null, the list of wasm::Modules that contain an optimized call
     // directly to this script.
-    Vector<DependentAsmJSModuleExit>* dependentAsmJSModules_;
+    Vector<DependentWasmModuleImport>* dependentWasmModules_;
 
     // Native code offset right before the scope chain is initialized.
     uint32_t prologueOffset_;
@@ -356,8 +364,8 @@ struct BaselineScript
         templateScope_ = templateScope;
     }
 
-    void toggleBarriers(bool enabled) {
-        method()->togglePreBarriers(enabled);
+    void toggleBarriers(bool enabled, ReprotectCode reprotect = Reprotect) {
+        method()->togglePreBarriers(enabled, reprotect);
     }
 
     bool containsCodeAddress(uint8_t* addr) const {
@@ -365,11 +373,12 @@ struct BaselineScript
     }
 
     ICEntry& icEntry(size_t index);
-    ICEntry& icEntryFromReturnOffset(CodeOffsetLabel returnOffset);
+    ICEntry& icEntryFromReturnOffset(CodeOffset returnOffset);
     ICEntry& icEntryFromPCOffset(uint32_t pcOffset);
     ICEntry& icEntryFromPCOffset(uint32_t pcOffset, ICEntry* prevLookedUpEntry);
     ICEntry& callVMEntryFromPCOffset(uint32_t pcOffset);
     ICEntry& stackCheckICEntry(bool earlyCheck);
+    ICEntry& warmupCountICEntry();
     ICEntry& icEntryFromReturnAddress(uint8_t* returnAddr);
     uint8_t* returnAddressForIC(const ICEntry& ent);
 
@@ -400,10 +409,10 @@ struct BaselineScript
     // the result may not be accurate.
     jsbytecode* approximatePcForNativeAddress(JSScript* script, uint8_t* nativeAddress);
 
-    bool addDependentAsmJSModule(JSContext* cx, DependentAsmJSModuleExit exit);
-    void unlinkDependentAsmJSModules(FreeOp* fop);
-    void clearDependentAsmJSModules();
-    void removeDependentAsmJSModule(DependentAsmJSModuleExit exit);
+    bool addDependentWasmModule(JSContext* cx, wasm::Module& module, uint32_t importIndex);
+    void unlinkDependentWasmModules(FreeOp* fop);
+    void clearDependentWasmModules();
+    void removeDependentWasmModule(wasm::Module& module, uint32_t importIndex);
 
     // Toggle debug traps (used for breakpoints and step mode) in the script.
     // If |pc| is nullptr, toggle traps for all ops in the script. Else, only
@@ -480,7 +489,7 @@ struct BaselineScript
         pendingBuilder_ = builder;
 
         // lazy linking cannot happen during asmjs to ion.
-        clearDependentAsmJSModules();
+        clearDependentWasmModules();
 
         script->updateBaselineOrIonRaw(maybecx);
     }

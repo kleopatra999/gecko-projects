@@ -4,7 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ImageClient.h"
+
 #include <stdint.h>                     // for uint32_t
+
+#include "ClientLayerManager.h"         // for ClientLayer
 #include "ImageContainer.h"             // for Image, PlanarYCbCrImage, etc
 #include "ImageTypes.h"                 // for ImageFormat::PLANAR_YCBCR, etc
 #include "GLImages.h"                   // for SurfaceTextureImage::Data, etc
@@ -12,6 +15,7 @@
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
+#include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat, etc
@@ -21,8 +25,6 @@
 #include "mozilla/layers/ISurfaceAllocator.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
 #include "mozilla/layers/ShadowLayers.h"  // for ShadowLayerForwarder
-#include "mozilla/layers/SharedPlanarYCbCrImage.h"
-#include "mozilla/layers/SharedRGBImage.h"
 #include "mozilla/layers/TextureClient.h"  // for TextureClient, etc
 #include "mozilla/layers/TextureClientOGL.h"  // for SurfaceTextureClient
 #include "mozilla/mozalloc.h"           // for operator delete, etc
@@ -31,7 +33,7 @@
 #include "nsDebug.h"                    // for NS_WARNING, NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Image::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
-#include "mozilla/gfx/2D.h"
+
 #ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
 #endif
@@ -57,13 +59,8 @@ ImageClient::CreateImageClient(CompositableType aCompositableHostType,
   case CompositableType::UNKNOWN:
     result = nullptr;
     break;
-#ifdef MOZ_WIDGET_GONK
-  case CompositableType::IMAGE_OVERLAY:
-    result = new ImageClientOverlay(aForwarder, aFlags);
-    break;
-#endif
   default:
-    MOZ_CRASH("unhandled program type");
+    MOZ_CRASH("GFX: unhandled program type image");
   }
 
   NS_ASSERTION(result, "Failed to create ImageClient");
@@ -81,8 +78,7 @@ void
 ImageClient::RemoveTextureWithWaiter(TextureClient* aTexture,
                                      AsyncTransactionWaiter* aAsyncTransactionWaiter)
 {
-  if ((aAsyncTransactionWaiter ||
-      GetForwarder()->IsImageBridgeChild())
+  if ((aAsyncTransactionWaiter || GetForwarder()->UsesImageBridge())
 #ifndef MOZ_WIDGET_GONK
       // If the texture client is taking part in recycling then we should make sure
       // the host has finished with it before dropping the ref and triggering
@@ -126,7 +122,7 @@ ImageClientSingle::FlushAllImages(AsyncTransactionWaiter* aAsyncTransactionWaite
 bool
 ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlags)
 {
-  nsAutoTArray<ImageContainer::OwningImage,4> images;
+  AutoTArray<ImageContainer::OwningImage,4> images;
   uint32_t generationCounter;
   aContainer->GetCurrentImages(&images, &generationCounter);
 
@@ -152,16 +148,41 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
   }
 
   nsTArray<Buffer> newBuffers;
-  nsAutoTArray<CompositableForwarder::TimedTextureClient,4> textures;
+  AutoTArray<CompositableForwarder::TimedTextureClient,4> textures;
 
   for (auto& img : images) {
     Image* image = img.mImage;
+
+#ifdef MOZ_WIDGET_GONK
+    if (image->GetFormat() == ImageFormat::OVERLAY_IMAGE) {
+      OverlayImage* overlayImage = static_cast<OverlayImage*>(image);
+      OverlaySource source;
+      if (overlayImage->GetSidebandStream().IsValid()) {
+        // Duplicate GonkNativeHandle::NhObj for ipc,
+        // since ParamTraits<GonkNativeHandle>::Write() absorbs native_handle_t.
+        RefPtr<GonkNativeHandle::NhObj> nhObj = overlayImage->GetSidebandStream().GetDupNhObj();
+        GonkNativeHandle handle(nhObj);
+        if (!handle.IsValid()) {
+          gfxWarning() << "ImageClientSingle::UpdateImage failed in GetDupNhObj";
+          return false;
+        }
+        source.handle() = OverlayHandle(handle);
+      } else {
+        source.handle() = OverlayHandle(overlayImage->GetOverlayId());
+      }
+      source.size() = overlayImage->GetSize();
+      GetForwarder()->UseOverlaySource(this, source, image->GetPictureRect());
+      continue;
+    }
+#endif
+
     RefPtr<TextureClient> texture = image->GetTextureClient(this);
+    const bool hasTextureClient = !!texture;
 
     for (int32_t i = mBuffers.Length() - 1; i >= 0; --i) {
       if (mBuffers[i].mImageSerial == image->GetSerial()) {
-        if (texture) {
-          MOZ_ASSERT(texture == mBuffers[i].mTextureClient);
+        if (hasTextureClient) {
+          MOZ_ASSERT(image->GetTextureClient(this) == mBuffers[i].mTextureClient);
         } else {
           texture = mBuffers[i].mTextureClient;
         }
@@ -194,7 +215,7 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
           return false;
         }
 
-        bool status = texture->AsTextureClientYCbCr()->UpdateYCbCr(*data);
+        bool status = UpdateYCbCrTextureClient(texture, *data);
         MOZ_ASSERT(status);
         if (!status) {
           return false;
@@ -204,18 +225,16 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
         gfx::IntSize size = image->GetSize();
 
         if (image->GetFormat() == ImageFormat::EGLIMAGE) {
-          EGLImageImage* typedImage = static_cast<EGLImageImage*>(image);
-          texture = new EGLImageTextureClient(GetForwarder(),
-                                              mTextureFlags,
-                                              typedImage,
-                                              size);
+          EGLImageImage* typedImage = image->AsEGLImageImage();
+          texture = EGLImageTextureData::CreateTextureClient(
+            typedImage, size, GetForwarder(), mTextureFlags);
 #ifdef MOZ_WIDGET_ANDROID
         } else if (image->GetFormat() == ImageFormat::SURFACE_TEXTURE) {
-          SurfaceTextureImage* typedImage = static_cast<SurfaceTextureImage*>(image);
-          const SurfaceTextureImage::Data* data = typedImage->GetData();
-          texture = new SurfaceTextureClient(GetForwarder(), mTextureFlags,
-                                             data->mSurfTex, size,
-                                             data->mOriginPos);
+          SurfaceTextureImage* typedImage = image->AsSurfaceTextureImage();
+          texture = AndroidSurfaceTextureData::CreateTextureClient(
+            typedImage->GetSurfaceTexture(), size, typedImage->GetOriginPos(),
+            GetForwarder(), mTextureFlags
+          );
 #endif
         } else {
           MOZ_ASSERT(false, "Bad ImageFormat.");
@@ -320,75 +339,5 @@ ImageClientBridge::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
   return true;
 }
 
-already_AddRefed<Image>
-ImageClientSingle::CreateImage(ImageFormat aFormat)
-{
-  RefPtr<Image> img;
-  switch (aFormat) {
-    case ImageFormat::PLANAR_YCBCR:
-      img = new SharedPlanarYCbCrImage(this);
-      return img.forget();
-    case ImageFormat::SHARED_RGB:
-      img = new SharedRGBImage(this);
-      return img.forget();
-#ifdef MOZ_WIDGET_GONK
-    case ImageFormat::GRALLOC_PLANAR_YCBCR:
-      img = new GrallocImage();
-      return img.forget();
-#endif
-    default:
-      return nullptr;
-  }
-}
-
-#ifdef MOZ_WIDGET_GONK
-ImageClientOverlay::ImageClientOverlay(CompositableForwarder* aFwd,
-                                       TextureFlags aFlags)
-  : ImageClient(aFwd, aFlags, CompositableType::IMAGE_OVERLAY)
-{
-}
-
-bool
-ImageClientOverlay::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlags)
-{
-  AutoLockImage autoLock(aContainer);
-
-  Image *image = autoLock.GetImage();
-  if (!image) {
-    return false;
-  }
-
-  if (mLastUpdateGenerationCounter == (uint32_t)image->GetSerial()) {
-    return true;
-  }
-  mLastUpdateGenerationCounter = (uint32_t)image->GetSerial();
-
-  if (image->GetFormat() == ImageFormat::OVERLAY_IMAGE) {
-    OverlayImage* overlayImage = static_cast<OverlayImage*>(image);
-    uint32_t overlayId = overlayImage->GetOverlayId();
-    gfx::IntSize size = overlayImage->GetSize();
-
-    OverlaySource source;
-    source.handle() = OverlayHandle(overlayId);
-    source.size() = size;
-    GetForwarder()->UseOverlaySource(this, source, image->GetPictureRect());
-  }
-  return true;
-}
-
-already_AddRefed<Image>
-ImageClientOverlay::CreateImage(ImageFormat aFormat)
-{
-  RefPtr<Image> img;
-  switch (aFormat) {
-    case ImageFormat::OVERLAY_IMAGE:
-      img = new OverlayImage();
-      return img.forget();
-    default:
-      return nullptr;
-  }
-}
-
-#endif
 } // namespace layers
 } // namespace mozilla

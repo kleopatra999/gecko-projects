@@ -114,14 +114,9 @@ HTMLAllCollection::GetDocumentAllList(const nsAString& aID)
     return docAllList;
   }
 
-  Element* root = mDocument->GetRootElement();
-  if (!root) {
-    return nullptr;
-  }
-
-  nsCOMPtr<nsIAtom> id = do_GetAtom(aID);
+  nsCOMPtr<nsIAtom> id = NS_Atomize(aID);
   RefPtr<nsContentList> docAllList =
-    new nsContentList(root, DocAllResultMatch, nullptr, nullptr, true, id);
+    new nsContentList(mDocument, DocAllResultMatch, nullptr, nullptr, true, id);
   mNamedMap.Put(aID, docAllList);
   return docAllList;
 }
@@ -173,7 +168,7 @@ HTMLAllCollection::GetSupportedNames(unsigned aFlags, nsTArray<nsString>& aNames
 
   // XXXbz this is very similar to nsContentList::GetSupportedNames,
   // but has to check IsAllNamedElement for the name case.
-  nsAutoTArray<nsIAtom*, 8> atoms;
+  AutoTArray<nsIAtom*, 8> atoms;
   for (uint32_t i = 0; i < Length(); ++i) {
     nsIContent *content = Item(i);
     if (content->HasID()) {
@@ -202,9 +197,10 @@ HTMLAllCollection::GetSupportedNames(unsigned aFlags, nsTArray<nsString>& aNames
     }
   }
 
-  aNames.SetCapacity(atoms.Length());
-  for (uint32_t i = 0; i < atoms.Length(); ++i) {
-    aNames.AppendElement(nsDependentAtomString(atoms[i]));
+  uint32_t atomsLen = atoms.Length();
+  nsString* names = aNames.AppendElements(atomsLen);
+  for (uint32_t i = 0; i < atomsLen; ++i) {
+    atoms[i]->ToString(names[i]);
   }
 }
 

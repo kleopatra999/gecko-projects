@@ -133,27 +133,11 @@ case "$target" in
         AC_MSG_ERROR([not found. Please check your NDK. With the current configuration, it should be in $android_platform])
     fi
 
-    dnl set up compilers
     TOOLCHAIN_PREFIX="$android_toolchain/bin/$android_tool_prefix-"
-    AS="$android_toolchain"/bin/"$android_tool_prefix"-as
-    if test -z "$CC"; then
-        CC="$android_toolchain"/bin/"$android_tool_prefix"-gcc
-    fi
-    if test -z "$CXX"; then
-        CXX="$android_toolchain"/bin/"$android_tool_prefix"-g++
-    fi
-    if test -z "$CPP"; then
-        CPP="$android_toolchain"/bin/"$android_tool_prefix"-cpp
-    fi
-    LD="$android_toolchain"/bin/"$android_tool_prefix"-ld
-    AR="$android_toolchain"/bin/"$android_tool_prefix"-ar
-    RANLIB="$android_toolchain"/bin/"$android_tool_prefix"-ranlib
-    STRIP="$android_toolchain"/bin/"$android_tool_prefix"-strip
-    OBJCOPY="$android_toolchain"/bin/"$android_tool_prefix"-objcopy
 
     CPPFLAGS="-idirafter $android_platform/usr/include $CPPFLAGS"
     CFLAGS="-mandroid -fno-short-enums -fno-exceptions $CFLAGS"
-    CXXFLAGS="-mandroid -fno-short-enums -fno-exceptions -Wno-psabi $CXXFLAGS"
+    CXXFLAGS="-mandroid -fno-short-enums -fno-exceptions $CXXFLAGS"
     ASFLAGS="-idirafter $android_platform/usr/include -DANDROID $ASFLAGS"
 
     dnl Add -llog by default, since we use it all over the place.
@@ -161,20 +145,6 @@ case "$target" in
     dnl undefined symbol (present on the hardware, just not in the
     dnl NDK.)
     LDFLAGS="-mandroid -L$android_platform/usr/lib -Wl,-rpath-link=$android_platform/usr/lib --sysroot=$android_platform -llog -Wl,--allow-shlib-undefined $LDFLAGS"
-    dnl prevent cross compile section from using these flags as host flags
-    if test -z "$HOST_CPPFLAGS" ; then
-        HOST_CPPFLAGS=" "
-    fi
-    if test -z "$HOST_CFLAGS" ; then
-        HOST_CFLAGS=" "
-    fi
-    if test -z "$HOST_CXXFLAGS" ; then
-        HOST_CXXFLAGS=" "
-    fi
-    if test -z "$HOST_LDFLAGS" ; then
-        HOST_LDFLAGS=" "
-    fi
-
     ANDROID_NDK="${android_ndk}"
     ANDROID_TOOLCHAIN="${android_toolchain}"
     ANDROID_PLATFORM="${android_platform}"
@@ -203,7 +173,7 @@ if test "$OS_TARGET" = "Android" -a -z "$gonkdir"; then
     x86-*)
         ANDROID_CPU_ARCH=x86
         ;;
-    mips-*) # When target_cpu is mipsel, CPU_ARCH is mips
+    mips32-*) # When target_cpu is mipsel, CPU_ARCH is mips32
         ANDROID_CPU_ARCH=mips
         ;;
     esac
@@ -352,6 +322,19 @@ if test -n "$MOZ_ANDROID_GCM" ; then
     MOZ_ANDROID_AAR(play-services-base, 8.1.0, google, com/google/android/gms)
     MOZ_ANDROID_AAR(play-services-basement, 8.1.0, google, com/google/android/gms)
     MOZ_ANDROID_AAR(play-services-gcm, 8.1.0, google, com/google/android/gms)
+fi
+
+])
+
+AC_DEFUN([MOZ_ANDROID_INSTALL_TRACKING],
+[
+
+if test -n "$MOZ_INSTALL_TRACKING"; then
+    AC_SUBST(MOZ_INSTALL_TRACKING)
+    MOZ_ANDROID_AAR(play-services-ads, 8.1.0, google, com/google/android/gms)
+    MOZ_ANDROID_AAR(play-services-analytics, 8.1.0, google, com/google/android/gms)
+    MOZ_ANDROID_AAR(play-services-appindexing, 8.1.0, google, com/google/android/gms)
+    MOZ_ANDROID_AAR(play-services-basement, 8.1.0, google, com/google/android/gms)
 fi
 
 ])

@@ -32,7 +32,10 @@ DetailedPromise::DetailedPromise(nsIGlobalObject* aGlobal,
 
 DetailedPromise::~DetailedPromise()
 {
-  MOZ_ASSERT(mResponded == IsPending());
+  // It would be nice to assert that mResponded is identical to
+  // GetPromiseState() == PromiseState::Rejected.  But by now we've been
+  // unlinked, so don't have a reference to our actual JS Promise object
+  // anymore.
   MaybeReportTelemetry(Failed);
 }
 
@@ -47,9 +50,9 @@ DetailedPromise::MaybeReject(nsresult aArg, const nsACString& aReason)
 
   LogToBrowserConsole(NS_ConvertUTF8toUTF16(msg));
 
-  RefPtr<DOMException> exception =
-    DOMException::Create(aArg, aReason);
-  Promise::MaybeRejectBrokenly(exception);
+  ErrorResult rv;
+  rv.ThrowDOMException(aArg, aReason);
+  Promise::MaybeReject(rv);
 }
 
 void

@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -75,15 +77,6 @@ nsFormFillController::nsFormFillController() :
   MOZ_ASSERT(mController);
 }
 
-struct PwmgrInputsEnumData
-{
-  PwmgrInputsEnumData(nsFormFillController* aFFC, nsIDocument* aDoc)
-  : mFFC(aFFC), mDoc(aDoc) {}
-
-  nsFormFillController* mFFC;
-  nsCOMPtr<nsIDocument> mDoc;
-};
-
 nsFormFillController::~nsFormFillController()
 {
   if (mListNode) {
@@ -95,13 +88,12 @@ nsFormFillController::~nsFormFillController()
     mFocusedInputNode = nullptr;
     mFocusedInput = nullptr;
   }
-  PwmgrInputsEnumData ed(this, nullptr);
-  mPwmgrInputs.Enumerate(RemoveForDocumentEnumerator, &ed);
+  RemoveForDocument(nullptr);
 
   // Remove ourselves as a focus listener from all cached docShells
   uint32_t count = mDocShells.Length();
   for (uint32_t i = 0; i < count; ++i) {
-    nsCOMPtr<nsPIDOMWindow> window = GetWindowForDocShell(mDocShells[i]);
+    nsCOMPtr<nsPIDOMWindowOuter> window = GetWindowForDocShell(mDocShells[i]);
     RemoveWindowListeners(window);
   }
 }
@@ -241,7 +233,7 @@ nsFormFillController::AttachToBrowser(nsIDocShell *aDocShell, nsIAutoCompletePop
   mPopups.AppendElement(aPopup);
 
   // Listen for focus events on the domWindow of the docShell
-  nsCOMPtr<nsPIDOMWindow> window = GetWindowForDocShell(aDocShell);
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindowForDocShell(aDocShell);
   AddWindowListeners(window);
 
   return NS_OK;
@@ -254,7 +246,7 @@ nsFormFillController::DetachFromBrowser(nsIDocShell *aDocShell)
   NS_ENSURE_TRUE(index >= 0, NS_ERROR_FAILURE);
 
   // Stop listening for focus events on the domWindow of the docShell
-  nsCOMPtr<nsPIDOMWindow> window =
+  nsCOMPtr<nsPIDOMWindowOuter> window =
     GetWindowForDocShell(mDocShells.SafeElementAt(index));
   RemoveWindowListeners(window);
 
@@ -860,28 +852,26 @@ nsFormFillController::HandleEvent(nsIDOMEvent* aEvent)
         StopControllingInput();
     }
 
-    PwmgrInputsEnumData ed(this, doc);
-    mPwmgrInputs.Enumerate(RemoveForDocumentEnumerator, &ed);
+    RemoveForDocument(doc);
   }
 
   return NS_OK;
 }
 
-
-/* static */ PLDHashOperator
-nsFormFillController::RemoveForDocumentEnumerator(const nsINode* aKey,
-                                                  bool& aEntry,
-                                                  void* aUserData)
+void
+nsFormFillController::RemoveForDocument(nsIDocument* aDoc)
 {
-  PwmgrInputsEnumData* ed = static_cast<PwmgrInputsEnumData*>(aUserData);
-  if (aKey && (!ed->mDoc || aKey->OwnerDoc() == ed->mDoc)) {
-    // mFocusedInputNode's observer is tracked separately, don't remove it here.
-    if (aKey != ed->mFFC->mFocusedInputNode) {
-      const_cast<nsINode*>(aKey)->RemoveMutationObserver(ed->mFFC);
+  for (auto iter = mPwmgrInputs.Iter(); !iter.Done(); iter.Next()) {
+    const nsINode* key = iter.Key();
+    if (key && (!aDoc || key->OwnerDoc() == aDoc)) {
+      // mFocusedInputNode's observer is tracked separately, so don't remove it
+      // here.
+      if (key != mFocusedInputNode) {
+        const_cast<nsINode*>(key)->RemoveMutationObserver(this);
+      }
+      iter.Remove();
     }
-    return PL_DHASH_REMOVE;
   }
-  return PL_DHASH_NEXT;
 }
 
 void
@@ -971,7 +961,7 @@ nsFormFillController::KeyPress(nsIDOMEvent* aEvent)
       if (isCtrl || isAlt || isMeta)
         break;
     }
-    /* fall through */
+    MOZ_FALLTHROUGH;
   case nsIDOMKeyEvent::DOM_VK_UP:
   case nsIDOMKeyEvent::DOM_VK_DOWN:
   case nsIDOMKeyEvent::DOM_VK_LEFT:
@@ -1081,7 +1071,7 @@ nsFormFillController::MouseDown(nsIDOMEvent* aEvent)
 //// nsFormFillController
 
 void
-nsFormFillController::AddWindowListeners(nsPIDOMWindow *aWindow)
+nsFormFillController::AddWindowListeners(nsPIDOMWindowOuter* aWindow)
 {
   if (!aWindow)
     return;
@@ -1114,7 +1104,7 @@ nsFormFillController::AddWindowListeners(nsPIDOMWindow *aWindow)
 }
 
 void
-nsFormFillController::RemoveWindowListeners(nsPIDOMWindow *aWindow)
+nsFormFillController::RemoveWindowListeners(nsPIDOMWindowOuter* aWindow)
 {
   if (!aWindow)
     return;
@@ -1122,8 +1112,7 @@ nsFormFillController::RemoveWindowListeners(nsPIDOMWindow *aWindow)
   StopControllingInput();
 
   nsCOMPtr<nsIDocument> doc = aWindow->GetDoc();
-  PwmgrInputsEnumData ed(this, doc);
-  mPwmgrInputs.Enumerate(RemoveForDocumentEnumerator, &ed);
+  RemoveForDocument(doc);
 
   EventTarget* target = aWindow->GetChromeEventHandler();
 
@@ -1202,6 +1191,14 @@ nsFormFillController::StopControllingInput()
 
   if (mFocusedInputNode) {
     MaybeRemoveMutationObserver(mFocusedInputNode);
+
+    nsresult rv;
+    nsCOMPtr <nsIFormAutoComplete> formAutoComplete =
+      do_GetService("@mozilla.org/satchel/form-autocomplete;1", &rv);
+    if (formAutoComplete) {
+      formAutoComplete->StopControllingInput(mFocusedInput);
+    }
+
     mFocusedInputNode = nullptr;
     mFocusedInput = nullptr;
   }
@@ -1214,13 +1211,13 @@ nsFormFillController::GetDocShellForInput(nsIDOMHTMLInputElement *aInput)
   nsCOMPtr<nsINode> node = do_QueryInterface(aInput);
   NS_ENSURE_TRUE(node, nullptr);
 
-  nsCOMPtr<nsPIDOMWindow> win = node->OwnerDoc()->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> win = node->OwnerDoc()->GetWindow();
   NS_ENSURE_TRUE(win, nullptr);
 
   return win->GetDocShell();
 }
 
-nsPIDOMWindow *
+nsPIDOMWindowOuter*
 nsFormFillController::GetWindowForDocShell(nsIDocShell *aDocShell)
 {
   nsCOMPtr<nsIContentViewer> contentViewer;

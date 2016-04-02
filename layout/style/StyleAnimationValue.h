@@ -8,6 +8,7 @@
 #ifndef mozilla_StyleAnimationValue_h_
 #define mozilla_StyleAnimationValue_h_
 
+#include "mozilla/gfx/MatrixFwd.h"
 #include "nsStringFwd.h"
 #include "nsStringBuffer.h"
 #include "nsCoord.h"
@@ -29,10 +30,7 @@ namespace dom {
 class Element;
 } // namespace dom
 
-namespace gfx {
-class Matrix4x4;
-} // namespace gfx
-
+enum class CSSPseudoElementType : uint8_t;
 struct PropertyStyleAnimationValuePair;
 
 /**
@@ -136,7 +134,13 @@ public:
    *
    * @param aProperty       The property whose value we're computing.
    * @param aTargetElement  The content node to which our computed value is
-   *                        applicable.
+   *                        applicable. For pseudo-elements, this is the parent
+   *                        element to which the pseudo is attached, not the
+   *                        generated content node.
+   * @param aStyleContext   The style context used to compute values from the
+   *                        specified value. For pseudo-elements, this should
+   *                        be the style context corresponding to the pseudo
+   *                        element.
    * @param aSpecifiedValue The specified value, from which we'll build our
    *                        computed value.
    * @param aUseSVGMode     A flag to indicate whether we should parse
@@ -153,11 +157,12 @@ public:
    * @return true on success, false on failure.
    */
   static bool ComputeValue(nsCSSProperty aProperty,
-                             mozilla::dom::Element* aTargetElement,
-                             const nsAString& aSpecifiedValue,
-                             bool aUseSVGMode,
-                             StyleAnimationValue& aComputedValue,
-                             bool* aIsContextSensitive = nullptr);
+                           mozilla::dom::Element* aTargetElement,
+                           nsStyleContext* aStyleContext,
+                           const nsAString& aSpecifiedValue,
+                           bool aUseSVGMode,
+                           StyleAnimationValue& aComputedValue,
+                           bool* aIsContextSensitive = nullptr);
 
   /**
    * Like ComputeValue, but returns an array of StyleAnimationValues.
@@ -172,7 +177,20 @@ public:
   static bool ComputeValues(nsCSSProperty aProperty,
                             nsCSSProps::EnabledState aEnabledState,
                             mozilla::dom::Element* aTargetElement,
+                            nsStyleContext* aStyleContext,
                             const nsAString& aSpecifiedValue,
+                            bool aUseSVGMode,
+                            nsTArray<PropertyStyleAnimationValuePair>& aResult);
+
+  /**
+   * A variant on ComputeValues that takes an nsCSSValue as the specified
+   * value. Only longhand properties are supported.
+   */
+  static bool ComputeValues(nsCSSProperty aProperty,
+                            nsCSSProps::EnabledState aEnabledState,
+                            mozilla::dom::Element* aTargetElement,
+                            nsStyleContext* aStyleContext,
+                            const nsCSSValue& aSpecifiedValue,
                             bool aUseSVGMode,
                             nsTArray<PropertyStyleAnimationValuePair>& aResult);
 
@@ -396,13 +414,6 @@ public:
     { return !(*this == aOther); }
 
 private:
-  static bool ComputeValues(nsCSSProperty aProperty,
-                            nsCSSProps::EnabledState aEnabledState,
-                            mozilla::dom::Element* aTargetElement,
-                            mozilla::css::StyleRule* aStyleRule,
-                            nsTArray<PropertyStyleAnimationValuePair>& aValues,
-                            bool* aIsContextSensitive);
-
   void FreeValue();
 
   static const char16_t* GetBufferValue(nsStringBuffer* aBuffer) {

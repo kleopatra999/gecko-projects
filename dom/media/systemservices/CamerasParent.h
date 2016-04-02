@@ -41,11 +41,12 @@ public:
   virtual int FrameSizeChange(unsigned int w, unsigned int h,
                               unsigned int streams) override;
   virtual int DeliverFrame(unsigned char* buffer,
-                           int size,
+                           size_t size,
                            uint32_t time_stamp,
                            int64_t ntp_time,
                            int64_t render_time,
                            void *handle) override;
+  virtual int DeliverI420Frame(const webrtc::I420VideoFrame& webrtc_frame) override;
   virtual bool IsTextureSupported() override { return false; };
 
   friend CamerasParent;
@@ -85,7 +86,7 @@ public:
   static already_AddRefed<CamerasParent> Create();
 
   // Messages received form the child. These run on the IPC/PBackground thread.
-  virtual bool RecvAllocateCaptureDevice(const int&, const nsCString&) override;
+  virtual bool RecvAllocateCaptureDevice(const int&, const nsCString&, const nsCString&) override;
   virtual bool RecvReleaseCaptureDevice(const int&, const int &) override;
   virtual bool RecvNumberOfCaptureDevices(const int&) override;
   virtual bool RecvNumberOfCapabilities(const int&, const nsCString&) override;
@@ -108,7 +109,7 @@ public:
                           int cap_id,
                           ShmemBuffer buffer,
                           unsigned char* altbuffer,
-                          int size,
+                          size_t size,
                           uint32_t time_stamp,
                           int64_t ntp_time,
                           int64_t render_time);

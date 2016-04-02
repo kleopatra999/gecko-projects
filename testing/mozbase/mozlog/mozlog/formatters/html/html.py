@@ -110,19 +110,29 @@ class HTMLFormatter(base.BaseFormatter):
         self.test_count[status_name] += 1
 
         if status in ['SKIP', 'FAIL', 'ERROR']:
-            if debug.get('screenshot'):
-                screenshot = 'data:image/png;base64,%s' % debug['screenshot']
-                additional_html.append(html.div(
-                    html.a(html.img(src=screenshot), href="#"),
-                    class_='screenshot'))
+            for image_name in ['screenshot', 'image1', 'image2']:
+                if debug.get(image_name):
+                    screenshot = '%s' % debug[image_name]
+                    # screenshot from gaia unit test doesn't has the datatype
+                    # string
+                    if not screenshot.startswith('data:image/png;base64,'):
+                        screenshot = 'data:image/png;base64,' + screenshot
+
+                    additional_html.append(html.div(
+                        html.a(html.img(src=screenshot), href="#"),
+                        class_='screenshot'))
+
             for name, content in debug.items():
-                if 'screenshot' in name:
-                    href = '#'
+                if name in ['screenshot', 'image1', 'image2']:
+                    if not content.startswith('data:image/png;base64,'):
+                        href = 'data:image/png;base64,%s' % content
+                    else:
+                        href = content
                 else:
                     # use base64 to avoid that some browser (such as Firefox, Opera)
                     # treats '#' as the start of another link if the data URL contains.
                     # use 'charset=utf-8' to show special characters like Chinese.
-                    href = 'data:text/plain;charset=utf-8;base64,%s' % base64.b64encode(content.encode('utf-8'))
+                    href = 'data:text/plain;charset=utf-8;base64,%s' % base64.b64encode(str(content).encode('utf-8'))
                 links_html.append(html.a(
                     name.title(),
                     class_=name,

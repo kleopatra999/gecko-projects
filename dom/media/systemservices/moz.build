@@ -26,6 +26,11 @@ if CONFIG['MOZ_WEBRTC']:
         '/media/webrtc/signaling',
         '/media/webrtc/trunk',
     ]
+if CONFIG['OS_TARGET'] == 'WINNT':
+    DEFINES['WEBRTC_WIN'] = True
+else:
+    DEFINES['WEBRTC_POSIX'] = True
+
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk'):
     EXPORTS += [
@@ -51,6 +56,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
 
 if CONFIG['_MSC_VER']:
     DEFINES['__PRETTY_FUNCTION__'] = '__FUNCSIG__'
+
+    # This is intended as a temporary workaround to enable building with VS2015.
+    # media\webrtc\trunk\webrtc/base/criticalsection.h(59): warning C4312:
+    # 'reinterpret_cast': conversion from 'DWORD' to 'HANDLE' of greater size
+    CXXFLAGS += ['-wd4312']
 
 EXPORTS.mozilla += ['ShmemPool.h',]
 

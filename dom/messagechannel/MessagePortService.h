@@ -46,16 +46,10 @@ public:
 private:
   ~MessagePortService() {}
 
-  void CloseAll(const nsID& aUUID);
+  void CloseAll(const nsID& aUUID, bool aForced = false);
   void MaybeShutdown();
 
   class MessagePortServiceData;
-
-#ifdef DEBUG
-  static PLDHashOperator
-  CloseAllDebugCheck(const nsID& aID, MessagePortServiceData* aData,
-                     void* aPtr);
-#endif
 
   nsClassHashtable<nsIDHashKey, MessagePortServiceData> mPorts;
 };

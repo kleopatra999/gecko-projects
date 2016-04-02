@@ -29,6 +29,20 @@
   padding: 2px 0px;
 }
 
+.dbg-wasm-item .icon {
+  display: block;
+  background-image: url(chrome://devtools/skin/images/webconsole.svg);
+  background-repeat: no-repeat;
+  background-size: 72px 60px;
+  /* show warning icon */
+  background-position: -24px -24px;
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  margin-inline-start: -15px;
+  margin-top: 3px;
+}
+
 .dbg-breakpoint-line {
   font-weight: 600;
 }
@@ -62,6 +76,16 @@
   min-width: 32px;
 }
 
+#sources-toolbar .devtools-toolbarbutton:not([label]) {
+  -moz-image-region: rect(0,16px,16px,0);
+}
+
+@media (min-resolution: 1.1dppx) {
+  #sources-toolbar .devtools-toolbarbutton:not([label]) {
+    -moz-image-region: rect(0,32px,32px,0);
+  }
+}
+
 #black-box {
   list-style-image: url(images/debugger-blackbox.png);
 }
@@ -83,35 +107,21 @@
 }
 
 #toggle-breakpoints {
-  list-style-image: url(images/debugger-toggleBreakpoints.png);
+  list-style-image: url(images/debugger-toggleBreakpoints.svg);
+  -moz-image-region: rect(0,32px,16px,16px) !important;
 }
 
-@media (min-resolution: 1.1dppx) {
-  #toggle-breakpoints {
-    list-style-image: url(images/debugger-toggleBreakpoints@2x.png);
-  }
+#toggle-breakpoints[checked] {
+  -moz-image-region: rect(0,16px,16px,0) !important;
+}
+
+#toggle-breakpoints[checked] > image {
+  /* This button has a special checked image, don't make it blue */
+  filter: none;
 }
 
 #toggle-promise-debugger {
   /* TODO Bug 1186119: Add a toggle promise debugger image */
-}
-
-#sources-toolbar .devtools-toolbarbutton:not([label]) {
-  -moz-image-region: rect(0px,16px,16px,0px);
-}
-
-#sources-toolbar .devtools-toolbarbutton:not([label])[checked] {
-  -moz-image-region: rect(0px,32px,16px,16px);
-}
-
-@media (min-resolution: 1.1dppx) {
-  #sources-toolbar .devtools-toolbarbutton:not([label]) {
-    -moz-image-region: rect(0px,32px,32px,0px);
-  }
-
-  #sources-toolbar .devtools-toolbarbutton:not([label])[checked] {
-    -moz-image-region: rect(0px,64px,32px,32px);
-  }
 }
 
 #sources .black-boxed {
@@ -219,21 +229,11 @@
 
 #trace {
   list-style-image: url(images/tracer-icon.png);
-  -moz-image-region: rect(0px,16px,16px,0px);
-}
-
-#trace[checked] {
-  -moz-image-region: rect(0px,32px,16px,16px);
 }
 
 @media (min-resolution: 1.1dppx) {
   #trace {
     list-style-image: url(images/tracer-icon@2x.png);
-    -moz-image-region: rect(0px,32px,32px,0px);
-  }
-
-  #trace[checked] {
-    -moz-image-region: rect(0px,64px,32px,32px);
   }
 }
 
@@ -549,15 +549,8 @@
 
 /* Toolbar controls */
 
-#debugger-toolbar .devtools-toolbarbutton:not([label]) > .toolbarbutton-icon,
-#sources-toolbar .devtools-toolbarbutton:not([label]) > .toolbarbutton-icon {
-  width: 16px;
-  height: 16px;
-}
-
 #resume {
   list-style-image: url(images/debugger-pause.png);
-  -moz-image-region: rect(0px,16px,16px,0px);
 }
 
 #resume[checked] {
@@ -567,22 +560,11 @@
 @media (min-resolution: 1.1dppx) {
   #resume {
     list-style-image: url(images/debugger-pause@2x.png);
-    -moz-image-region: rect(0px,32px,32px,0px);
   }
 
   #resume[checked] {
     list-style-image: url(images/debugger-play@2x.png);
-    -moz-image-region: rect(0px,64px,32px,32px);
   }
-}
-
-#debugger-controls toolbarbutton {
-  transition: opacity 0.15s ease-in-out;
-}
-
-#debugger-controls toolbarbutton[disabled] {
-  opacity: .5;
-  transition: none;
 }
 
 #resume[break-on-next] {
@@ -616,34 +598,11 @@
 }
 
 #instruments-pane-toggle {
-  background: none;
-  box-shadow: none;
-  border: none;
-  list-style-image: url(images/debugger-collapse.png);
-  -moz-image-region: rect(0px,16px,16px,0px);
+  list-style-image: url(images/pane-collapse.svg);
 }
 
 #instruments-pane-toggle[pane-collapsed] {
-  list-style-image: url(images/debugger-expand.png);
-}
-
-#instruments-pane-toggle:hover {
-  -moz-image-region: rect(0px,32px,16px,16px);
-}
-
-@media (min-resolution: 1.1dppx) {
-  #instruments-pane-toggle {
-    list-style-image: url(images/debugger-collapse@2x.png);
-    -moz-image-region: rect(0px,32px,32px,0px);
-  }
-
-  #instruments-pane-toggle[pane-collapsed] {
-    list-style-image: url(images/debugger-expand@2x.png);
-  }
-
-  #instruments-pane-toggle:hover {
-    -moz-image-region: rect(0px,64px,32px,32px);
-  }
+  list-style-image: url(images/pane-expand.svg);
 }
 
 /* Horizontal vs. vertical layout */

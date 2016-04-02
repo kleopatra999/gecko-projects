@@ -90,13 +90,7 @@ SpeakerManager::DispatchSimpleEvent(const nsAString& aStr)
   }
 
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
-  rv = event->InitEvent(aStr, false, false);
-
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the error event!!!");
-    return;
-  }
-
+  event->InitEvent(aStr, false, false);
   event->SetTrusted(true);
 
   rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -107,7 +101,7 @@ SpeakerManager::DispatchSimpleEvent(const nsAString& aStr)
 }
 
 void
-SpeakerManager::Init(nsPIDOMWindow* aWindow)
+SpeakerManager::Init(nsPIDOMWindowInner* aWindow)
 {
   BindToOwner(aWindow);
 
@@ -124,7 +118,7 @@ SpeakerManager::Init(nsPIDOMWindow* aWindow)
                                  /* wantsUntrusted = */ false);
 }
 
-nsPIDOMWindow*
+nsPIDOMWindowInner*
 SpeakerManager::GetParentObject() const
 {
   return GetOwner();
@@ -139,7 +133,7 @@ SpeakerManager::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> ownerWindow = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> ownerWindow = do_QueryInterface(aGlobal.GetAsSupports());
   if (!ownerWindow) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;

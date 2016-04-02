@@ -122,9 +122,6 @@ TCPServerSocket::Close()
 void
 TCPServerSocket::FireEvent(const nsAString& aType, TCPSocket* aSocket)
 {
-  AutoJSAPI api;
-  api.Init(GetOwnerGlobal());
-
   TCPServerSocketEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
@@ -148,7 +145,7 @@ TCPServerSocket::OnSocketAccepted(nsIServerSocket* aServer, nsISocketTransport* 
   RefPtr<TCPSocket> socket = TCPSocket::CreateAcceptedSocket(global, aTransport, mUseArrayBuffers);
   if (mServerBridgeParent) {
     socket->SetAppIdAndBrowser(mServerBridgeParent->GetAppId(),
-                               mServerBridgeParent->GetInBrowser());
+                               mServerBridgeParent->GetInIsolatedMozBrowser());
   }
   FireEvent(NS_LITERAL_STRING("connect"), socket);
   return NS_OK;
@@ -159,8 +156,7 @@ TCPServerSocket::OnStopListening(nsIServerSocket* aServer, nsresult aStatus)
 {
   if (aStatus != NS_BINDING_ABORTED) {
     RefPtr<Event> event = new Event(GetOwner());
-    nsresult rv = event->InitEvent(NS_LITERAL_STRING("error"), false, false);
-    NS_ENSURE_SUCCESS(rv, rv);
+    event->InitEvent(NS_LITERAL_STRING("error"), false, false);
     event->SetTrusted(true);
     bool dummy;
     DispatchEvent(event, &dummy);

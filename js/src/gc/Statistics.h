@@ -7,10 +7,8 @@
 #ifndef gc_Statistics_h
 #define gc_Statistics_h
 
-#include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/PodOperations.h"
-#include "mozilla/UniquePtr.h"
 
 #include "jsalloc.h"
 #include "jsgc.h"
@@ -162,6 +160,8 @@ struct Statistics
     /* Create a convenient type for referring to tables of phase times. */
     using PhaseTimeTable = int64_t[NumTimingArrays][PHASE_LIMIT];
 
+    static bool initialize();
+
     explicit Statistics(JSRuntime* rt);
     ~Statistics();
 
@@ -172,6 +172,7 @@ struct Statistics
     void beginSlice(const ZoneGCStats& zoneStats, JSGCInvocationKind gckind,
                     SliceBudget budget, JS::gcreason::Reason reason);
     void endSlice();
+    void setSliceCycleCount(unsigned cycleCount);
 
     bool startTimingMutator();
     bool stopTimingMutator(double& mutator_ms, double& gc_ms);
@@ -190,6 +191,23 @@ struct Statistics
         counts[s]++;
     }
 
+    void beginNurseryCollection(JS::gcreason::Reason reason) {
+        count(STAT_MINOR_GC);
+        if (nurseryCollectionCallback) {
+            (*nurseryCollectionCallback)(runtime,
+                                         JS::GCNurseryProgress::GC_NURSERY_COLLECTION_START,
+                                         reason);
+        }
+    }
+
+    void endNurseryCollection(JS::gcreason::Reason reason) {
+        if (nurseryCollectionCallback) {
+            (*nurseryCollectionCallback)(runtime,
+                                         JS::GCNurseryProgress::GC_NURSERY_COLLECTION_END,
+                                         reason);
+        }
+    }
+
     int64_t beginSCC();
     void endSCC(unsigned scc, int64_t start);
 
@@ -199,6 +217,8 @@ struct Statistics
     UniqueChars formatDetailedMessage();
 
     JS::GCSliceCallback setSliceCallback(JS::GCSliceCallback callback);
+    JS::GCNurseryCollectionCallback setNurseryCollectionCallback(
+        JS::GCNurseryCollectionCallback callback);
 
     int64_t clearMaxGCPauseAccumulator();
     int64_t getMaxGCPauseSinceClear();
@@ -216,11 +236,14 @@ struct Statistics
 
     struct SliceData {
         SliceData(SliceBudget budget, JS::gcreason::Reason reason, int64_t start,
-                  double startTimestamp, size_t startFaults)
+                  double startTimestamp, size_t startFaults, gc::State initialState)
           : budget(budget), reason(reason),
+            initialState(initialState),
+            finalState(gc::NO_INCREMENTAL),
             resetReason(nullptr),
             start(start), startTimestamp(startTimestamp),
-            startFaults(startFaults)
+            startFaults(startFaults),
+            cycleCount(0)
         {
             for (auto i : mozilla::MakeRange(NumTimingArrays))
                 mozilla::PodArrayZero(phaseTimes[i]);
@@ -228,11 +251,13 @@ struct Statistics
 
         SliceBudget budget;
         JS::gcreason::Reason reason;
+        gc::State initialState, finalState;
         const char* resetReason;
         int64_t start, end;
         double startTimestamp, endTimestamp;
         size_t startFaults, endFaults;
         PhaseTimeTable phaseTimes;
+        unsigned cycleCount;
 
         int64_t duration() const { return end - start; }
     };
@@ -305,6 +330,7 @@ struct Statistics
     Vector<int64_t, 0, SystemAllocPolicy> sccTimes;
 
     JS::GCSliceCallback sliceCallback;
+    JS::GCNurseryCollectionCallback nurseryCollectionCallback;
 
     /*
      * True if we saw an OOM while allocating slices. The statistics for this
@@ -344,6 +370,10 @@ struct MOZ_RAII AutoGCSlice
         stats.beginSlice(zoneStats, gckind, budget, reason);
     }
     ~AutoGCSlice() { stats.endSlice(); }
+
+    void setCycleCount(unsigned cycleCount) {
+        stats.setSliceCycleCount(cycleCount);
+    }
 
     Statistics& stats;
 };
@@ -402,7 +432,6 @@ struct MOZ_RAII AutoSCC
 };
 
 const char* ExplainInvocationKind(JSGCInvocationKind gckind);
-const char* ExplainReason(JS::gcreason::Reason reason);
 
 } /* namespace gcstats */
 } /* namespace js */

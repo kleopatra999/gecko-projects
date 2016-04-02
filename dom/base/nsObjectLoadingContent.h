@@ -27,8 +27,8 @@
 class nsAsyncInstantiateEvent;
 class nsStopPluginRunnable;
 class AutoSetInstantiatingToFalse;
-class nsPluginFrame;
 class nsFrameLoader;
+class nsPluginFrame;
 class nsXULElement;
 class nsPluginInstanceOwner;
 
@@ -36,6 +36,7 @@ namespace mozilla {
 namespace dom {
 template<typename T> class Sequence;
 struct MozPluginParameter;
+class HTMLIFrameElement;
 } // namespace dom
 } // namespace mozilla
 
@@ -168,7 +169,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     // Helper for WebIDL NeedResolve
     bool DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
                    JS::Handle<jsid> aId,
-                   JS::MutableHandle<JSPropertyDescriptor> aDesc);
+                   JS::MutableHandle<JS::PropertyDescriptor> aDesc);
     // The return value is whether DoResolve might end up resolving the given
     // id.  If in doubt, return true.
     static bool MayResolve(jsid aId);
@@ -207,7 +208,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     {
       return mURI;
     }
-  
+
     /**
      * The default state that this plugin would be without manual activation.
      * @returns PLUGIN_ACTIVE if the default state would be active.
@@ -222,7 +223,13 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     {
       return !!mInstanceOwner;
     }
-    void SwapFrameLoaders(nsXULElement& aOtherOwner, mozilla::ErrorResult& aRv)
+    void SwapFrameLoaders(mozilla::dom::HTMLIFrameElement& aOtherLoaderOwner,
+                          mozilla::ErrorResult& aRv)
+    {
+      aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+    }
+    void SwapFrameLoaders(nsXULElement& aOtherLoaderOwner,
+                          mozilla::ErrorResult& aRv)
     {
       aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
     }
@@ -287,15 +294,14 @@ class nsObjectLoadingContent : public nsImageLoadingContent
       eSupportDocuments    = 1u << 2, // Documents are supported
                                         // (nsIDocumentLoaderFactory)
                                         // This flag always includes SVG
-      eSupportSVG          = 1u << 3, // SVG is supported (image/svg+xml)
-      eSupportClassID      = 1u << 4, // The classid attribute is supported
+      eSupportClassID      = 1u << 3, // The classid attribute is supported
 
       // If possible to get a *plugin* type from the type attribute *or* file
       // extension, we can use that type and begin loading the plugin before
       // opening a channel.
       // A side effect of this is if the channel fails, the plugin is still
       // running.
-      eAllowPluginSkipChannel  = 1u << 5
+      eAllowPluginSkipChannel  = 1u << 4
     };
 
     /**
@@ -401,11 +407,11 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      *                          object (codebase attribute)
      * - mType                : The type the object is determined to be based
      *                          on the above
-     * 
+     *
      * NOTE The class assumes that mType is the currently loaded type at various
      *      points, so the caller of this function must take the appropriate
      *      actions to ensure this
-     * 
+     *
      * NOTE This function does not perform security checks, only determining the
      *      requested type and parameters of the object.
      *
@@ -507,7 +513,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * Returns a ObjectType value corresponding to the type of content we would
      * support the given MIME type as, taking capabilities and plugin state
      * into account
-     * 
+     *
      * NOTE this does not consider whether the content would be suppressed by
      *      click-to-play or other content policy checks
      */
@@ -519,7 +525,29 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      */
     nsPluginFrame* GetExistingFrame();
 
-    bool IsYoutubeEmbed();
+    /**
+     * Used for identifying whether we can rewrite a youtube flash embed to
+     * possibly use HTML5 instead.
+     *
+     * Returns true if plugin.rewrite_youtube_embeds pref is true and the
+     * element this nsObjectLoadingContent instance represents:
+     *
+     * - is an embed or object node
+     * - has a URL pointing at the youtube.com domain, using "/v/" style video
+     *   path reference, and without enablejsapi=1 in the path
+     *
+     * Having the enablejsapi flag means the document that contains the element
+     * could possibly be manipulating the youtube video elsewhere on the page
+     * via javascript. We can't rewrite these kinds of elements without possibly
+     * breaking content, which we want to avoid.
+     *
+     * If we can rewrite the URL, we change the "/v/" to "/embed/", and change
+     * our type to eType_Document so that we render similarly to an iframe
+     * embed.
+     */
+    void MaybeRewriteYoutubeEmbed(nsIURI* aURI,
+                                  nsIURI* aBaseURI,
+                                  nsIURI** aRewrittenURI);
 
     // Helper class for SetupProtoChain
     class SetupProtoChainRunner final : public nsIRunnable

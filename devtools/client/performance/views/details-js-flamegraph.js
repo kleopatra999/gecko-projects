@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* import-globals-from ../performance-controller.js */
+/* import-globals-from ../performance-view.js */
 "use strict";
 
 /**
@@ -78,7 +80,9 @@ var JsFlameGraphView = Heritage.extend(DetailsSubview, {
       }
     });
 
-    this.emit(EVENTS.JS_FLAMEGRAPH_RENDERED);
+    this.graph.focus();
+
+    this.emit(EVENTS.UI_JS_FLAMEGRAPH_RENDERED);
   },
 
   /**

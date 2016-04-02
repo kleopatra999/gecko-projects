@@ -59,7 +59,7 @@ LoginManagerPrompter.prototype = {
   __strBundle : null, // String bundle for L10N
   get _strBundle() {
     if (!this.__strBundle) {
-      var bunService = Cc["@mozilla.org/intl/stringbundle;1"].
+      let bunService = Cc["@mozilla.org/intl/stringbundle;1"].
                        getService(Ci.nsIStringBundleService);
       this.__strBundle = {
         pwmgr : bunService.createBundle("chrome://passwordmgr/locale/passwordmgr.properties"),
@@ -301,7 +301,7 @@ LoginManagerPrompter.prototype = {
       selectedIndex);
     if (ok) {
       // Now that we know which login to use, modify its password.
-      var selectedLogin = logins[selectedIndex.value];
+      let selectedLogin = logins[selectedIndex.value];
       this.log("Updating password for user " + selectedLogin.username);
       this._updateLogin(selectedLogin, aNewLogin.password);
     }
@@ -400,38 +400,6 @@ LoginManagerPrompter.prototype = {
     }
     return username.replace(/['"]/g, "");
   },
-
-  /*
-   * _getFormattedHostname
-   *
-   * The aURI parameter may either be a string uri, or an nsIURI instance.
-   *
-   * Returns the hostname to use in a nsILoginInfo object (for example,
-   * "http://example.com").
-   */
-  _getFormattedHostname : function (aURI) {
-    var uri;
-    if (aURI instanceof Ci.nsIURI) {
-      uri = aURI;
-    } else {
-      uri = Services.io.newURI(aURI, null, null);
-    }
-    var scheme = uri.scheme;
-
-    var hostname = scheme + "://" + uri.host;
-
-    // If the URI explicitly specified a port, only include it when
-    // it's not the default. (We never want "http://foo.com:80")
-    let port = uri.port;
-    if (port != -1) {
-      var handler = Services.io.getProtocolHandler(scheme);
-    if (port != handler.defaultPort)
-      hostname += ":" + port;
-    }
-
-    return hostname;
-  },
-
 }; // end of LoginManagerPrompter implementation
 
 

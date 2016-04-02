@@ -904,20 +904,20 @@ GetFirstNonAnonBoxDescendant(nsIFrame* aFrame)
     // the table, for use in DOM comparisons to things outside of the table.)
     if (MOZ_UNLIKELY(aFrame->GetType() == nsGkAtoms::tableOuterFrame)) {
       nsIFrame* captionDescendant =
-        GetFirstNonAnonBoxDescendant(aFrame->GetFirstChild(kCaptionList));
+        GetFirstNonAnonBoxDescendant(aFrame->GetChildList(kCaptionList).FirstChild());
       if (captionDescendant) {
         return captionDescendant;
       }
     } else if (MOZ_UNLIKELY(aFrame->GetType() == nsGkAtoms::tableFrame)) {
       nsIFrame* colgroupDescendant =
-        GetFirstNonAnonBoxDescendant(aFrame->GetFirstChild(kColGroupList));
+        GetFirstNonAnonBoxDescendant(aFrame->GetChildList(kColGroupList).FirstChild());
       if (colgroupDescendant) {
         return colgroupDescendant;
       }
     }
 
     // USUAL CASE: Descend to the first child in principal list.
-    aFrame = aFrame->GetFirstPrincipalChild();
+    aFrame = aFrame->PrincipalChildList().FirstChild();
   }
   return aFrame;
 }
@@ -1571,11 +1571,8 @@ FlexItem::FlexItem(nsHTMLReflowState& aFlexItemReflowState,
              "out-of-flow frames should not be treated as flex items");
 
   mAlignSelf = aFlexItemReflowState.mStylePosition->ComputedAlignSelf(
-                 aFlexItemReflowState.mStyleDisplay,
                  mFrame->StyleContext()->GetParent());
-  if (MOZ_UNLIKELY(mAlignSelf == NS_STYLE_ALIGN_AUTO)) {
-    // Happens in rare edge cases when 'position' was ignored by the frame
-    // constructor (and the style system computed 'auto' based on 'position').
+  if (MOZ_LIKELY(mAlignSelf == NS_STYLE_ALIGN_NORMAL)) {
     mAlignSelf = NS_STYLE_ALIGN_STRETCH;
   }
 
@@ -1989,54 +1986,6 @@ nsFlexContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   }
 }
 
-#ifdef DEBUG
-// helper for the debugging method below
-bool
-FrameWantsToBeInAnonymousFlexItem(nsIFrame* aFrame)
-{
-  // Note: This needs to match the logic in
-  // nsCSSFrameConstructor::FrameConstructionItem::NeedsAnonFlexOrGridItem()
-  return (aFrame->IsFrameOfType(nsIFrame::eLineParticipant) ||
-          nsGkAtoms::placeholderFrame == aFrame->GetType());
-}
-
-// Debugging method, to let us assert that our anonymous flex items are
-// set up correctly -- in particular, we assert:
-//  (1) we don't have any inline non-replaced children
-//  (2) we don't have any consecutive anonymous flex items
-//  (3) we don't have any empty anonymous flex items
-//
-// XXXdholbert This matches what nsCSSFrameConstructor currently does, and what
-// the spec used to say.  However, the spec has now changed regarding what
-// types of content get wrapped in an anonymous flexbox item.  The patch that
-// implements those changes (in nsCSSFrameConstructor) will need to change
-// this method as well.
-void
-nsFlexContainerFrame::SanityCheckAnonymousFlexItems() const
-{
-  bool prevChildWasAnonFlexItem = false;
-  for (nsIFrame* child : mFrames) {
-    MOZ_ASSERT(!FrameWantsToBeInAnonymousFlexItem(child),
-               "frame wants to be inside an anonymous flex item, "
-               "but it isn't");
-    if (child->StyleContext()->GetPseudo() ==
-        nsCSSAnonBoxes::anonymousFlexItem) {
-      MOZ_ASSERT(!prevChildWasAnonFlexItem ||
-                 HasAnyStateBits(NS_STATE_FLEX_CHILDREN_REORDERED),
-                 "two anon flex items in a row (shouldn't happen, unless our "
-                 "children have been reordered with the 'order' property)");
-
-      nsIFrame* firstWrappedChild = child->GetFirstPrincipalChild();
-      MOZ_ASSERT(firstWrappedChild,
-                 "anonymous flex item is empty (shouldn't happen)");
-      prevChildWasAnonFlexItem = true;
-    } else {
-      prevChildWasAnonFlexItem = false;
-    }
-  }
-}
-#endif // DEBUG
-
 void
 FlexLine::FreezeItemsEarly(bool aIsUsingFlexGrow)
 {
@@ -2432,8 +2381,11 @@ MainAxisPositionTracker::
     mNumPackingSpacesRemaining(0),
     mJustifyContent(aJustifyContent)
 {
-  // 'auto' behaves as 'stretch' which behaves as 'flex-start' in the main axis
-  if (mJustifyContent == NS_STYLE_JUSTIFY_AUTO) {
+  // 'normal' behaves as 'stretch', and 'stretch' behaves as 'flex-start',
+  // in the main axis
+  // https://drafts.csswg.org/css-align-3/#propdef-justify-content
+  if (mJustifyContent == NS_STYLE_JUSTIFY_NORMAL ||
+      mJustifyContent == NS_STYLE_JUSTIFY_STRETCH) {
     mJustifyContent = NS_STYLE_JUSTIFY_FLEX_START;
   }
 
@@ -2494,6 +2446,7 @@ MainAxisPositionTracker::
       case NS_STYLE_JUSTIFY_LAST_BASELINE:
       case NS_STYLE_JUSTIFY_SPACE_EVENLY:
         NS_WARNING("NYI: justify-content:left/right/baseline/last-baseline/space-evenly");
+        MOZ_FALLTHROUGH;
       case NS_STYLE_JUSTIFY_FLEX_START:
         // All packing space should go at the end --> nothing to do here.
         break;
@@ -2534,7 +2487,7 @@ MainAxisPositionTracker::
         }
         break;
       default:
-        MOZ_CRASH("Unexpected justify-content value");
+        MOZ_ASSERT_UNREACHABLE("Unexpected justify-content value");
     }
   }
 
@@ -2606,8 +2559,8 @@ CrossAxisPositionTracker::
 {
   MOZ_ASSERT(aFirstLine, "null first line pointer");
 
-  // 'auto' behaves as 'stretch'
-  if (mAlignContent == NS_STYLE_ALIGN_AUTO) {
+  // 'normal' behaves as 'stretch'
+  if (mAlignContent == NS_STYLE_ALIGN_NORMAL) {
     mAlignContent = NS_STYLE_ALIGN_STRETCH;
   }
 
@@ -2684,6 +2637,7 @@ CrossAxisPositionTracker::
       case NS_STYLE_ALIGN_BASELINE:
       case NS_STYLE_ALIGN_LAST_BASELINE:
         NS_WARNING("NYI: align-self:left/right/self-start/self-end/space-evenly/baseline/last-baseline");
+        MOZ_FALLTHROUGH;
       case NS_STYLE_ALIGN_FLEX_START:
         // All packing space should go at the end --> nothing to do here.
         break;
@@ -2745,7 +2699,7 @@ CrossAxisPositionTracker::
         break;
       }
       default:
-        MOZ_CRASH("Unexpected align-content value");
+        MOZ_ASSERT_UNREACHABLE("Unexpected align-content value");
     }
   }
 }
@@ -2970,6 +2924,7 @@ SingleLineCrossAxisPositionTracker::
     case NS_STYLE_ALIGN_SELF_END:
     case NS_STYLE_ALIGN_LAST_BASELINE:
       NS_WARNING("NYI: align-self:left/right/self-start/self-end/last-baseline");
+      MOZ_FALLTHROUGH;
     case NS_STYLE_ALIGN_FLEX_START:
       // No space to skip over -- we're done.
       break;
@@ -3015,7 +2970,7 @@ SingleLineCrossAxisPositionTracker::
       break;
     }
     default:
-      NS_NOTREACHED("Unexpected align-self value");
+      MOZ_ASSERT_UNREACHABLE("Unexpected align-self value");
       break;
   }
 }
@@ -3096,7 +3051,7 @@ FlexboxAxisTracker::FlexboxAxisTracker(const nsStylePosition* aStylePosition,
       mIsMainAxisReversed = true;
       break;
     default:
-      MOZ_CRASH("Unexpected computed value for 'flex-flow' property");
+      MOZ_ASSERT_UNREACHABLE("Unexpected flex-direction value");
   }
 
   // Determine cross axis:
@@ -3627,10 +3582,6 @@ nsFlexContainerFrame::Reflow(nsPresContext*           aPresContext,
     AddStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE);
   }
 
-#ifdef DEBUG
-  SanityCheckAnonymousFlexItems();
-#endif // DEBUG
-
   // If we've never reordered our children, then we can trust that they're
   // already in DOM-order, and we only need to consider their "order" property
   // when checking them for sortedness & sorting them.
@@ -3668,7 +3619,7 @@ nsFlexContainerFrame::Reflow(nsPresContext*           aPresContext,
   nscoord contentBoxMainSize = GetMainSizeFromReflowState(aReflowState,
                                                           axisTracker);
 
-  nsAutoTArray<StrutInfo, 1> struts;
+  AutoTArray<StrutInfo, 1> struts;
   DoFlexLayout(aPresContext, aDesiredSize, aReflowState, aStatus,
                contentBoxMainSize, availableBSizeForContent,
                struts, axisTracker);
@@ -3797,8 +3748,7 @@ nsFlexContainerFrame::DoFlexLayout(nsPresContext*           aPresContext,
   // scope of a particular flex line)
   CrossAxisPositionTracker
     crossAxisPosnTracker(lines.getFirst(),
-                         aReflowState.mStylePosition->ComputedAlignContent(
-                           aReflowState.mStyleDisplay),
+                         aReflowState.mStylePosition->ComputedAlignContent(),
                          contentBoxCrossSize, isCrossSizeDefinite,
                          aAxisTracker);
 
@@ -3837,8 +3787,7 @@ nsFlexContainerFrame::DoFlexLayout(nsPresContext*           aPresContext,
 
     // Main-Axis Alignment - Flexbox spec section 9.5
     // ==============================================
-    auto justifyContent =
-      aReflowState.mStylePosition->ComputedJustifyContent(aReflowState.mStyleDisplay);
+    auto justifyContent = aReflowState.mStylePosition->ComputedJustifyContent();
     line->PositionItemsInMainAxis(justifyContent,
                                   aContentBoxMainSize,
                                   aAxisTracker);

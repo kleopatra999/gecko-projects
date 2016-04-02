@@ -1,13 +1,14 @@
 import json
 import os
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 from item import item_types, ManualTest, WebdriverSpecTest, Stub, RefTest, TestharnessTest
 from log import get_logger
 from sourcefile import SourceFile
+from utils import from_os_path, to_os_path
 
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 
 class ManifestError(Exception):
@@ -207,8 +208,9 @@ class Manifest(object):
             for item_type, items in self._data.iteritems()
         }
 
-        reftest_nodes = {key:[v.to_json() for v in value]
-                         for key, value in self.reftest_nodes.iteritems()}
+        reftest_nodes = OrderedDict()
+        for key, value in sorted(self.reftest_nodes.items()):
+            reftest_nodes[from_os_path(key)] = [v.to_json() for v in value]
 
         rv = {"url_base": self.url_base,
               "rev": self.rev,
@@ -246,6 +248,7 @@ class Manifest(object):
                 self._add(manifest_item)
 
         for path, values in obj["reftest_nodes"].iteritems():
+            path = to_os_path(path)
             for v in values:
                 item = RefTest.from_json(self, tests_root, v,
                                          source_files=source_files)
@@ -306,17 +309,16 @@ class LocalChanges(object):
         return self._data[item_type]
 
     def to_json(self):
-        reftest_nodes = {key:[v.to_json() for v in value]
+        reftest_nodes = {from_os_path(key): [v.to_json() for v in value]
                          for key, value in self.reftest_nodes.iteritems()}
 
         rv = {"items": defaultdict(dict),
               "reftest_nodes": reftest_nodes,
-              "deleted": []}
-
-        rv["deleted"].extend(self._deleted)
+              "deleted": [from_os_path(path) for path in self._deleted]}
 
         for test_type, paths in self._data.iteritems():
             for path, tests in paths.iteritems():
+                path = from_os_path(path)
                 rv["items"][test_type][path] = [test.to_json() for test in tests]
 
         return rv
@@ -343,6 +345,7 @@ class LocalChanges(object):
                     self.add(manifest_item)
 
         for path, values in obj["reftest_nodes"].iteritems():
+            path = to_os_path(path)
             for v in values:
                 item = RefTest.from_json(self.manifest, tests_root, v,
                                          source_files=source_files)
@@ -350,7 +353,7 @@ class LocalChanges(object):
                 self.reftest_nodes_by_url[item.url] = item
 
         for item in obj["deleted"]:
-            self.add_deleted(item)
+            self.add_deleted(to_os_path(item))
 
         return self
 
@@ -374,5 +377,6 @@ def load(tests_root, manifest):
 
 
 def write(manifest, manifest_path):
-    with open(manifest_path, "w") as f:
+    with open(manifest_path, "wb") as f:
         json.dump(manifest.to_json(), f, sort_keys=True, indent=2, separators=(',', ': '))
+        f.write("\n")

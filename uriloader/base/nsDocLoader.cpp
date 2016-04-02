@@ -29,7 +29,7 @@
 
 #include "nsITransport.h"
 #include "nsISocketTransport.h"
-
+#include "nsIDocShell.h"
 #include "nsIDOMDocument.h"
 #include "nsIDocument.h"
 #include "nsPresContext.h"
@@ -50,7 +50,7 @@ static NS_DEFINE_CID(kThisImplCID, NS_THIS_DOCLOADER_IMPL_CID);
 // this enables LogLevel::Debug level information and places all output in
 // the file nspr.log
 //
-PRLogModuleInfo* gDocLoaderLog = nullptr;
+mozilla::LazyLogModule gDocLoaderLog("DocLoader");
 
 
 #if defined(DEBUG)
@@ -115,10 +115,6 @@ nsDocLoader::nsDocLoader()
     mDontFlushLayout(false),
     mIsFlushingLayout(false)
 {
-  if (nullptr == gDocLoaderLog) {
-      gDocLoaderLog = PR_NewLogModule("DocLoader");
-  }
-
   ClearInternalProgress();
 
   MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
@@ -602,7 +598,14 @@ nsDocLoader::OnStopRequest(nsIRequest *aRequest,
   // load.  This will handle removing the request from our hashtable as needed.
   //
   if (mIsLoadingDocument) {
-    DocLoaderIsEmpty(true);
+    nsCOMPtr<nsIDocShell> ds = do_QueryInterface(static_cast<nsIRequestObserver*>(this));
+    bool doNotFlushLayout = false;
+    if (ds) {
+      // Don't do unexpected layout flushes while we're in process of restoring
+      // a document from the bfcache.
+      ds->GetRestoringDocument(&doNotFlushLayout);
+    }
+    DocLoaderIsEmpty(!doNotFlushLayout);
   }
 
   return NS_OK;
@@ -872,7 +875,7 @@ nsDocLoader::RemoveProgressListener(nsIWebProgressListener *aListener)
 }
 
 NS_IMETHODIMP
-nsDocLoader::GetDOMWindow(nsIDOMWindow **aResult)
+nsDocLoader::GetDOMWindow(mozIDOMWindowProxy **aResult)
 {
   return CallGetInterface(this, aResult);
 }
@@ -882,11 +885,11 @@ nsDocLoader::GetDOMWindowID(uint64_t *aResult)
 {
   *aResult = 0;
 
-  nsCOMPtr<nsIDOMWindow> window;
+  nsCOMPtr<mozIDOMWindowProxy> window;
   nsresult rv = GetDOMWindow(getter_AddRefs(window));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsPIDOMWindow> piwindow = do_QueryInterface(window);
+  nsCOMPtr<nsPIDOMWindowOuter> piwindow = nsPIDOMWindowOuter::From(window);
   NS_ENSURE_STATE(piwindow);
 
   MOZ_ASSERT(piwindow->IsOuterWindow());
@@ -899,13 +902,13 @@ nsDocLoader::GetIsTopLevel(bool *aResult)
 {
   *aResult = false;
 
-  nsCOMPtr<nsIDOMWindow> window;
+  nsCOMPtr<mozIDOMWindowProxy> window;
   GetDOMWindow(getter_AddRefs(window));
   if (window) {
-    nsCOMPtr<nsPIDOMWindow> piwindow = do_QueryInterface(window);
+    nsCOMPtr<nsPIDOMWindowOuter> piwindow = nsPIDOMWindowOuter::From(window);
     NS_ENSURE_STATE(piwindow);
 
-    nsCOMPtr<nsPIDOMWindow> topWindow = piwindow->GetTop();
+    nsCOMPtr<nsPIDOMWindowOuter> topWindow = piwindow->GetTop();
     *aResult = piwindow == topWindow;
   }
 

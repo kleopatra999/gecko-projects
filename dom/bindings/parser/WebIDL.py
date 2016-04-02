@@ -501,8 +501,15 @@ class IDLExposureMixins():
     def isExposedInWindow(self):
         return 'Window' in self.exposureSet
 
+    def isExposedOnMainThread(self):
+        return (self.isExposedInWindow() or
+                self.isExposedInSystemGlobals())
+
     def isExposedInAnyWorker(self):
         return len(self.getWorkerExposureSet()) > 0
+
+    def isExposedInWorkerDebugger(self):
+        return len(self.getWorkerDebuggerExposureSet()) > 0
 
     def isExposedInSystemGlobals(self):
         return 'BackstagePass' in self.exposureSet
@@ -522,6 +529,10 @@ class IDLExposureMixins():
     def getWorkerExposureSet(self):
         workerScopes = self._globalScope.globalNameMapping["Worker"]
         return workerScopes.intersection(self.exposureSet)
+
+    def getWorkerDebuggerExposureSet(self):
+        workerDebuggerScopes = self._globalScope.globalNameMapping["WorkerDebugger"]
+        return workerDebuggerScopes.intersection(self.exposureSet)
 
 
 class IDLExternalInterface(IDLObjectWithIdentifier, IDLExposureMixins):
@@ -562,6 +573,9 @@ class IDLExternalInterface(IDLObjectWithIdentifier, IDLExposureMixins):
         return None
 
     def isJSImplemented(self):
+        return False
+
+    def isProbablyShortLivingObject(self):
         return False
 
     def getNavigatorProperty(self):
@@ -971,7 +985,9 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
                  (member.getExtendedAttribute("StoreInSlot") or
                   member.getExtendedAttribute("Cached"))) or
                 member.isMaplikeOrSetlike()):
-                member.slotIndex = self.totalMembersInSlots
+                if member.slotIndices is None:
+                    member.slotIndices = dict()
+                member.slotIndices[self.identifier.name] = self.totalMembersInSlots
                 self.totalMembersInSlots += 1
                 if member.getExtendedAttribute("StoreInSlot"):
                     self._ownMembersInSlots += 1
@@ -1089,7 +1105,7 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
 
     def validate(self):
         # We don't support consequential unforgeable interfaces.  Need to check
-        # this here, becaue in finish() an interface might not know yet that
+        # this here, because in finish() an interface might not know yet that
         # it's consequential.
         if self.getExtendedAttribute("Unforgeable") and self.isConsequential():
             raise WebIDLError(
@@ -1108,6 +1124,8 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
                               self.identifier.name,
                               locations)
 
+        indexedGetter = None
+        hasLengthAttribute = False
         for member in self.members:
             member.validate()
 
@@ -1118,8 +1136,13 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
                                   [self.location, member.location])
 
             # Check that PutForwards refers to another attribute and that no
-            # cycles exist in forwarded assignments.
+            # cycles exist in forwarded assignments.  Also check for a
+            # integer-typed "length" attribute.
             if member.isAttr():
+                if (member.identifier.name == "length" and
+                    member.type.isInteger()):
+                    hasLengthAttribute = True
+
                 iface = self
                 attr = member
                 putForwards = attr.getExtendedAttribute("PutForwards")
@@ -1157,8 +1180,11 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
                     putForwards = attr.getExtendedAttribute("PutForwards")
 
             # Check that the name of an [Alias] doesn't conflict with an
-            # interface member.
+            # interface member and whether we support indexed properties.
             if member.isMethod():
+                if member.isGetter() and member.isIndexed():
+                    indexedGetter = member
+
                 for alias in member.aliases:
                     if self.isOnGlobalProtoChain():
                         raise WebIDLError("[Alias] must not be used on a "
@@ -1218,6 +1244,35 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
             raise WebIDLError("Interface with no interface object is "
                               "exposed conditionally",
                               [self.location])
+
+        # Value iterators are only allowed on interfaces with indexed getters,
+        # and pair iterators are only allowed on interfaces without indexed
+        # getters.
+        if self.isIterable():
+            iterableDecl = self.maplikeOrSetlikeOrIterable
+            if iterableDecl.isValueIterator():
+                if not indexedGetter:
+                    raise WebIDLError("Interface with value iterator does not "
+                                      "support indexed properties",
+                                      [self.location])
+
+                if iterableDecl.valueType != indexedGetter.signatures()[0][0]:
+                    raise WebIDLError("Iterable type does not match indexed "
+                                      "getter type",
+                                      [iterableDecl.location,
+                                       indexedGetter.location])
+
+                if not hasLengthAttribute:
+                    raise WebIDLError('Interface with value iterator does not '
+                                      'have an integer-typed "length" attribute',
+                                      [self.location])
+            else:
+                assert iterableDecl.isPairIterator()
+                if indexedGetter:
+                    raise WebIDLError("Interface with pair iterator supports "
+                                      "indexed properties",
+                                      [self.location, iterableDecl.location,
+                                       indexedGetter.location])
 
     def isInterface(self):
         return True
@@ -1408,7 +1463,8 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
                   identifier == "ChromeOnly" or
                   identifier == "Unforgeable" or
                   identifier == "UnsafeInPrerendering" or
-                  identifier == "LegacyEventInit"):
+                  identifier == "LegacyEventInit" or
+                  identifier == "ProbablyShortLivingObject"):
                 # Known extended attributes that do not take values
                 if not attr.noArguments():
                     raise WebIDLError("[%s] must take no arguments" % identifier,
@@ -1521,6 +1577,14 @@ class IDLInterface(IDLObjectWithScope, IDLExposureMixins):
 
     def isJSImplemented(self):
         return bool(self.getJSImplementation())
+
+    def isProbablyShortLivingObject(self):
+        current = self
+        while current:
+            if current.getExtendedAttribute("ProbablyShortLivingObject"):
+                return True
+            current = current.parent
+        return False
 
     def getNavigatorProperty(self):
         naviProp = self.getExtendedAttribute("NavigatorProperty")
@@ -1834,13 +1898,7 @@ class IDLType(IDLObject):
     def isSharedArrayBuffer(self):
         return False
 
-    def isSharedArrayBufferView(self):
-        return False
-
     def isTypedArray(self):
-        return False
-
-    def isSharedTypedArray(self):
         return False
 
     def isCallbackInterface(self):
@@ -1863,9 +1921,7 @@ class IDLType(IDLObject):
         return self.isInterface() and (self.isArrayBuffer() or
                                        self.isArrayBufferView() or
                                        self.isSharedArrayBuffer() or
-                                       self.isSharedArrayBufferView() or
-                                       self.isTypedArray() or
-                                       self.isSharedTypedArray())
+                                       self.isTypedArray())
 
     def isDictionary(self):
         return False
@@ -2052,14 +2108,8 @@ class IDLNullableType(IDLType):
     def isSharedArrayBuffer(self):
         return self.inner.isSharedArrayBuffer()
 
-    def isSharedArrayBufferView(self):
-        return self.inner.isSharedArrayBufferView()
-
     def isTypedArray(self):
         return self.inner.isTypedArray()
-
-    def isSharedTypedArray(self):
-        return self.inner.isSharedTypedArray()
 
     def isDictionary(self):
         return self.inner.isDictionary()
@@ -2567,14 +2617,8 @@ class IDLTypedefType(IDLType):
     def isSharedArrayBuffer(self):
         return self.inner.isSharedArrayBuffer()
 
-    def isSharedArrayBufferView(self):
-        return self.inner.isSharedArrayBufferView()
-
     def isTypedArray(self):
         return self.inner.isTypedArray()
-
-    def isSharedTypedArray(self):
-        return self.inner.isSharedTypedArray()
 
     def isInterface(self):
         return self.inner.isInterface()
@@ -2845,7 +2889,6 @@ class IDLBuiltinType(IDLType):
         'ArrayBuffer',
         'ArrayBufferView',
         'SharedArrayBuffer',
-        'SharedArrayBufferView',
         'Int8Array',
         'Uint8Array',
         'Uint8ClampedArray',
@@ -2854,16 +2897,7 @@ class IDLBuiltinType(IDLType):
         'Int32Array',
         'Uint32Array',
         'Float32Array',
-        'Float64Array',
-        'SharedInt8Array',
-        'SharedUint8Array',
-        'SharedUint8ClampedArray',
-        'SharedInt16Array',
-        'SharedUint16Array',
-        'SharedInt32Array',
-        'SharedUint32Array',
-        'SharedFloat32Array',
-        'SharedFloat64Array'
+        'Float64Array'
         )
 
     TagLookup = {
@@ -2890,7 +2924,6 @@ class IDLBuiltinType(IDLType):
         Types.ArrayBuffer: IDLType.Tags.interface,
         Types.ArrayBufferView: IDLType.Tags.interface,
         Types.SharedArrayBuffer: IDLType.Tags.interface,
-        Types.SharedArrayBufferView: IDLType.Tags.interface,
         Types.Int8Array: IDLType.Tags.interface,
         Types.Uint8Array: IDLType.Tags.interface,
         Types.Uint8ClampedArray: IDLType.Tags.interface,
@@ -2899,16 +2932,7 @@ class IDLBuiltinType(IDLType):
         Types.Int32Array: IDLType.Tags.interface,
         Types.Uint32Array: IDLType.Tags.interface,
         Types.Float32Array: IDLType.Tags.interface,
-        Types.Float64Array: IDLType.Tags.interface,
-        Types.SharedInt8Array: IDLType.Tags.interface,
-        Types.SharedUint8Array: IDLType.Tags.interface,
-        Types.SharedUint8ClampedArray: IDLType.Tags.interface,
-        Types.SharedInt16Array: IDLType.Tags.interface,
-        Types.SharedUint16Array: IDLType.Tags.interface,
-        Types.SharedInt32Array: IDLType.Tags.interface,
-        Types.SharedUint32Array: IDLType.Tags.interface,
-        Types.SharedFloat32Array: IDLType.Tags.interface,
-        Types.SharedFloat64Array: IDLType.Tags.interface
+        Types.Float64Array: IDLType.Tags.interface
     }
 
     def __init__(self, location, name, type):
@@ -2951,16 +2975,9 @@ class IDLBuiltinType(IDLType):
     def isSharedArrayBuffer(self):
         return self._typeTag == IDLBuiltinType.Types.SharedArrayBuffer
 
-    def isSharedArrayBufferView(self):
-        return self._typeTag == IDLBuiltinType.Types.SharedArrayBufferView
-
     def isTypedArray(self):
         return (self._typeTag >= IDLBuiltinType.Types.Int8Array and
                 self._typeTag <= IDLBuiltinType.Types.Float64Array)
-
-    def isSharedTypedArray(self):
-        return (self._typeTag >= IDLBuiltinType.Types.SharedInt8Array and
-                self._typeTag <= IDLBuiltinType.Types.SharedFloat64Array)
 
     def isInterface(self):
         # TypedArray things are interface types per the TypedArray spec,
@@ -2969,9 +2986,7 @@ class IDLBuiltinType(IDLType):
         return (self.isArrayBuffer() or
                 self.isArrayBufferView() or
                 self.isSharedArrayBuffer() or
-                self.isSharedArrayBufferView() or
-                self.isTypedArray() or
-                self.isSharedTypedArray())
+                self.isTypedArray())
 
     def isNonCallbackInterface(self):
         # All the interfaces we can be are non-callback
@@ -3049,15 +3064,11 @@ class IDLBuiltinType(IDLType):
                  # that's not an ArrayBufferView or typed array.
                  (self.isArrayBufferView() and not other.isArrayBufferView() and
                   not other.isTypedArray()) or
-                 (self.isSharedArrayBufferView() and not other.isSharedArrayBufferView() and
-                  not other.isSharedTypedArray()) or
                  # Typed arrays are distinguishable from everything
                  # except ArrayBufferView and the same type of typed
                  # array
                  (self.isTypedArray() and not other.isArrayBufferView() and not
-                  (other.isTypedArray() and other.name == self.name)) or
-                 (self.isSharedTypedArray() and not other.isSharedArrayBufferView() and not
-                  (other.isSharedTypedArray() and other.name == self.name)))))
+                  (other.isTypedArray() and other.name == self.name)))))
 
     def _getDependentObjects(self):
         return set()
@@ -3132,9 +3143,6 @@ BuiltinTypes = {
     IDLBuiltinType.Types.SharedArrayBuffer:
         IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedArrayBuffer",
                        IDLBuiltinType.Types.SharedArrayBuffer),
-    IDLBuiltinType.Types.SharedArrayBufferView:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedArrayBufferView",
-                       IDLBuiltinType.Types.SharedArrayBufferView),
     IDLBuiltinType.Types.Int8Array:
         IDLBuiltinType(BuiltinLocation("<builtin type>"), "Int8Array",
                        IDLBuiltinType.Types.Int8Array),
@@ -3161,34 +3169,7 @@ BuiltinTypes = {
                        IDLBuiltinType.Types.Float32Array),
     IDLBuiltinType.Types.Float64Array:
         IDLBuiltinType(BuiltinLocation("<builtin type>"), "Float64Array",
-                       IDLBuiltinType.Types.Float64Array),
-    IDLBuiltinType.Types.SharedInt8Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedInt8Array",
-                       IDLBuiltinType.Types.SharedInt8Array),
-    IDLBuiltinType.Types.SharedUint8Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedUint8Array",
-                       IDLBuiltinType.Types.SharedUint8Array),
-    IDLBuiltinType.Types.SharedUint8ClampedArray:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedUint8ClampedArray",
-                       IDLBuiltinType.Types.SharedUint8ClampedArray),
-    IDLBuiltinType.Types.SharedInt16Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedInt16Array",
-                       IDLBuiltinType.Types.SharedInt16Array),
-    IDLBuiltinType.Types.SharedUint16Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedUint16Array",
-                       IDLBuiltinType.Types.SharedUint16Array),
-    IDLBuiltinType.Types.SharedInt32Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedInt32Array",
-                       IDLBuiltinType.Types.SharedInt32Array),
-    IDLBuiltinType.Types.SharedUint32Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedUint32Array",
-                       IDLBuiltinType.Types.SharedUint32Array),
-    IDLBuiltinType.Types.SharedFloat32Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedFloat32Array",
-                       IDLBuiltinType.Types.SharedFloat32Array),
-    IDLBuiltinType.Types.SharedFloat64Array:
-        IDLBuiltinType(BuiltinLocation("<builtin type>"), "SharedFloat64Array",
-                       IDLBuiltinType.Types.SharedFloat64Array)
+                       IDLBuiltinType.Types.Float64Array)
 }
 
 
@@ -3491,7 +3472,10 @@ class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
 
     def __init__(self, location, identifier, ifaceType, keyType, valueType, ifaceKind):
         IDLInterfaceMember.__init__(self, location, identifier, ifaceKind)
-        assert isinstance(keyType, IDLType)
+        if keyType is not None:
+            assert isinstance(keyType, IDLType)
+        else:
+            assert valueType is not None
         assert ifaceType in ['maplike', 'setlike', 'iterable']
         if valueType is not None:
             assert isinstance(valueType, IDLType)
@@ -3509,6 +3493,9 @@ class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
 
     def isIterable(self):
         return self.maplikeOrSetlikeOrIterableType == "iterable"
+
+    def hasKeyType(self):
+        return self.keyType is not None
 
     def hasValueType(self):
         return self.valueType is not None
@@ -3534,7 +3521,8 @@ class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
                                   [self.location, member.location])
 
     def addMethod(self, name, members, allowExistingOperations, returnType, args=[],
-                  chromeOnly=False, isPure=False, affectsNothing=False, newObject=False):
+                  chromeOnly=False, isPure=False, affectsNothing=False, newObject=False,
+                  isIteratorAlias=False):
         """
         Create an IDLMethod based on the parameters passed in.
 
@@ -3594,16 +3582,20 @@ class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
         if newObject:
             method.addExtendedAttributes(
                 [IDLExtendedAttribute(self.location, ("NewObject",))])
+        if isIteratorAlias:
+            method.addExtendedAttributes(
+                [IDLExtendedAttribute(self.location, ("Alias", "@@iterator"))])
         members.append(method)
 
     def resolve(self, parentScope):
-        self.keyType.resolveType(parentScope)
+        if self.keyType:
+            self.keyType.resolveType(parentScope)
         if self.valueType:
             self.valueType.resolveType(parentScope)
 
     def finish(self, scope):
         IDLInterfaceMember.finish(self, scope)
-        if not self.keyType.isComplete():
+        if self.keyType and not self.keyType.isComplete():
             t = self.keyType.complete(scope)
 
             assert not isinstance(t, IDLUnresolvedType)
@@ -3625,9 +3617,23 @@ class IDLMaplikeOrSetlikeOrIterableBase(IDLInterfaceMember):
         IDLInterfaceMember.handleExtendedAttribute(self, attr)
 
     def _getDependentObjects(self):
+        deps = set()
+        if self.keyType:
+            deps.add(self.keyType)
         if self.valueType:
-            return set([self.keyType, self.valueType])
-        return set([self.keyType])
+            deps.add(self.valueType)
+        return deps
+
+    def getForEachArguments(self):
+        return [IDLArgument(self.location,
+                            IDLUnresolvedIdentifier(BuiltinLocation("<auto-generated-identifier>"),
+                                                    "callback"),
+                            BuiltinTypes[IDLBuiltinType.Types.object]),
+                IDLArgument(self.location,
+                            IDLUnresolvedIdentifier(BuiltinLocation("<auto-generated-identifier>"),
+                                                    "thisArg"),
+                            BuiltinTypes[IDLBuiltinType.Types.any],
+                            optional=True)]
 
 # Iterable adds ES6 iterator style functions and traits
 # (keys/values/entries/@@iterator) to an interface.
@@ -3648,15 +3654,32 @@ class IDLIterable(IDLMaplikeOrSetlikeOrIterableBase):
         we generate our functions as if they were part of the interface
         specification during parsing.
         """
+        # We only need to add entries/keys/values here if we're a pair iterator.
+        # Value iterators just copy these from %ArrayPrototype% instead.
+        if not self.isPairIterator():
+            return
+
         # object entries()
         self.addMethod("entries", members, False, self.iteratorType,
-                       affectsNothing=True, newObject=True)
+                       affectsNothing=True, newObject=True,
+                       isIteratorAlias=True)
         # object keys()
         self.addMethod("keys", members, False, self.iteratorType,
                        affectsNothing=True, newObject=True)
         # object values()
         self.addMethod("values", members, False, self.iteratorType,
                        affectsNothing=True, newObject=True)
+
+        # void forEach(callback(valueType, keyType), optional any thisArg)
+        self.addMethod("forEach", members, False,
+                       BuiltinTypes[IDLBuiltinType.Types.void],
+                       self.getForEachArguments())
+
+    def isValueIterator(self):
+        return not self.isPairIterator()
+
+    def isPairIterator(self):
+        return self.hasKeyType()
 
 # MaplikeOrSetlike adds ES6 map-or-set-like traits to an interface.
 class IDLMaplikeOrSetlike(IDLMaplikeOrSetlikeOrIterableBase):
@@ -3666,7 +3689,7 @@ class IDLMaplikeOrSetlike(IDLMaplikeOrSetlikeOrIterableBase):
         IDLMaplikeOrSetlikeOrIterableBase.__init__(self, location, identifier, maplikeOrSetlikeType,
                                                    keyType, valueType, IDLInterfaceMember.Tags.MaplikeOrSetlike)
         self.readonly = readonly
-        self.slotIndex = None
+        self.slotIndices = None
 
         # When generating JSAPI access code, we need to know the backing object
         # type prefix to create the correct function. Generate here for reuse.
@@ -3694,26 +3717,17 @@ class IDLMaplikeOrSetlike(IDLMaplikeOrSetlikeOrIterableBase):
 
         # object entries()
         self.addMethod("entries", members, False, BuiltinTypes[IDLBuiltinType.Types.object],
-                       affectsNothing=True)
+                       affectsNothing=True, isIteratorAlias=self.isMaplike())
         # object keys()
         self.addMethod("keys", members, False, BuiltinTypes[IDLBuiltinType.Types.object],
                        affectsNothing=True)
         # object values()
         self.addMethod("values", members, False, BuiltinTypes[IDLBuiltinType.Types.object],
-                       affectsNothing=True)
+                       affectsNothing=True, isIteratorAlias=self.isSetlike())
 
         # void forEach(callback(valueType, keyType), thisVal)
-        foreachArguments = [IDLArgument(self.location,
-                                        IDLUnresolvedIdentifier(BuiltinLocation("<auto-generated-identifier>"),
-                                                                "callback"),
-                                        BuiltinTypes[IDLBuiltinType.Types.object]),
-                            IDLArgument(self.location,
-                                        IDLUnresolvedIdentifier(BuiltinLocation("<auto-generated-identifier>"),
-                                                                "thisArg"),
-                                        BuiltinTypes[IDLBuiltinType.Types.any],
-                                        optional=True)]
         self.addMethod("forEach", members, False, BuiltinTypes[IDLBuiltinType.Types.void],
-                       foreachArguments)
+                       self.getForEachArguments())
 
         def getKeyArg():
             return IDLArgument(self.location,
@@ -3860,7 +3874,7 @@ class IDLAttribute(IDLInterfaceMember):
         self.stringifier = stringifier
         self.enforceRange = False
         self.clamp = False
-        self.slotIndex = None
+        self.slotIndices = None
         assert maplikeOrSetlike is None or isinstance(maplikeOrSetlike, IDLMaplikeOrSetlike)
         self.maplikeOrSetlike = maplikeOrSetlike
         self.dependsOn = "Everything"
@@ -4093,6 +4107,14 @@ class IDLAttribute(IDLInterfaceMember):
             if self.stringifier:
                 raise WebIDLError("[UseCounter] must not be used on a "
                                   "stringifier attribute",
+                                  [attr.location, self.location])
+        elif identifier == "Unscopable":
+            if not attr.noArguments():
+                raise WebIDLError("[Unscopable] must take no arguments",
+                                  [attr.location])
+            if self.isStatic():
+                raise WebIDLError("[Unscopable] is only allowed on non-static "
+                                  "attributes and operations",
                                   [attr.location, self.location])
         elif (identifier == "Pref" or
               identifier == "Deprecated" or
@@ -4794,6 +4816,14 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                 raise WebIDLError("[UseCounter] must not be used on a special "
                                   "operation",
                                   [attr.location, self.location])
+        elif identifier == "Unscopable":
+            if not attr.noArguments():
+                raise WebIDLError("[Unscopable] must take no arguments",
+                                  [attr.location])
+            if self.isStatic():
+                raise WebIDLError("[Unscopable] is only allowed on non-static "
+                                  "attributes and operations",
+                                  [attr.location, self.location])
         elif (identifier == "Throws" or
               identifier == "NewObject" or
               identifier == "ChromeOnly" or
@@ -4805,7 +4835,6 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
               identifier == "CheckAnyPermissions" or
               identifier == "CheckAllPermissions" or
               identifier == "BinaryName" or
-              identifier == "MethodIdentityTestable" or
               identifier == "StaticClassOverride"):
             # Known attributes that we don't need to do anything with here
             pass
@@ -5504,10 +5533,13 @@ class Parser(Tokenizer):
         location = self.getLocation(p, 2)
         identifier = IDLUnresolvedIdentifier(location, "__iterable",
                                              allowDoubleUnderscore=True)
-        keyType = p[3]
-        valueType = None
         if (len(p) > 6):
+            keyType = p[3]
             valueType = p[5]
+        else:
+            keyType = None
+            valueType = p[3]
+
         p[0] = IDLIterable(location, identifier, keyType, valueType, self.globalScope())
 
     def p_Setlike(self, p):
@@ -6532,7 +6564,7 @@ class Parser(Tokenizer):
         assert isinstance(scope, IDLScope)
 
         # xrange omits the last value.
-        for x in xrange(IDLBuiltinType.Types.ArrayBuffer, IDLBuiltinType.Types.SharedFloat64Array + 1):
+        for x in xrange(IDLBuiltinType.Types.ArrayBuffer, IDLBuiltinType.Types.Float64Array + 1):
             builtin = BuiltinTypes[x]
             name = builtin.name
             typedef = IDLTypedef(BuiltinLocation("<builtin type>"), scope, builtin, name)
@@ -6577,7 +6609,7 @@ class Parser(Tokenizer):
                 if isinstance(m, IDLIterable):
                     iterable = m
                     break
-            if iterable:
+            if iterable and iterable.isPairIterator():
                 def simpleExtendedAttr(str):
                     return IDLExtendedAttribute(iface.location, (str, ))
                 nextMethod = IDLMethod(
@@ -6635,7 +6667,6 @@ class Parser(Tokenizer):
     _builtins = """
         typedef unsigned long long DOMTimeStamp;
         typedef (ArrayBufferView or ArrayBuffer) BufferSource;
-        typedef (SharedArrayBufferView or SharedArrayBuffer) SharedBufferSource;
     """
 
 

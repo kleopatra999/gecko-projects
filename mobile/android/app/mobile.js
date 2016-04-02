@@ -31,6 +31,11 @@ pref("browser.chromeURL", "chrome://browser/content/");
 // expiration (but low-memory conditions may still require the tab to be zombified).
 pref("browser.tabs.expireTime", 900);
 
+// Control whether tab content should try to load from disk cache when network
+// is offline.
+// Controlled by Switchboard experiment "offline-cache".
+pref("browser.tabs.useCache", false);
+
 // From libpref/src/init/all.js, extended to allow a slightly wider zoom range.
 pref("zoom.minPercent", 20);
 pref("zoom.maxPercent", 400);
@@ -44,8 +49,13 @@ pref("browser.viewport.desktopWidth", 980);
 // the value is divided by 1000 and clamped to hard-coded min/max scale values.
 pref("browser.viewport.defaultZoom", -1);
 
-/* allow scrollbars to float above chrome ui */
-pref("ui.scrollbarsCanOverlapContent", 1);
+#ifdef MOZ_ANDROID_APZ
+// Show/Hide scrollbars when active/inactive
+pref("ui.showHideScrollbars", 1);
+pref("ui.useOverlayScrollbars", 1);
+pref("ui.scrollbarFadeBeginDelay", 450);
+pref("ui.scrollbarFadeDuration", 0);
+#endif
 
 /* turn off the caret blink after 10 cycles */
 pref("ui.caretBlinkCount", 10);
@@ -106,6 +116,9 @@ pref("network.buffer.cache.size",  16384);
 pref("network.predictor.enabled", true);
 pref("network.predictor.max-db-size", 2097152); // bytes
 pref("network.predictor.preserve", 50); // percentage of predictor data to keep when cleaning up
+
+// Use JS mDNS as a fallback
+pref("network.mdns.use_js_fallback", true);
 
 /* history max results display */
 pref("browser.display.history.maxresults", 100);
@@ -177,14 +190,13 @@ pref("dom.forms.number", true);
 pref("xpinstall.whitelist.directRequest", false);
 pref("xpinstall.whitelist.fileRequest", false);
 pref("xpinstall.whitelist.add", "https://addons.mozilla.org");
-pref("xpinstall.whitelist.add.180", "https://marketplace.firefox.com");
 
-pref("xpinstall.signatures.required", false);
+pref("xpinstall.signatures.required", true);
 
 pref("extensions.enabledScopes", 1);
 pref("extensions.autoupdate.enabled", true);
 pref("extensions.autoupdate.interval", 86400);
-pref("extensions.update.enabled", false);
+pref("extensions.update.enabled", true);
 pref("extensions.update.interval", 86400);
 pref("extensions.dss.enabled", false);
 pref("extensions.dss.switchPending", false);
@@ -226,6 +238,21 @@ pref("extensions.blocklist.interval", 86400);
 pref("extensions.blocklist.url", "https://blocklist.addons.mozilla.org/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
 pref("extensions.blocklist.detailsURL", "https://www.mozilla.com/%LOCALE%/blocklist/");
 
+// Kinto blocklist preferences
+pref("services.kinto.base", "https://firefox.settings.services.mozilla.com/v1");
+pref("services.kinto.changes.path", "/buckets/monitor/collections/changes/records");
+pref("services.kinto.bucket", "blocklists");
+pref("services.kinto.onecrl.collection", "certificates");
+pref("services.kinto.onecrl.checked", 0);
+
+// for now, let's keep kinto update out of the release channel (pending
+// collection signatures)
+#ifdef RELEASE_BUILD
+pref("services.kinto.update_enabled", false);
+#else
+pref("services.kinto.update_enabled", true);
+#endif
+
 /* Don't let XPIProvider install distribution add-ons; we do our own thing on mobile. */
 pref("extensions.installDistroAddons", false);
 
@@ -255,8 +282,6 @@ pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.prop
 
 // pointer to the default engine name
 pref("browser.search.defaultenginename", "chrome://browser/locale/region.properties");
-// maximum number of search suggestions, as a string because the search service expects a string pref
-pref("browser.search.param.maxSuggestions", "4");
 // SSL error page behaviour
 pref("browser.ssl_override_behavior", 2);
 pref("browser.xul.error_pages.expert_bad_cert", false);
@@ -415,24 +440,30 @@ pref("font.size.inflation.minTwips", 0);
 // When true, zooming will be enabled on all sites, even ones that declare user-scalable=no.
 pref("browser.ui.zoom.force-user-scalable", false);
 
+// When removing this Nightly flag, also remember to remove the flags surrounding this feature
+// in GeckoPreferences and BrowserApp (see bug 1245930).
+#ifdef NIGHTLY_BUILD
 pref("ui.zoomedview.enabled", true);
+#else
+pref("ui.zoomedview.enabled", false);
+#endif
 pref("ui.zoomedview.keepLimitSize", 16); // value in layer pixels, used to not keep the large elements in the cluster list (Bug 1191041)
 pref("ui.zoomedview.limitReadableSize", 8); // value in layer pixels
 pref("ui.zoomedview.defaultZoomFactor", 2);
 pref("ui.zoomedview.simplified", true); // Do not display all the zoomed view controls, do not use size heurisistic
 
 pref("ui.touch.radius.enabled", false);
-pref("ui.touch.radius.leftmm", 8);
-pref("ui.touch.radius.topmm", 8);
-pref("ui.touch.radius.rightmm", 8);
-pref("ui.touch.radius.bottommm", 8);
+pref("ui.touch.radius.leftmm", 3);
+pref("ui.touch.radius.topmm", 5);
+pref("ui.touch.radius.rightmm", 3);
+pref("ui.touch.radius.bottommm", 2);
 pref("ui.touch.radius.visitedWeight", 120);
 
-pref("ui.mouse.radius.enabled", true);
-pref("ui.mouse.radius.leftmm", 8);
-pref("ui.mouse.radius.topmm", 8);
-pref("ui.mouse.radius.rightmm", 8);
-pref("ui.mouse.radius.bottommm", 8);
+pref("ui.mouse.radius.enabled", false);
+pref("ui.mouse.radius.leftmm", 3);
+pref("ui.mouse.radius.topmm", 5);
+pref("ui.mouse.radius.rightmm", 3);
+pref("ui.mouse.radius.bottommm", 2);
 pref("ui.mouse.radius.visitedWeight", 120);
 pref("ui.mouse.radius.reposition", true);
 
@@ -458,8 +489,11 @@ pref("plugin.default.state", 1);
 // The breakpad report server to link to in about:crashes
 pref("breakpad.reportURL", "https://crash-stats.mozilla.com/report/index/");
 pref("app.support.baseURL", "http://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/");
-// Used to submit data to input from about:feedback
-pref("app.feedback.postURL", "https://input.mozilla.org/api/v1/feedback/");
+
+// URL for feedback page
+// This should be kept in sync with the "feedback_link" string defined in strings.xml.in
+pref("app.feedbackURL", "https://input.mozilla.org/feedback/android/%VERSION%/%CHANNEL%/?utm_source=feedback-prompt");
+
 pref("app.privacyURL", "https://www.mozilla.org/privacy/firefox/");
 pref("app.creditsURL", "http://www.mozilla.org/credits/");
 pref("app.channelURL", "http://www.mozilla.org/%LOCALE%/firefox/channel/");
@@ -483,9 +517,6 @@ pref("security.mixed_content.block_active_content", true);
 
 // Enable pinning
 pref("security.cert_pinning.enforcement_level", 1);
-
-// Allow SHA-1 certificates only before 2016-01-01
-pref("security.pki.sha1_enforcement_level", 2);
 
 // Required blocklist freshness for OneCRL OCSP bypass
 // (default is 1.25x extensions.blocklist.interval, or 30 hours)
@@ -551,11 +582,27 @@ pref("ui.dragThresholdY", 25);
 pref("layers.acceleration.disabled", false);
 pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.async-video.enabled", true);
+
 #ifdef MOZ_ANDROID_APZ
 pref("layers.async-pan-zoom.enabled", true);
-pref("apz.axis_lock.mode", 1);
+// APZ prefs that are different from B2G
+pref("apz.allow_immediate_handoff", false);
+pref("apz.touch_start_tolerance", "0.06");
+pref("apz.axis_lock.breakout_angle", "0.7853982");    // PI / 4 (45 degrees)
+// APZ physics settings reviewed by UX
+pref("apz.axis_lock.mode", 1); // Use "strict" axis locking
+pref("apz.fling_curve_function_x1", "0.59");
+pref("apz.fling_curve_function_y1", "0.46");
+pref("apz.fling_curve_function_x2", "0.05");
+pref("apz.fling_curve_function_y2", "1.00");
+pref("apz.fling_curve_threshold_inches_per_ms", "0.01");
+pref("apz.fling_friction", "0.004");
+pref("apz.fling_stopped_threshold", "0.1");
+pref("apz.max_velocity_inches_per_ms", "0.07");
+pref("apz.fling_accel_interval_ms", 750);
+pref("apz.overscroll.enabled", true);
 #endif
-pref("apz.allow_zooming", true);
+
 pref("layers.progressive-paint", true);
 pref("layers.low-precision-buffer", true);
 pref("layers.low-precision-resolution", "0.25");
@@ -572,6 +619,9 @@ pref("dom.webnotifications.enabled", true);
 
 // prevent tooltips from showing up
 pref("browser.chrome.toolbar_tips", false);
+
+// don't allow meta-refresh when backgrounded
+pref("browser.meta_refresh_when_inactive.disabled", true);
 
 // prevent video elements from preloading too much data
 pref("media.preload.default", 1); // default to preload none
@@ -600,27 +650,23 @@ pref("media.mediasource.enabled", true);
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
 
-#ifdef NIGHTLY_BUILD
-// Shumway component (SWF player) is disabled by default. Also see bug 904346.
-pref("shumway.disabled", true);
-#endif
-
-// enable touch events interfaces
-pref("dom.w3c_touch_events.enabled", 1);
-
 #ifdef MOZ_SAFE_BROWSING
 pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
 pref("browser.safebrowsing.downloads.enabled", false);
 pref("browser.safebrowsing.downloads.remote.enabled", false);
 pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
+pref("browser.safebrowsing.downloads.remote.url", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
+pref("browser.safebrowsing.downloads.remote.block_dangerous",            true);
+pref("browser.safebrowsing.downloads.remote.block_dangerous_host",       true);
+pref("browser.safebrowsing.downloads.remote.block_potentially_unwanted", false);
+pref("browser.safebrowsing.downloads.remote.block_uncommon",             false);
 pref("browser.safebrowsing.debug", false);
 
 pref("browser.safebrowsing.provider.google.lists", "goog-badbinurl-shavar,goog-downloadwhite-digest256,goog-phish-shavar,goog-malware-shavar,goog-unwanted-shavar");
 pref("browser.safebrowsing.provider.google.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
 pref("browser.safebrowsing.provider.google.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
 pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
-pref("browser.safebrowsing.provider.google.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
 
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
@@ -642,11 +688,9 @@ pref("urlclassifier.gethash.timeout_ms", 5000);
 // a gethash request will be forced to check that the result is still in
 // the database.
 pref("urlclassifier.max-complete-age", 2700);
-#endif
 
-// URL for posting tiles metrics.
-#ifdef RELEASE_BUILD
-pref("browser.tiles.reportURL", "https://tiles.services.mozilla.com/v2/links/click");
+// Tables for application reputation.
+pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar");
 #endif
 
 // True if this is the first time we are showing about:firstrun
@@ -694,8 +738,8 @@ pref("ui.scrolling.overscroll_snap_limit", -1);
 pref("ui.scrolling.min_scrollable_distance", -1);
 // The axis lock mode for panning behaviour - set between standard, free and sticky
 pref("ui.scrolling.axis_lock_mode", "standard");
-// Negate scrollY, true will make the mouse scroll wheel move the screen the same direction as with most desktops or laptops.
-pref("ui.scrolling.negate_wheel_scrollY", true);
+// Negate scroll, true will make the mouse scroll wheel move the screen the same direction as with most desktops or laptops.
+pref("ui.scrolling.negate_wheel_scroll", true);
 // Determine the dead zone for gamepad joysticks. Higher values result in larger dead zones; use a negative value to
 // auto-detect based on reported hardware values
 pref("ui.scrolling.gamepad_dead_zone", 115);
@@ -754,18 +798,13 @@ pref("app.orientation.default", "");
 // back to the system.
 pref("memory.free_dirty_pages", true);
 
-pref("layout.imagevisibility.numscrollportwidths", 1);
-pref("layout.imagevisibility.numscrollportheights", 1);
+pref("layout.framevisibility.numscrollportwidths", 1);
+pref("layout.framevisibility.numscrollportheights", 1);
 
 pref("layers.enable-tiles", true);
 
 // Enable the dynamic toolbar
 pref("browser.chrome.dynamictoolbar", true);
-
-// The mode of browser titlebar
-// 0: Show a current page title.
-// 1: Show a current page url.
-pref("browser.chrome.titlebarMode", 1);
 
 // Hide common parts of URLs like "www." or "http://"
 pref("browser.urlbar.trimURLs", true);
@@ -789,15 +828,6 @@ pref("browser.contentHandlers.types.2.type", "application/vnd.mozilla.maybe.feed
 pref("browser.contentHandlers.types.3.title", "chrome://browser/locale/region.properties");
 pref("browser.contentHandlers.types.3.uri", "chrome://browser/locale/region.properties");
 pref("browser.contentHandlers.types.3.type", "application/vnd.mozilla.maybe.feed");
-
-// WebPayment
-pref("dom.mozPay.enabled", true);
-
-pref("dom.payment.provider.0.name", "Firefox Marketplace");
-pref("dom.payment.provider.0.description", "marketplace.firefox.com");
-pref("dom.payment.provider.0.uri", "https://marketplace.firefox.com/mozpay/?req=");
-pref("dom.payment.provider.0.type", "mozilla/payments/pay/v1");
-pref("dom.payment.provider.0.requestMethod", "GET");
 
 // Shortnumber matching needed for e.g. Brazil:
 // 01187654321 can be found with 87654321
@@ -824,13 +854,14 @@ pref("snav.enabled", true);
 // This url, if changed, MUST continue to point to an https url. Pulling arbitrary content to inject into
 // this page over http opens us up to a man-in-the-middle attack that we'd rather not face. If you are a downstream
 // repackager of this code using an alternate snippet url, please keep your users safe
-pref("browser.snippets.updateUrl", "https://snippets.mozilla.com/json/%SNIPPETS_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/");
+pref("browser.snippets.updateUrl", "https://snippets.cdn.mozilla.net/json/%SNIPPETS_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/");
 
 // How frequently we check for new snippets, in seconds (1 day)
 pref("browser.snippets.updateInterval", 86400);
 
-// URL used to check for user's country code
-pref("browser.snippets.geoUrl", "https://geo.mozilla.org/country.json");
+// URL used to check for user's country code. Please do not directly use this code or Snippets key.
+// Contact MLS team for your own credentials. https://location.services.mozilla.com/contact
+pref("browser.snippets.geoUrl", "https://location.services.mozilla.com/v1/country?key=fff72d56-b040-4205-9a11-82feda9d83a3");
 
 // URL used to ping metrics with stats about which snippets have been shown
 pref("browser.snippets.statsUrl", "https://snippets-stats.mozilla.org/mobile");
@@ -839,30 +870,6 @@ pref("browser.snippets.statsUrl", "https://snippets-stats.mozilla.org/mobile");
 pref("browser.snippets.enabled", true);
 pref("browser.snippets.syncPromo.enabled", true);
 pref("browser.snippets.firstrunHomepage.enabled", true);
-
-// The URL of the APK factory from which we obtain APKs for webapps.
-pref("browser.webapps.apkFactoryUrl", "https://controller.apk.firefox.com/application.apk");
-
-// How frequently to check for webapp updates, in seconds (86400 is daily).
-pref("browser.webapps.updateInterval", 86400);
-
-// Whether or not to check for updates.  Enabled by default, but the runtime
-// disables it for webapp profiles on firstrun, so only the main Fennec process
-// checks for updates (to avoid duplicate update notifications).
-//
-// In the future, we might want to make each webapp process check for updates
-// for its own webapp, in which case we'll need to have a third state for this
-// preference.  Thus it's an integer rather than a boolean.
-//
-// Possible values:
-//   0: don't check for updates
-//   1: do check for updates
-pref("browser.webapps.checkForUpdates", 1);
-
-// The URL of the service that checks for updates.
-// To test updates, set this to http://apk-update-checker.paas.allizom.org,
-// which is a test server that always reports all apps as having updates.
-pref("browser.webapps.updateCheckUrl", "https://controller.apk.firefox.com/app_updates");
 
 // The mode of home provider syncing.
 // 0: Sync always
@@ -892,40 +899,45 @@ pref("reader.color_scheme.values", "[\"dark\",\"auto\",\"light\"]");
 // Whether to use a vertical or horizontal toolbar.
 pref("reader.toolbar.vertical", false);
 
-// Whether or not to display buttons related to reading list in reader view.
-pref("browser.readinglist.enabled", true);
-
 // Telemetry settings.
 // Whether to use the unified telemetry behavior, requires a restart.
 pref("toolkit.telemetry.unified", false);
 
-// Turn off selection caret by default
-pref("selectioncaret.enabled", false);
+// Unified AccessibleCarets (touch-caret and selection-carets).
+#ifdef NIGHTLY_BUILD
+pref("layout.accessiblecaret.enabled", true);
+#else
+pref("layout.accessiblecaret.enabled", false);
+#endif
 
-// Selection carets never fall-back to internal LongTap detector.
-pref("selectioncaret.detects.longtap", false);
+// AccessibleCaret CSS for the Android L style assets.
+pref("layout.accessiblecaret.width", "22.0");
+pref("layout.accessiblecaret.height", "22.0");
+pref("layout.accessiblecaret.margin-left", "-11.5");
 
-// Selection carets override caret visibility.
-pref("selectioncaret.visibility.affectscaret", true);
+// Android needs to show the caret when long tapping on an empty content.
+pref("layout.accessiblecaret.caret_shown_when_long_tapping_on_empty_content", true);
 
-// Selection caret visibility observes composition
-// selections generated by soft keyboard managers.
-pref("selectioncaret.observes.compositions", true);
+// Android needs persistent carets and actionbar. Turn off the caret timeout.
+pref("layout.accessiblecaret.timeout_ms", 0);
 
-// Turn off touch caret by default.
-pref("touchcaret.enabled", false);
+// Android generates long tap (mouse) events.
+pref("layout.accessiblecaret.use_long_tap_injector", false);
 
-// TouchCaret never auto-hides.
-pref("touchcaret.expiration.time", 0);
+// AccessibleCarets behaviour is extended to support Android specific
+// requirements to hide carets while maintaining ActionBar visiblity during page
+// scroll.
+pref("layout.accessiblecaret.extendedvisibility", true);
 
-// Touch caret stays visible under a wider range of conditions
-// than the default b2g. We can display the caret in empty editables
-// for example, and do not auto-hide until loss of focus.
-pref("touchcaret.extendedvisibility", true);
+// Androids carets are always tilt to match the text selection guideline.
+pref("layout.accessiblecaret.always_tilt", true);
 
-// The TouchCaret and the SelectionCarets will indicate when the
-// TextSelection actionbar is to be openned or closed.
-pref("caret.manages-android-actionbar", true);
+// Selection change notifications generated by Javascript changes
+// update active AccessibleCarets / UI interactions.
+pref("layout.accessiblecaret.allow_script_change_updates", true);
+
+// Optionally provide haptic feedback on longPress selection events.
+pref("layout.accessiblecaret.hapticfeedback", true);
 
 // Disable sending console to logcat on release builds.
 #ifdef RELEASE_BUILD
@@ -944,10 +956,17 @@ pref("dom.vr.enabled", true);
 
 pref("browser.tabs.showAudioPlayingIcon", true);
 
-// Enable service workers and fetch interception on non-release Fennec
-#ifndef RELEASE_BUILD
 pref("dom.serviceWorkers.enabled", true);
 pref("dom.serviceWorkers.interception.enabled", true);
+pref("dom.serviceWorkers.openWindow.enabled", true);
+
+pref("dom.push.debug", false);
+// The upstream autopush endpoint must have the Google API key corresponding to
+// the App's sender ID; we bake this assumption directly into the URL.
+pref("dom.push.serverURL", "https://updates-autopush.stage.mozaws.net/v1/gcm/@MOZ_ANDROID_GCM_SENDERID@");
+
+#ifdef MOZ_ANDROID_GCM
+pref("dom.push.enabled", true);
 #endif
 
 // The remote content URL where FxAccountsWebChannel messages originate.  Must use HTTPS.
@@ -961,3 +980,7 @@ pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com
 
 // Token server used by Firefox Account-authenticated Sync.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
+
+// Enable Presentation API
+pref("dom.presentation.enabled", true);
+pref("dom.presentation.discovery.enabled", true);

@@ -316,6 +316,8 @@ class JSString : public js::gc::TenuredCell
     /* Avoid lame compile errors in JSRope::flatten */
     friend class JSRope;
 
+    friend class js::gc::RelocationOverlay;
+
   protected:
     template <typename CharT>
     MOZ_ALWAYS_INLINE
@@ -472,6 +474,8 @@ class JSString : public js::gc::TenuredCell
 
     inline void finalize(js::FreeOp* fop);
 
+    void fixupAfterMovingGC() {}
+
     /* Gets the number of bytes that the chars take on the heap. */
 
     size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
@@ -492,7 +496,7 @@ class JSString : public js::gc::TenuredCell
         return offsetof(JSString, d.s.u2.nonInlineCharsTwoByte);
     }
 
-    static inline js::ThingRootKind rootKind() { return js::THING_ROOT_STRING; }
+    static const JS::TraceKind TraceKind = JS::TraceKind::String;
 
 #ifdef DEBUG
     void dump();
@@ -1136,11 +1140,25 @@ NameToId(PropertyName* name)
     return NON_INTEGER_ATOM_TO_JSID(name);
 }
 
-using PropertyNameVector = js::TraceableVector<PropertyName*>;
+using PropertyNameVector = js::GCVector<PropertyName*>;
 
 template <typename CharT>
 void
 CopyChars(CharT* dest, const JSLinearString& str);
+
+static inline UniqueChars
+StringToNewUTF8CharsZ(ExclusiveContext* maybecx, JSString& str)
+{
+    JS::AutoCheckCannotGC nogc;
+
+    JSLinearString* linear = str.ensureLinear(maybecx);
+    if (!linear)
+        return nullptr;
+
+    return UniqueChars(linear->hasLatin1Chars()
+                       ? JS::CharsToNewUTF8CharsZ(maybecx, linear->latin1Range(nogc)).c_str()
+                       : JS::CharsToNewUTF8CharsZ(maybecx, linear->twoByteRange(nogc)).c_str());
+}
 
 /* GC-allocate a string descriptor for the given malloc-allocated chars. */
 template <js::AllowGC allowGC, typename CharT>

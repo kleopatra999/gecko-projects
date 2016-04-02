@@ -1,20 +1,23 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
+"use strict";
+
 XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
+XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                  "resource://gre/modules/AppConstants.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
   EventManager,
-  ignoreEvent,
-  runSafe,
 } = ExtensionUtils;
 
-extensions.registerAPI((extension, context) => {
+extensions.registerSchemaAPI("windows", null, (extension, context) => {
   return {
     windows: {
-      WINDOW_ID_CURRENT: WindowManager.WINDOW_ID_CURRENT,
-      WINDOW_ID_NONE: WindowManager.WINDOW_ID_NONE,
-
       onCreated:
       new WindowEventManager(context, "windows.onCreated", "domwindowopened", (fire, window) => {
         fire(WindowManager.convert(extension, window));
@@ -40,44 +43,38 @@ extensions.registerAPI((extension, context) => {
         };
       }).api(),
 
-      get: function(windowId, getInfo, callback) {
-        let window = WindowManager.getWindow(windowId);
-        runSafe(context, callback, WindowManager.convert(extension, window, getInfo));
+      get: function(windowId, getInfo) {
+        let window = WindowManager.getWindow(windowId, context);
+        return Promise.resolve(WindowManager.convert(extension, window, getInfo));
       },
 
-      getCurrent: function(getInfo, callback) {
-        if (!callback) {
-          callback = getInfo;
-          getInfo = {};
-        }
+      getCurrent: function(getInfo) {
         let window = currentWindow(context);
-        runSafe(context, callback, WindowManager.convert(extension, window, getInfo));
+        return Promise.resolve(WindowManager.convert(extension, window, getInfo));
       },
 
-      getLastFocused: function(...args) {
-        let getInfo, callback;
-        if (args.length == 1) {
-          callback = args[0];
-        } else {
-          [getInfo, callback] = args;
-        }
+      getLastFocused: function(getInfo) {
         let window = WindowManager.topWindow;
-        runSafe(context, callback, WindowManager.convert(extension, window, getInfo));
+        return Promise.resolve(WindowManager.convert(extension, window, getInfo));
       },
 
-      getAll: function(getInfo, callback) {
-        let e = Services.wm.getEnumerator("navigator:browser");
-        let windows = [];
-        while (e.hasMoreElements()) {
-          let window = e.getNext();
-          if (window.document.readyState == "complete") {
-            windows.push(WindowManager.convert(extension, window, getInfo));
+      getAll: function(getInfo) {
+        let windows = Array.from(WindowListManager.browserWindows(),
+                                 window => WindowManager.convert(extension, window, getInfo));
+        return Promise.resolve(windows);
+      },
+
+      create: function(createData) {
+        let needResize = (createData.left !== null || createData.top !== null ||
+                          createData.width !== null || createData.height !== null);
+
+        if (needResize) {
+          if (createData.state !== null && createData.state != "normal") {
+            return Promise.reject({message: `"state": "${createData.state}" may not be combined with "left", "top", "width", or "height"`});
           }
+          createData.state = "normal";
         }
-        runSafe(context, callback, windows);
-      },
 
-      create: function(createData, callback) {
         function mkstr(s) {
           let result = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
           result.data = s;
@@ -85,7 +82,27 @@ extensions.registerAPI((extension, context) => {
         }
 
         let args = Cc["@mozilla.org/supports-array;1"].createInstance(Ci.nsISupportsArray);
-        if ("url" in createData) {
+
+        if (createData.tabId !== null) {
+          if (createData.url !== null) {
+            return Promise.reject({message: "`tabId` may not be used in conjunction with `url`"});
+          }
+
+          let tab = TabManager.getTab(createData.tabId);
+          if (tab == null) {
+            return Promise.reject({message: `Invalid tab ID: ${createData.tabId}`});
+          }
+
+          // Private browsing tabs can only be moved to private browsing
+          // windows.
+          let incognito = PrivateBrowsingUtils.isBrowserPrivate(tab.linkedBrowser);
+          if (createData.incognito !== null && createData.incognito != incognito) {
+            return Promise.reject({message: "`incognito` property must match the incognito state of tab"});
+          }
+          createData.incognito = incognito;
+
+          args.AppendElement(tab);
+        } else if (createData.url !== null) {
           if (Array.isArray(createData.url)) {
             let array = Cc["@mozilla.org/supports-array;1"].createInstance(Ci.nsISupportsArray);
             for (let url of createData.url) {
@@ -99,62 +116,99 @@ extensions.registerAPI((extension, context) => {
           args.AppendElement(mkstr(aboutNewTabService.newTabURL));
         }
 
-        let extraFeatures = "";
-        if ("incognito" in createData) {
+        let features = ["chrome"];
+
+        if (createData.type === null || createData.type == "normal") {
+          features.push("dialog=no", "all");
+        } else {
+          // All other types create "popup"-type windows by default.
+          features.push("dialog", "resizable", "minimizable", "centerscreen", "titlebar", "close");
+        }
+
+        if (createData.incognito !== null) {
           if (createData.incognito) {
-            extraFeatures += ",private";
+            features.push("private");
           } else {
-            extraFeatures += ",non-private";
+            features.push("non-private");
           }
         }
 
         let window = Services.ww.openWindow(null, "chrome://browser/content/browser.xul", "_blank",
-                                            "chrome,dialog=no,all" + extraFeatures, args);
+                                            features.join(","), args);
 
-        if ("left" in createData || "top" in createData) {
-          let left = "left" in createData ? createData.left : window.screenX;
-          let top = "top" in createData ? createData.top : window.screenY;
-          window.moveTo(left, top);
-        }
-        if ("width" in createData || "height" in createData) {
-          let width = "width" in createData ? createData.width : window.outerWidth;
-          let height = "height" in createData ? createData.height : window.outerHeight;
-          window.resizeTo(width, height);
-        }
+        WindowManager.updateGeometry(window, createData);
 
-        // TODO: focused, type, state
+        // TODO: focused, type
 
-        window.addEventListener("load", function listener() {
-          window.removeEventListener("load", listener);
-          if (callback) {
-            runSafe(context, callback, WindowManager.convert(extension, window));
-          }
+        return new Promise(resolve => {
+          window.addEventListener("load", function listener() {
+            window.removeEventListener("load", listener);
+
+            if (createData.state == "maximized" || createData.state == "normal" ||
+                (createData.state == "fullscreen" && AppConstants.platform != "macosx")) {
+              window.document.documentElement.setAttribute("sizemode", createData.state);
+            } else if (createData.state !== null) {
+              // window.minimize() has no useful effect until the window has
+              // been shown.
+
+              let obs = doc => {
+                if (doc === window.document) {
+                  Services.obs.removeObserver(obs, "document-shown");
+                  WindowManager.setState(window, createData.state);
+                  resolve();
+                }
+              };
+              Services.obs.addObserver(obs, "document-shown", false);
+              return;
+            }
+
+            resolve();
+          });
+        }).then(() => {
+          return WindowManager.convert(extension, window);
         });
       },
 
-      update: function(windowId, updateInfo, callback) {
-        let window = WindowManager.getWindow(windowId);
+      update: function(windowId, updateInfo) {
+        if (updateInfo.state !== null && updateInfo.state != "normal") {
+          if (updateInfo.left !== null || updateInfo.top !== null ||
+              updateInfo.width !== null || updateInfo.height !== null) {
+            return Promise.reject({message: `"state": "${updateInfo.state}" may not be combined with "left", "top", "width", or "height"`});
+          }
+        }
+
+        let window = WindowManager.getWindow(windowId, context);
         if (updateInfo.focused) {
           Services.focus.activeWindow = window;
         }
-        // TODO: All the other properties...
 
-        if (callback) {
-          runSafe(context, callback, WindowManager.convert(extension, window));
+        if (updateInfo.state !== null) {
+          WindowManager.setState(window, updateInfo.state);
         }
+
+        if (updateInfo.drawAttention) {
+          // Bug 1257497 - Firefox can't cancel attention actions.
+          window.getAttention();
+        }
+
+        WindowManager.updateGeometry(window, updateInfo);
+
+        // TODO: All the other properties, focused=false...
+
+        return Promise.resolve(WindowManager.convert(extension, window));
       },
 
-      remove: function(windowId, callback) {
-        let window = WindowManager.getWindow(windowId);
+      remove: function(windowId) {
+        let window = WindowManager.getWindow(windowId, context);
         window.close();
 
-        let listener = () => {
-          AllWindowEvents.removeListener("domwindowclosed", listener);
-          if (callback) {
-            runSafe(context, callback);
-          }
-        };
-        AllWindowEvents.addListener("domwindowclosed", listener);
+        return new Promise(resolve => {
+          let listener = () => {
+            AllWindowEvents.removeListener("domwindowclosed", listener);
+            resolve();
+          };
+          AllWindowEvents.addListener("domwindowclosed", listener);
+        });
       },
     },
   };

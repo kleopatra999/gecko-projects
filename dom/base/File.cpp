@@ -39,10 +39,13 @@
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerRunnable.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla {
 namespace dom {
+
+using namespace workers;
 
 // XXXkhuey the input stream that we pass out of a File
 // can outlive the actual File object.  Thus, we must
@@ -213,7 +216,7 @@ Blob::Blob(nsISupports* aParent, BlobImpl* aImpl)
 
 #ifdef DEBUG
   {
-    nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aParent);
+    nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aParent);
     if (win) {
       MOZ_ASSERT(win->IsInnerWindow());
     }
@@ -225,12 +228,6 @@ bool
 Blob::IsFile() const
 {
   return mImpl->IsFile();
-}
-
-bool
-Blob::IsDirectory() const
-{
-  return mImpl->IsDirectory();
 }
 
 const nsTArray<RefPtr<BlobImpl>>*
@@ -257,16 +254,19 @@ Blob::ToFile()
 }
 
 already_AddRefed<File>
-Blob::ToFile(const nsAString& aName) const
+Blob::ToFile(const nsAString& aName, ErrorResult& aRv) const
 {
-  nsAutoTArray<RefPtr<BlobImpl>, 1> blobImpls;
+  AutoTArray<RefPtr<BlobImpl>, 1> blobImpls;
   blobImpls.AppendElement(mImpl);
 
   nsAutoString contentType;
   mImpl->GetType(contentType);
 
   RefPtr<MultipartBlobImpl> impl =
-    new MultipartBlobImpl(blobImpls, aName, contentType);
+    MultipartBlobImpl::Create(blobImpls, aName, contentType, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
 
   RefPtr<File> file = new File(mParent, impl);
   return file.forget();
@@ -347,7 +347,11 @@ Blob::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
 {
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl();
 
-  impl->InitializeBlob();
+  impl->InitializeBlob(aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
   MOZ_ASSERT(!impl->IsFile());
 
   RefPtr<Blob> blob = Blob::Create(aGlobal.GetAsSupports(), impl);
@@ -413,20 +417,10 @@ File::Create(nsISupports* aParent, BlobImpl* aImpl)
 /* static */ already_AddRefed<File>
 File::Create(nsISupports* aParent, const nsAString& aName,
              const nsAString& aContentType, uint64_t aLength,
-             int64_t aLastModifiedDate, BlobDirState aDirState)
+             int64_t aLastModifiedDate)
 {
   RefPtr<File> file = new File(aParent,
-    new BlobImplBase(aName, aContentType, aLength, aLastModifiedDate,
-                     aDirState));
-  return file.forget();
-}
-
-/* static */ already_AddRefed<File>
-File::Create(nsISupports* aParent, const nsAString& aName,
-             const nsAString& aContentType, uint64_t aLength)
-{
-  RefPtr<File> file = new File(aParent,
-    new BlobImplBase(aName, aContentType, aLength));
+    new BlobImplBase(aName, aContentType, aLength, aLastModifiedDate));
   return file.forget();
 }
 
@@ -465,7 +459,7 @@ File::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 }
 
 void
-File::GetName(nsAString& aFileName)
+File::GetName(nsAString& aFileName) const
 {
   mImpl->GetName(aFileName);
 }
@@ -604,7 +598,7 @@ File::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
 
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl(EmptyString());
   impl->InitializeChromeFile(window, aData, aBag, true, aRv);
@@ -632,7 +626,7 @@ File::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
 
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl(EmptyString());
   impl->InitializeChromeFile(window, aData, aBag, aRv);
@@ -684,7 +678,7 @@ NS_IMPL_ISUPPORTS(BlobImpl, BlobImpl)
 NS_IMPL_ISUPPORTS_INHERITED0(BlobImplFile, BlobImpl)
 
 void
-BlobImplBase::GetName(nsAString& aName)
+BlobImplBase::GetName(nsAString& aName) const
 {
   NS_ASSERTION(mIsFile, "Should only be called on files");
   aName = mName;
@@ -712,8 +706,7 @@ BlobImplBase::GetMozFullPath(nsAString& aFileName, ErrorResult& aRv) const
     return;
   }
 
-  workers::WorkerPrivate* workerPrivate =
-    workers::GetCurrentThreadWorkerPrivate();
+  WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
 
   if (workerPrivate->UsesSystemPrincipal()) {
@@ -851,7 +844,7 @@ BlobImplFile::GetMozFullPathInternal(nsAString& aFilename, ErrorResult& aRv) con
 uint64_t
 BlobImplFile::GetSize(ErrorResult& aRv)
 {
-  if (IsSizeUnknown()) {
+  if (BlobImplBase::IsSizeUnknown()) {
     NS_ASSERTION(mWholeFile,
                  "Should only use lazy size when using the whole file");
     int64_t fileSize;
@@ -871,17 +864,82 @@ BlobImplFile::GetSize(ErrorResult& aRv)
   return mLength;
 }
 
+namespace {
+
+class GetTypeRunnable final : public nsRunnable
+{
+public:
+  GetTypeRunnable(WorkerPrivate* aWorkerPrivate,
+                  nsIEventTarget* aSyncLoopTarget,
+                  BlobImpl* aBlobImpl)
+    : mWorkerPrivate(aWorkerPrivate)
+    , mSyncLoopTarget(aSyncLoopTarget)
+    , mBlobImpl(aBlobImpl)
+  {
+    MOZ_ASSERT(aWorkerPrivate);
+    MOZ_ASSERT(aSyncLoopTarget);
+    MOZ_ASSERT(aBlobImpl);
+    aWorkerPrivate->AssertIsOnWorkerThread();
+  }
+
+  NS_IMETHOD
+  Run() override
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    nsAutoString type;
+    mBlobImpl->GetType(type);
+
+    RefPtr<MainThreadStopSyncLoopRunnable> runnable =
+      new MainThreadStopSyncLoopRunnable(mWorkerPrivate,
+                                         mSyncLoopTarget.forget(), true);
+    NS_WARN_IF(!runnable->Dispatch());
+    return NS_OK;
+  }
+
+private:
+  ~GetTypeRunnable()
+  {}
+
+  WorkerPrivate* mWorkerPrivate;
+  nsCOMPtr<nsIEventTarget> mSyncLoopTarget;
+  RefPtr<BlobImpl> mBlobImpl;
+};
+
+} // anonymous namespace
+
 void
 BlobImplFile::GetType(nsAString& aType)
 {
+  aType.Truncate();
+
   if (mContentType.IsVoid()) {
     NS_ASSERTION(mWholeFile,
                  "Should only use lazy ContentType when using the whole file");
+
+    if (!NS_IsMainThread()) {
+      WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+      if (!workerPrivate) {
+        // I have no idea in which thread this method is called. We cannot
+        // return any valid value.
+        return;
+      }
+
+      AutoSyncLoopHolder syncLoop(workerPrivate);
+
+      RefPtr<GetTypeRunnable> runnable =
+        new GetTypeRunnable(workerPrivate, syncLoop.EventTarget(), this);
+      nsresult rv = NS_DispatchToMainThread(runnable);
+      NS_WARN_IF(NS_FAILED(rv));
+
+      NS_WARN_IF(!syncLoop.Run());
+      return;
+    }
+
     nsresult rv;
     nsCOMPtr<nsIMIMEService> mimeService =
       do_GetService(NS_MIMESERVICE_CONTRACTID, &rv);
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      aType.Truncate();
       return;
     }
 
@@ -902,7 +960,7 @@ int64_t
 BlobImplFile::GetLastModified(ErrorResult& aRv)
 {
   NS_ASSERTION(mIsFile, "Should only be called on files");
-  if (IsDateUnknown()) {
+  if (BlobImplBase::IsDateUnknown()) {
     PRTime msecs;
     aRv = mFile->GetLastModifiedTime(&msecs);
     if (NS_WARN_IF(aRv.Failed())) {
@@ -948,15 +1006,30 @@ BlobImplFile::SetPath(const nsAString& aPath)
   mPath = aPath;
 }
 
-void
-BlobImplFile::LookupAndCacheIsDirectory()
+////////////////////////////////////////////////////////////////////////////
+// EmptyBlobImpl implementation
+
+NS_IMPL_ISUPPORTS_INHERITED0(EmptyBlobImpl, BlobImpl)
+
+already_AddRefed<BlobImpl>
+EmptyBlobImpl::CreateSlice(uint64_t aStart, uint64_t aLength,
+                           const nsAString& aContentType,
+                           ErrorResult& aRv)
 {
-  MOZ_ASSERT(mIsFile,
-             "This should only be called when this object has been created "
-             "from an nsIFile to note that the nsIFile is a directory");
-  bool isDir;
-  mFile->IsDirectory(&isDir);
-  mDirState = isDir ? BlobDirState::eIsDir : BlobDirState::eIsNotDir;
+  MOZ_ASSERT(!aStart && !aLength);
+  RefPtr<BlobImpl> impl = new EmptyBlobImpl(aContentType);
+  return impl.forget();
+}
+
+void
+EmptyBlobImpl::GetInternalStream(nsIInputStream** aStream,
+                                 ErrorResult& aRv)
+{
+  nsresult rv = NS_NewCStringInputStream(aStream, EmptyCString());
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(rv);
+    return;
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -1121,11 +1194,19 @@ BlobImplTemporaryBlob::GetInternalStream(nsIInputStream** aStream,
 // BlobSet implementation
 
 already_AddRefed<Blob>
-BlobSet::GetBlobInternal(nsISupports* aParent, const nsACString& aContentType)
+BlobSet::GetBlobInternal(nsISupports* aParent,
+                         const nsACString& aContentType,
+                         ErrorResult& aRv)
 {
-  RefPtr<Blob> blob = Blob::Create(aParent,
-    new MultipartBlobImpl(GetBlobImpls(),
-                          NS_ConvertASCIItoUTF16(aContentType)));
+  RefPtr<BlobImpl> blobImpl =
+    MultipartBlobImpl::Create(GetBlobImpls(),
+                              NS_ConvertASCIItoUTF16(aContentType),
+                              aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  RefPtr<Blob> blob = Blob::Create(aParent, blobImpl);
   return blob.forget();
 }
 

@@ -1,6 +1,6 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // the "exported" symbols
 var SocialUI,
@@ -65,8 +65,6 @@ SocialUI = {
     mm.loadFrameScript("chrome://browser/content/social-content.js", true);
 
     Services.obs.addObserver(this, "social:ambient-notification-changed", false);
-    Services.obs.addObserver(this, "social:profile-changed", false);
-    Services.obs.addObserver(this, "social:frameworker-error", false);
     Services.obs.addObserver(this, "social:providers-changed", false);
     Services.obs.addObserver(this, "social:provider-reload", false);
     Services.obs.addObserver(this, "social:provider-enabled", false);
@@ -76,6 +74,7 @@ SocialUI = {
 
     CustomizableUI.addListener(this);
     SocialActivationListener.init();
+    messageManager.addMessageListener("Social:Notification", this);
 
     // menupopups that list social providers. we only populate them when shown,
     // and if it has not been done already.
@@ -100,8 +99,6 @@ SocialUI = {
     SocialSidebar.saveWindowState();
 
     Services.obs.removeObserver(this, "social:ambient-notification-changed");
-    Services.obs.removeObserver(this, "social:profile-changed");
-    Services.obs.removeObserver(this, "social:frameworker-error");
     Services.obs.removeObserver(this, "social:providers-changed");
     Services.obs.removeObserver(this, "social:provider-reload");
     Services.obs.removeObserver(this, "social:provider-enabled");
@@ -110,11 +107,21 @@ SocialUI = {
     Services.prefs.removeObserver("social.toast-notifications.enabled", this);
     CustomizableUI.removeListener(this);
     SocialActivationListener.uninit();
+    messageManager.removeMessageListener("Social:Notification", this);
 
     document.getElementById("viewSidebarMenu").removeEventListener("popupshowing", SocialSidebar.populateSidebarMenu, true);
     document.getElementById("social-statusarea-popup").removeEventListener("popupshowing", SocialSidebar.populateSidebarMenu, true);
 
     this._initialized = false;
+  },
+
+  receiveMessage: function(aMessage) {
+    if (aMessage.name == "Social:Notification") {
+      let provider = Social._getProviderFromOrigin(aMessage.data.origin);
+      if (provider) {
+        provider.setAmbientNotification(aMessage.data.detail);
+      }
+    }
   },
 
   observe: function SocialUI_observe(subject, topic, data) {
@@ -148,17 +155,6 @@ SocialUI = {
       // Provider-specific notifications
       case "social:ambient-notification-changed":
         SocialStatus.updateButton(data);
-        break;
-      case "social:profile-changed":
-        // make sure anything that happens here only affects the provider for
-        // which the profile is changing, and that anything we call actually
-        // needs to change based on profile data.
-        SocialStatus.updateButton(data);
-        break;
-      case "social:frameworker-error":
-        if (this.enabled && SocialSidebar.provider && SocialSidebar.provider.origin == data) {
-          SocialSidebar.loadFrameworkerFailure();
-        }
         break;
       case "nsPref:changed":
         if (data == "social.toast-notifications.enabled") {
@@ -218,17 +214,12 @@ SocialUI = {
 
   get enabled() {
     // Returns whether social is enabled *for this window*.
-    if (this._chromeless || PrivateBrowsingUtils.isWindowPrivate(window))
+    if (this._chromeless)
       return false;
     return Social.providers.length > 0;
   },
 
   canShareOrMarkPage: function(aURI) {
-    // Bug 898706 we do not enable social in private sessions since frameworker
-    // would be shared between private and non-private windows
-    if (PrivateBrowsingUtils.isWindowPrivate(window))
-      return false;
-
     return (aURI && (aURI.schemeIs('http') || aURI.schemeIs('https')));
   },
 
@@ -259,8 +250,6 @@ SocialUI = {
   // called on tab/urlbar/location changes and after customization. Update
   // anything that is tab specific.
   updateState: function() {
-    if (location == "about:customizing")
-      return;
     goSetCommandEnabled("Social:PageShareOrMark", this.canShareOrMarkPage(gBrowser.currentURI));
     if (!SocialUI.enabled)
       return;
@@ -289,10 +278,6 @@ SocialActivationListener = {
       options = { bypassContentCheck: true, bypassInstallPanel: true };
     }
 
-    // If we are in PB mode, we silently do nothing (bug 829404 exists to
-    // do something sensible here...)
-    if (PrivateBrowsingUtils.isWindowPrivate(window))
-      return;
     Social.installProvider(data, function(manifest) {
       Social.activateFromOrigin(manifest.origin, function(provider) {
         if (provider.sidebarURL) {
@@ -363,6 +348,7 @@ SocialFlyout = {
     iframe.setAttribute("flex", "1");
     iframe.setAttribute("message", "true");
     iframe.setAttribute("messagemanagergroup", "social");
+    iframe.setAttribute("disablehistory", "true");
     iframe.setAttribute("tooltip", "aHTMLTooltip");
     iframe.setAttribute("context", "contentAreaContextMenu");
     iframe.setAttribute("origin", SocialSidebar.provider.origin);
@@ -370,7 +356,7 @@ SocialFlyout = {
     // the xbl bindings for the iframe probably don't exist yet, so we can't
     // access iframe.messageManager directly - but can get at it with this dance.
     let mm = iframe.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader.messageManager;
-    mm.sendAsyncMessage("Social:SetErrorURL", null,
+    mm.sendAsyncMessage("Social:SetErrorURL",
                         { template: "about:socialerror?mode=compactInfo&origin=%{origin}" });
   },
 
@@ -390,7 +376,6 @@ SocialFlyout = {
     iframe.docShellIsActive = true;
     if (iframe.contentDocument.readyState == "complete") {
       this._dynamicResizer.start(panel, iframe);
-      this.dispatchPanelEvent("socialFrameShow");
     } else {
       // first time load, wait for load and dispatch after load
       iframe.addEventListener("load", function panelBrowserOnload(e) {
@@ -398,7 +383,6 @@ SocialFlyout = {
         setTimeout(function() {
           if (SocialFlyout._dynamicResizer) { // may go null if hidden quickly
             SocialFlyout._dynamicResizer.start(panel, iframe);
-            SocialFlyout.dispatchPanelEvent("socialFrameShow");
           }
         }, 0);
       }, true);
@@ -409,7 +393,6 @@ SocialFlyout = {
     this._dynamicResizer.stop();
     this._dynamicResizer = null;
     this.iframe.docShellIsActive = false;
-    this.dispatchPanelEvent("socialFrameHide");
   },
 
   load: function(aURL, cb) {
@@ -506,13 +489,14 @@ SocialShare = {
     iframe.setAttribute("class", "social-share-frame");
     iframe.setAttribute("context", "contentAreaContextMenu");
     iframe.setAttribute("tooltip", "aHTMLTooltip");
+    iframe.setAttribute("disablehistory", "true");
     iframe.setAttribute("disableglobalhistory", "true");
     iframe.setAttribute("flex", "1");
     iframe.setAttribute("message", "true");
     iframe.setAttribute("messagemanagergroup", "social");
     panel.lastChild.appendChild(iframe);
     let mm = iframe.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader.messageManager;
-    mm.sendAsyncMessage("Social:SetErrorURL", null,
+    mm.sendAsyncMessage("Social:SetErrorURL",
                         { template: "about:socialerror?mode=compactInfo&origin=%{origin}&url=%{url}" });
 
     this.populateProviderMenu();
@@ -537,7 +521,7 @@ SocialShare = {
   populateProviderMenu: function() {
     if (!this.iframe)
       return;
-    let providers = [p for (p of Social.providers) if (p.shareURL)];
+    let providers = Social.providers.filter(p => p.shareURL);
     let hbox = document.getElementById("social-share-provider-buttons");
     // remove everything before the add-share-provider button (which should also
     // be lastChild if any share providers were added)
@@ -597,11 +581,7 @@ SocialShare = {
     this.iframe.docShell.createAboutBlankContentViewer(null);
     this.currentShare = null;
     // share panel use is over, purge any history
-    if (this.iframe.sessionHistory) {
-      let purge = this.iframe.sessionHistory.count;
-      if (purge > 0)
-        this.iframe.sessionHistory.PurgeHistory(purge);
-    }
+    this.iframe.purgeSessionHistory();
   },
 
   sharePage: function(providerOrigin, graphData, target, anchor) {
@@ -639,17 +619,17 @@ SocialShare = {
         }
         this.sharePage(providerOrigin, pageData, target, anchor);
       });
-      gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetPageData");
+      gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetPageData", null, { target });
       return;
     }
-    // if this is a share of a selected item, get any microdata
-    if (!pageData.microdata && target) {
-      messageManager.addMessageListener("PageMetadata:MicrodataResult", _dataFn = (msg) => {
-        messageManager.removeMessageListener("PageMetadata:MicrodataResult", _dataFn);
-        pageData.microdata = msg.data;
+    // if this is a share of a selected item, get any microformats
+    if (!pageData.microformats && target) {
+      messageManager.addMessageListener("PageMetadata:MicroformatsResult", _dataFn = (msg) => {
+        messageManager.removeMessageListener("PageMetadata:MicroformatsResult", _dataFn);
+        pageData.microformats = msg.data;
         this.sharePage(providerOrigin, pageData, target, anchor);
       });
-      gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetMicrodata", null, { target });
+      gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetMicroformats", null, { target });
       return;
     }
     this.currentShare = pageData;
@@ -710,11 +690,7 @@ SocialShare = {
     }
     // if the user switched between share providers we do not want that history
     // available.
-    if (iframe.sessionHistory) {
-      let purge = iframe.sessionHistory.count;
-      if (purge > 0)
-        iframe.sessionHistory.PurgeHistory(purge);
-    }
+    iframe.purgeSessionHistory();
 
     // always ensure that origin belongs to the endpoint
     let uri = Services.io.newURI(shareEndpoint, null, null);
@@ -763,7 +739,7 @@ SocialSidebar = {
 
   // Whether the sidebar can be shown for this window.
   get canShow() {
-    if (!SocialUI.enabled || document.mozFullScreen)
+    if (!SocialUI.enabled || document.fullscreenElement)
       return false;
     return Social.providers.some(p => p.sidebarURL);
   },
@@ -859,9 +835,6 @@ SocialSidebar = {
     if (aEnabled == sbrowser.docShellIsActive)
       return;
     sbrowser.docShellIsActive = aEnabled;
-    let evt = sbrowser.contentDocument.createEvent("CustomEvent");
-    evt.initCustomEvent(aEnabled ? "socialFrameShow" : "socialFrameHide", true, true, {});
-    sbrowser.contentDocument.documentElement.dispatchEvent(evt);
   },
 
   updateToggleNotifications: function() {
@@ -958,16 +931,6 @@ SocialSidebar = {
 
   _unloadTimeoutId: 0,
 
-  loadFrameworkerFailure: function() {
-    if (this.provider && this.provider.errorState == "frameworker-error") {
-      // we have to explicitly load this error page since it is not being
-      // handled via the normal error page paths.
-      let sbrowser = document.getElementById("social-sidebar-browser");
-      sbrowser.setAttribute("src", "about:socialerror?mode=workerFailure&origin=" +
-                            encodeURIComponent(this.provider.origin));
-    }
-  },
-
   _provider: null,
   ensureProvider: function() {
     if (this._provider)
@@ -976,7 +939,7 @@ SocialSidebar = {
     // first, otherwise fallback to the first provider in the list
     let sbrowser = document.getElementById("social-sidebar-browser");
     let origin = sbrowser.getAttribute("origin");
-    let providers = [p for (p of Social.providers) if (p.sidebarURL)];
+    let providers = Social.providers.filter(p => p.sidebarURL);
     let provider;
     if (origin)
       provider = Social._getProviderFromOrigin(origin);
@@ -1093,7 +1056,7 @@ SocialSidebar = {
       menu.removeChild(providerMenuSep.previousSibling);
     }
     // only show a selection in the sidebar header menu if there is more than one
-    let providers = [p for (p of Social.providers) if (p.sidebarURL)];
+    let providers = Social.providers.filter(p => p.sidebarURL);
     if (providers.length < 2 && menu.id != "viewSidebarMenu") {
       providerMenuSep.hidden = true;
       return;
@@ -1153,7 +1116,9 @@ ToolbarHelper.prototype = {
   },
 
   clearPalette: function() {
-    [this.removeProviderButton(p.origin) for (p of Social.providers)];
+    for (let p of Social.providers) {
+      this.removeProviderButton(p.origin);
+    }
   },
 
   // should be called on enable of a provider
@@ -1247,8 +1212,8 @@ SocialStatus = {
       let iconNames = Object.keys(icons);
       let notif = icons[iconNames[0]];
 
-      // The image and tooltip need to be updated for both
-      // ambient notification and profile changes.
+      // The image and tooltip need to be updated for
+      // ambient notification changes.
       let iconURL = provider.icon32URL || provider.iconURL;
       let tooltiptext;
       if (!notif || !widget.areaType) {
@@ -1320,8 +1285,7 @@ var SocialMarksWidgetListener = {
  */
 SocialMarks = {
   get nodes() {
-    let providers = [p for (p of Social.providers) if (p.markURL)];
-    for (let p of providers) {
+    for (let p of Social.providers.filter(p => p.markURL)) {
       let widgetId = SocialMarks._toolbarHelper.idFromOrigin(p.origin);
       let widget = CustomizableUI.getWidget(widgetId);
       if (!widget)
@@ -1348,9 +1312,8 @@ SocialMarks = {
     // also means that populateToolbarPalette must be called prior to using this
     // method, otherwise you get a big fat zero. For our use case with context
     // menu's, this is ok.
-    let tbh = this._toolbarHelper;
-    return [p for (p of Social.providers) if (p.markURL &&
-                                              document.getElementById(tbh.idFromOrigin(p.origin)))];
+    return Social.providers.filter(p => p.markURL &&
+                                        document.getElementById(this._toolbarHelper.idFromOrigin(p.origin)));
   },
 
   populateContextMenu: function() {
@@ -1358,8 +1321,10 @@ SocialMarks = {
     let providers = this.getProviders();
 
     // remove all previous entries by class
-    let menus = [m for (m of document.getElementsByClassName("context-socialmarks"))];
-    [m.parentNode.removeChild(m) for (m of menus)];
+    let menus = [...document.getElementsByClassName("context-socialmarks")];
+    for (let m of menus) {
+      m.parentNode.removeChild(m);
+    }
 
     let contextMenus = [
       {

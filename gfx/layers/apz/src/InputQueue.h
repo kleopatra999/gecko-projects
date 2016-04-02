@@ -7,11 +7,13 @@
 #define mozilla_layers_InputQueue_h
 
 #include "APZUtils.h"
+#include "DragTracker.h"
 #include "InputData.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/UniquePtr.h"
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
+#include "TouchCounter.h"
 
 namespace mozilla {
 
@@ -118,6 +120,12 @@ public:
    * Whether the current pending block allows scroll handoff.
    */
   bool AllowScrollHandoff() const;
+  /**
+   * If there is currently a drag in progress, return whether or not it was
+   * targeted at a scrollbar. If the drag was newly-created and doesn't know,
+   * use the provided |aOnScrollbar| to populate that information.
+   */
+  bool IsDragOnScrollbar(bool aOnScrollbar);
 
 private:
   ~InputQueue();
@@ -173,7 +181,7 @@ private:
   void UpdateActiveApzc(const RefPtr<AsyncPanZoomController>& aNewActive);
 
 private:
-  // The queue of touch blocks that have not yet been fully processed.
+  // The queue of input blocks that have not yet been fully processed.
   // This member must only be accessed on the controller/UI thread.
   nsTArray<UniquePtr<CancelableBlockState>> mInputBlockQueue;
 
@@ -182,6 +190,9 @@ private:
 
   // Track touches so we know when to clear mLastActiveApzc
   TouchCounter mTouchCounter;
+
+  // Track mouse inputs so we know if we're in a drag or not
+  DragTracker mDragTracker;
 };
 
 } // namespace layers

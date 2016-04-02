@@ -107,7 +107,7 @@ public:
     RefPtr<BluetoothDiscoveryHandle> discoveryHandle =
       BluetoothDiscoveryHandle::Create(mAdapter->GetParentObject());
     if (!ToJSValue(cx, discoveryHandle, aValue)) {
-      JS_ClearPendingException(cx);
+      jsapi.ClearException();
       return false;
     }
 
@@ -131,7 +131,7 @@ class StartLeScanTask final : public BluetoothReplyRunnable
 {
 public:
   StartLeScanTask(BluetoothAdapter* aAdapter, Promise* aPromise,
-                  const nsTArray<nsString>& aServiceUuids)
+                  const nsTArray<BluetoothUuid>& aServiceUuids)
     : BluetoothReplyRunnable(nullptr, aPromise)
     , mAdapter(aAdapter)
     , mServiceUuids(aServiceUuids)
@@ -150,7 +150,7 @@ public:
     JSContext* cx = jsapi.cx();
 
     const BluetoothValue& v = mReply->get_BluetoothReplySuccess().value();
-    NS_ENSURE_TRUE(v.type() == BluetoothValue::TnsString, false);
+    NS_ENSURE_TRUE(v.type() == BluetoothValue::TBluetoothUuid, false);
 
     /**
      * Create a new discovery handle and wrap it to return. Each
@@ -158,10 +158,10 @@ public:
      */
     RefPtr<BluetoothDiscoveryHandle> discoveryHandle =
       BluetoothDiscoveryHandle::Create(mAdapter->GetParentObject(),
-                                       mServiceUuids, v.get_nsString());
+                                       mServiceUuids, v.get_BluetoothUuid());
 
     if (!ToJSValue(cx, discoveryHandle, aValue)) {
-      JS_ClearPendingException(cx);
+      jsapi.ClearException();
       return false;
     }
 
@@ -180,7 +180,7 @@ public:
 
 private:
   RefPtr<BluetoothAdapter> mAdapter;
-  nsTArray<nsString> mServiceUuids;
+  nsTArray<BluetoothUuid> mServiceUuids;
 };
 
 class StopLeScanTask final : public BluetoothReplyRunnable
@@ -188,14 +188,14 @@ class StopLeScanTask final : public BluetoothReplyRunnable
 public:
   StopLeScanTask(BluetoothAdapter* aAdapter,
                  Promise* aPromise,
-                 const nsAString& aScanUuid)
+                 const BluetoothUuid& aScanUuid)
       : BluetoothReplyRunnable(nullptr, aPromise)
       , mAdapter(aAdapter)
       , mScanUuid(aScanUuid)
   {
     MOZ_ASSERT(aPromise);
     MOZ_ASSERT(aAdapter);
-    MOZ_ASSERT(!aScanUuid.IsEmpty());
+    MOZ_ASSERT(!aScanUuid.IsCleared());
   }
 
 protected:
@@ -216,7 +216,7 @@ protected:
 
 private:
   RefPtr<BluetoothAdapter> mAdapter;
-  nsString mScanUuid;
+  BluetoothUuid mScanUuid;
 };
 
 class GetDevicesTask : public BluetoothReplyRunnable
@@ -319,7 +319,7 @@ public:
 
 static int kCreatePairedDeviceTimeout = 50000; // unit: msec
 
-BluetoothAdapter::BluetoothAdapter(nsPIDOMWindow* aWindow,
+BluetoothAdapter::BluetoothAdapter(nsPIDOMWindowInner* aWindow,
                                    const BluetoothValue& aValue)
   : DOMEventTargetHelper(aWindow)
   , mState(BluetoothAdapterState::Disabled)
@@ -366,8 +366,8 @@ BluetoothAdapter::Cleanup()
     BluetoothService* bs = BluetoothService::Get();
     NS_ENSURE_TRUE_VOID(bs);
 
-    nsString uuid;
-    for (uint32_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+    for (size_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+      BluetoothUuid uuid;
       mLeScanHandleArray[i]->GetLeScanUuid(uuid);
       RefPtr<BluetoothVoidReplyRunnable> results =
         new BluetoothVoidReplyRunnable(nullptr);
@@ -402,16 +402,34 @@ void
 BluetoothAdapter::GetPairedDeviceProperties(
   const nsTArray<nsString>& aDeviceAddresses)
 {
+  nsTArray<BluetoothAddress> deviceAddresses;
+  deviceAddresses.SetLength(aDeviceAddresses.Length());
+
+  for (size_t i = 0; i < deviceAddresses.Length(); ++i) {
+    auto rv = StringToAddress(aDeviceAddresses[i], deviceAddresses[i]);
+    if (NS_FAILED(rv)) {
+      BT_WARNING("GetPairedDeviceProperties failed");
+      return;
+    }
+  }
+
+  GetPairedDeviceProperties(deviceAddresses);
+}
+
+void
+BluetoothAdapter::GetPairedDeviceProperties(
+  const nsTArray<BluetoothAddress>& aDeviceAddresses)
+{
   BluetoothService* bs = BluetoothService::Get();
   NS_ENSURE_TRUE_VOID(bs);
 
   RefPtr<BluetoothVoidReplyRunnable> results =
     new BluetoothVoidReplyRunnable(nullptr);
 
-  nsresult rv =
-    bs->GetPairedDevicePropertiesInternal(aDeviceAddresses, results);
+  auto rv = bs->GetPairedDevicePropertiesInternal(aDeviceAddresses, results);
   if (NS_FAILED(rv)) {
     BT_WARNING("GetPairedDeviceProperties failed");
+    return;
   }
 }
 
@@ -434,9 +452,13 @@ BluetoothAdapter::SetPropertyByValue(const BluetoothNamedValue& aValue)
       }
     }
   } else if (name.EqualsLiteral("Name")) {
-    mName = value.get_nsString();
+    RemoteNameToString(value.get_BluetoothRemoteName(), mName);
   } else if (name.EqualsLiteral("Address")) {
-    mAddress = value.get_nsString();
+    if (value.get_BluetoothAddress().IsCleared()) {
+      mAddress.Truncate(); // Reset to empty string
+    } else {
+      AddressToString(value.get_BluetoothAddress(), mAddress);
+    }
   } else if (name.EqualsLiteral("Discoverable")) {
     mDiscoverable = value.get_bool();
   } else if (name.EqualsLiteral("Discovering")) {
@@ -446,11 +468,14 @@ BluetoothAdapter::SetPropertyByValue(const BluetoothNamedValue& aValue)
       SetDiscoveryHandleInUse(nullptr);
     }
   } else if (name.EqualsLiteral("PairedDevices")) {
-    const InfallibleTArray<nsString>& pairedDeviceAddresses
-      = value.get_ArrayOfnsString();
+    const InfallibleTArray<BluetoothAddress>& pairedDeviceAddresses
+      = value.get_ArrayOfBluetoothAddress();
 
     for (uint32_t i = 0; i < pairedDeviceAddresses.Length(); i++) {
-      if (mDevices.Contains(pairedDeviceAddresses[i])) {
+      nsString pairedDeviceAddressStr;
+      AddressToString(pairedDeviceAddresses[i], pairedDeviceAddressStr);
+
+      if (mDevices.Contains(pairedDeviceAddressStr)) {
         // Existing paired devices handle 'PropertyChanged' signal
         // in BluetoothDevice::Notify()
         continue;
@@ -475,7 +500,7 @@ BluetoothAdapter::SetPropertyByValue(const BluetoothNamedValue& aValue)
 
 // static
 already_AddRefed<BluetoothAdapter>
-BluetoothAdapter::Create(nsPIDOMWindow* aWindow, const BluetoothValue& aValue)
+BluetoothAdapter::Create(nsPIDOMWindowInner* aWindow, const BluetoothValue& aValue)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aWindow);
@@ -514,21 +539,22 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
     HandleDeviceUnpaired(aData.value());
   } else if (aData.name().EqualsLiteral(HFP_STATUS_CHANGED_ID) ||
              aData.name().EqualsLiteral(SCO_STATUS_CHANGED_ID) ||
+             aData.name().EqualsLiteral(HID_STATUS_CHANGED_ID) ||
              aData.name().EqualsLiteral(A2DP_STATUS_CHANGED_ID)) {
     MOZ_ASSERT(v.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
     const InfallibleTArray<BluetoothNamedValue>& arr =
       v.get_ArrayOfBluetoothNamedValue();
 
     MOZ_ASSERT(arr.Length() == 2 &&
-               arr[0].value().type() == BluetoothValue::TnsString &&
+               arr[0].value().type() == BluetoothValue::TBluetoothAddress &&
                arr[1].value().type() == BluetoothValue::Tbool);
-    nsString address = arr[0].value().get_nsString();
+    BluetoothAddress address = arr[0].value().get_BluetoothAddress();
     bool status = arr[1].value().get_bool();
 
     BluetoothStatusChangedEventInit init;
     init.mBubbles = false;
     init.mCancelable = false;
-    init.mAddress = address;
+    AddressToString(address, init.mAddress);
     init.mStatus = status;
     RefPtr<BluetoothStatusChangedEvent> event =
       BluetoothStatusChangedEvent::Constructor(this, aData.name(), init);
@@ -552,7 +578,7 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
     HandleMapGetMessage(aData.value());
   } else if (aData.name().EqualsLiteral(MAP_SET_MESSAGE_STATUS_REQ_ID)) {
     HandleMapSetMessageStatus(aData.value());
-  } else if (aData.name().EqualsLiteral(MAP_PUSH_MESSAGE_REQ_ID)) {
+  } else if (aData.name().EqualsLiteral(MAP_SEND_MESSAGE_REQ_ID)) {
     HandleMapSendMessage(aData.value());
   } else if (aData.name().EqualsLiteral(MAP_MESSAGE_UPDATE_REQ_ID)) {
     HandleMapMessageUpdate(aData.value());
@@ -577,12 +603,12 @@ BluetoothAdapter::AppendLeScanHandle(
 }
 
 void
-BluetoothAdapter::RemoveLeScanHandle(const nsAString& aScanUuid)
+BluetoothAdapter::RemoveLeScanHandle(const BluetoothUuid& aScanUuid)
 {
-  nsString uuid;
-  for (uint32_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+  for (size_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+    BluetoothUuid uuid;
     mLeScanHandleArray[i]->GetLeScanUuid(uuid);
-    if (aScanUuid.Equals(uuid)) {
+    if (aScanUuid == uuid) {
       mLeScanHandleArray.RemoveElementAt(i);
       break;
     }
@@ -671,6 +697,16 @@ BluetoothAdapter::StartLeScan(const nsTArray<nsString>& aServiceUuids,
   RefPtr<Promise> promise = Promise::Create(global, aRv);
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
+  nsTArray<BluetoothUuid> serviceUuids;
+  serviceUuids.SetLength(aServiceUuids.Length());
+
+  for (size_t i = 0; i < serviceUuids.Length(); ++i) {
+    BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(StringToUuid(aServiceUuids[i],
+                                                    serviceUuids[i])),
+                          promise,
+                          NS_ERROR_DOM_OPERATION_ERR);
+  }
+
   BT_ENSURE_TRUE_REJECT(mState == BluetoothAdapterState::Enabled,
                         promise,
                         NS_ERROR_DOM_INVALID_STATE_ERR);
@@ -679,8 +715,8 @@ BluetoothAdapter::StartLeScan(const nsTArray<nsString>& aServiceUuids,
   BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   RefPtr<BluetoothReplyRunnable> result =
-    new StartLeScanTask(this, promise, aServiceUuids);
-  bs->StartLeScanInternal(aServiceUuids, result);
+    new StartLeScanTask(this, promise, serviceUuids);
+  bs->StartLeScanInternal(serviceUuids, result);
 
   return promise.forget();
 }
@@ -710,8 +746,9 @@ BluetoothAdapter::StopLeScan(BluetoothDiscoveryHandle& aDiscoveryHandle,
                         promise,
                         NS_ERROR_DOM_BLUETOOTH_DONE);
 
-  nsString scanUuid;
+  BluetoothUuid scanUuid;
   aDiscoveryHandle.GetLeScanUuid(scanUuid);
+
   RefPtr<BluetoothReplyRunnable> result =
     new StopLeScanTask(this, promise, scanUuid);
   bs->StopLeScanInternal(scanUuid, result);
@@ -747,9 +784,10 @@ BluetoothAdapter::SetName(const nsAString& aName, ErrorResult& aRv)
   BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   // Wrap property to set and runnable to handle result
-  nsString name(aName);
   BluetoothNamedValue property(NS_LITERAL_STRING("Name"),
-                               BluetoothValue(name));
+                               BluetoothValue(
+                                 BluetoothRemoteName(
+                                   NS_ConvertUTF16toUTF8(aName))));
   BT_ENSURE_SUCCESS_REJECT(
     bs->SetProperty(BluetoothObjectType::TYPE_ADAPTER, property,
                     new BluetoothVoidReplyRunnable(nullptr, promise)),
@@ -801,7 +839,7 @@ BluetoothAdapter::GetConnectedDevices(uint16_t aServiceUuid, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -851,11 +889,13 @@ BluetoothAdapter::PairUnpair(bool aPair, const nsAString& aDeviceAddress,
 
   /**
    * Ensure
-   * - device address is not empty,
+   * - device address is valid,
    * - adapter is already enabled, and
    * - BluetoothService is available.
    */
-  BT_ENSURE_TRUE_REJECT(!aDeviceAddress.IsEmpty(),
+  BluetoothAddress deviceAddress;
+  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(StringToAddress(aDeviceAddress,
+                                                     deviceAddress)),
                         promise,
                         NS_ERROR_DOM_INVALID_STATE_ERR);
   BT_ENSURE_TRUE_REJECT(mState == BluetoothAdapterState::Enabled,
@@ -867,10 +907,10 @@ BluetoothAdapter::PairUnpair(bool aPair, const nsAString& aDeviceAddress,
   nsresult rv;
   if (aPair) {
     rv = bs->CreatePairedDeviceInternal(
-           aDeviceAddress, kCreatePairedDeviceTimeout,
+           deviceAddress, kCreatePairedDeviceTimeout,
            new BluetoothVoidReplyRunnable(nullptr, promise));
   } else {
-    rv = bs->RemoveDeviceInternal(aDeviceAddress,
+    rv = bs->RemoveDeviceInternal(deviceAddress,
            new BluetoothVoidReplyRunnable(nullptr, promise));
   }
   BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(rv), promise, NS_ERROR_DOM_OPERATION_ERR);
@@ -992,12 +1032,18 @@ BluetoothAdapter::IsAdapterAttributeChanged(BluetoothAdapterAttribute aType,
       MOZ_ASSERT(aValue.type() == BluetoothValue::Tbool);
       return aValue.get_bool() ? mState != BluetoothAdapterState::Enabled
                                : mState != BluetoothAdapterState::Disabled;
-    case BluetoothAdapterAttribute::Name:
-      MOZ_ASSERT(aValue.type() == BluetoothValue::TnsString);
-      return !mName.Equals(aValue.get_nsString());
-    case BluetoothAdapterAttribute::Address:
-      MOZ_ASSERT(aValue.type() == BluetoothValue::TnsString);
-      return !mAddress.Equals(aValue.get_nsString());
+    case BluetoothAdapterAttribute::Name: {
+        MOZ_ASSERT(aValue.type() == BluetoothValue::TBluetoothRemoteName);
+        nsAutoString name;
+        RemoteNameToString(aValue.get_BluetoothRemoteName(), name);
+        return !name.Equals(mName);
+      }
+    case BluetoothAdapterAttribute::Address: {
+        MOZ_ASSERT(aValue.type() == BluetoothValue::TBluetoothAddress);
+        BluetoothAddress address;
+        StringToAddress(mAddress, address);
+        return address != aValue.get_BluetoothAddress();
+      }
     case BluetoothAdapterAttribute::Discoverable:
       MOZ_ASSERT(aValue.type() == BluetoothValue::Tbool);
       return mDiscoverable != aValue.get_bool();
@@ -1013,6 +1059,8 @@ BluetoothAdapter::IsAdapterAttributeChanged(BluetoothAdapterAttribute aType,
 bool
 BluetoothAdapter::IsBluetoothCertifiedApp()
 {
+  NS_ENSURE_TRUE(GetOwner(), false);
+
   // Retrieve the app status and origin for permission checking
   nsCOMPtr<nsIDocument> doc = GetOwner()->GetExtantDoc();
   NS_ENSURE_TRUE(doc, false);
@@ -1174,14 +1222,16 @@ BluetoothAdapter::HandleDevicePaired(const BluetoothValue& aValue)
     aValue.get_ArrayOfBluetoothNamedValue();
 
   MOZ_ASSERT(arr.Length() == 3 &&
-             arr[0].value().type() == BluetoothValue::TnsString && // Address
-             arr[1].value().type() == BluetoothValue::TnsString && // Name
+             arr[0].value().type() == BluetoothValue::TBluetoothAddress && // Address
+             arr[1].value().type() == BluetoothValue::TBluetoothRemoteName && // Name
              arr[2].value().type() == BluetoothValue::Tbool);      // Paired
-  MOZ_ASSERT(!arr[0].value().get_nsString().IsEmpty() &&
+  MOZ_ASSERT(!arr[0].value().get_BluetoothAddress().IsCleared() &&
              arr[2].value().get_bool());
 
   // Append the paired device if it doesn't exist in adapter's devices array
-  size_t index = mDevices.IndexOf(arr[0].value().get_nsString());
+  nsString addressStr;
+  AddressToString(arr[0].value().get_BluetoothAddress(), addressStr);
+  size_t index = mDevices.IndexOf(addressStr);
   if (index == mDevices.NoIndex) {
     index = mDevices.Length(); // the new device's index
     mDevices.AppendElement(
@@ -1207,13 +1257,14 @@ BluetoothAdapter::HandleDeviceUnpaired(const BluetoothValue& aValue)
     aValue.get_ArrayOfBluetoothNamedValue();
 
   MOZ_ASSERT(arr.Length() == 2 &&
-             arr[0].value().type() == BluetoothValue::TnsString && // Address
-             arr[1].value().type() == BluetoothValue::Tbool);      // Paired
-  MOZ_ASSERT(!arr[0].value().get_nsString().IsEmpty() &&
+             arr[0].value().type() == BluetoothValue::TBluetoothAddress && // Address
+             arr[1].value().type() == BluetoothValue::Tbool);              // Paired
+  MOZ_ASSERT(!arr[0].value().get_BluetoothAddress().IsCleared() &&
              !arr[1].value().get_bool());
 
   // Remove the device with the same address
-  nsString deviceAddress = arr[0].value().get_nsString();
+  nsString deviceAddress;
+  AddressToString(arr[0].value().get_BluetoothAddress(), deviceAddress);
   mDevices.RemoveElement(deviceAddress);
 
   // Notify application of unpaired device
@@ -1563,9 +1614,9 @@ BluetoothAdapter::HandleMapSendMessage(const BluetoothValue& aValue)
     const nsString& name = arr[i].name();
     const BluetoothValue& value = arr[i].value();
     if (name.EqualsLiteral("recipient")) {
-      init.mRecipient = value.get_nsString();
+      init.mRecipient = NS_ConvertUTF8toUTF16(value.get_nsCString());
     } else if (name.EqualsLiteral("messageBody")) {
-      init.mMessageBody = value.get_nsString();
+      init.mMessageBody = NS_ConvertUTF8toUTF16(value.get_nsCString());
     } else if (name.EqualsLiteral("retry")) {
       init.mRetry = value.get_uint32_t();
     }
@@ -1575,7 +1626,7 @@ BluetoothAdapter::HandleMapSendMessage(const BluetoothValue& aValue)
 
   RefPtr<BluetoothMapSendMessageEvent> event =
     BluetoothMapSendMessageEvent::Constructor(this,
-      NS_LITERAL_STRING(MAP_PUSH_MESSAGE_REQ_ID), init);
+      NS_LITERAL_STRING(MAP_SEND_MESSAGE_REQ_ID), init);
   DispatchTrustedEvent(event);
 }
 
@@ -1638,8 +1689,7 @@ BluetoothAdapter::DispatchEmptyEvent(const nsAString& aType)
 {
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
-  nsresult rv = event->InitEvent(aType, false, false);
-  NS_ENSURE_SUCCESS_VOID(rv);
+  event->InitEvent(aType, false, false);
 
   DispatchTrustedEvent(event);
 }
@@ -1649,7 +1699,7 @@ BluetoothAdapter::Connect(BluetoothDevice& aDevice,
                           const Optional<short unsigned int>& aServiceUuid,
                           ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1661,6 +1711,12 @@ BluetoothAdapter::Connect(BluetoothDevice& aDevice,
 
   nsAutoString address;
   aDevice.GetAddress(address);
+  BluetoothAddress deviceAddress;
+  if (NS_FAILED(StringToAddress(address, deviceAddress))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
   uint32_t deviceClass = aDevice.Cod()->ToUint32();
   uint16_t serviceUuid = 0;
   if (aServiceUuid.WasPassed()) {
@@ -1672,7 +1728,7 @@ BluetoothAdapter::Connect(BluetoothDevice& aDevice,
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  bs->Connect(address, deviceClass, serviceUuid, results);
+  bs->Connect(deviceAddress, deviceClass, serviceUuid, results);
 
   return request.forget();
 }
@@ -1682,7 +1738,7 @@ BluetoothAdapter::Disconnect(BluetoothDevice& aDevice,
                              const Optional<short unsigned int>& aServiceUuid,
                              ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1694,6 +1750,12 @@ BluetoothAdapter::Disconnect(BluetoothDevice& aDevice,
 
   nsAutoString address;
   aDevice.GetAddress(address);
+  BluetoothAddress deviceAddress;
+  if (NS_FAILED(StringToAddress(address, deviceAddress))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
   uint16_t serviceUuid = 0;
   if (aServiceUuid.WasPassed()) {
     serviceUuid = aServiceUuid.Value();
@@ -1704,7 +1766,7 @@ BluetoothAdapter::Disconnect(BluetoothDevice& aDevice,
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  bs->Disconnect(address, serviceUuid, results);
+  bs->Disconnect(deviceAddress, serviceUuid, results);
 
   return request.forget();
 }
@@ -1713,7 +1775,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
                            Blob& aBlob, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1723,6 +1785,13 @@ BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
   RefPtr<BluetoothVoidReplyRunnable> results =
     new BluetoothVoidReplyRunnable(request);
 
+  BluetoothAddress deviceAddress;
+  auto rv = StringToAddress(aDeviceAddress, deviceAddress);
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     aRv.Throw(NS_ERROR_FAILURE);
@@ -1731,7 +1800,7 @@ BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
 
   if (XRE_IsParentProcess()) {
     // In-process transfer
-    bs->SendFile(aDeviceAddress, &aBlob, results);
+    bs->SendFile(deviceAddress, &aBlob, results);
   } else {
     ContentChild *cc = ContentChild::GetSingleton();
     if (!cc) {
@@ -1745,7 +1814,7 @@ BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
       return nullptr;
     }
 
-    bs->SendFile(aDeviceAddress, nullptr, actor, results);
+    bs->SendFile(deviceAddress, nullptr, actor, results);
   }
 
   return request.forget();
@@ -1755,7 +1824,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::StopSendingFile(
   const nsAString& aDeviceAddress, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1765,12 +1834,19 @@ BluetoothAdapter::StopSendingFile(
   RefPtr<BluetoothVoidReplyRunnable> results =
     new BluetoothVoidReplyRunnable(request);
 
+  BluetoothAddress deviceAddress;
+  auto rv = StringToAddress(aDeviceAddress, deviceAddress);
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  bs->StopSendingFile(aDeviceAddress, results);
+  bs->StopSendingFile(deviceAddress, results);
 
   return request.forget();
 }
@@ -1779,7 +1855,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::ConfirmReceivingFile(const nsAString& aDeviceAddress,
                                        bool aConfirmation, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1789,12 +1865,19 @@ BluetoothAdapter::ConfirmReceivingFile(const nsAString& aDeviceAddress,
   RefPtr<BluetoothVoidReplyRunnable> results =
     new BluetoothVoidReplyRunnable(request);
 
+  BluetoothAddress deviceAddress;
+  auto rv = StringToAddress(aDeviceAddress, deviceAddress);
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  bs->ConfirmReceivingFile(aDeviceAddress, aConfirmation, results);
+  bs->ConfirmReceivingFile(deviceAddress, aConfirmation, results);
 
   return request.forget();
 }
@@ -1802,7 +1885,7 @@ BluetoothAdapter::ConfirmReceivingFile(const nsAString& aDeviceAddress,
 already_AddRefed<DOMRequest>
 BluetoothAdapter::ConnectSco(ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1825,7 +1908,7 @@ BluetoothAdapter::ConnectSco(ErrorResult& aRv)
 already_AddRefed<DOMRequest>
 BluetoothAdapter::DisconnectSco(ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1848,7 +1931,7 @@ BluetoothAdapter::DisconnectSco(ErrorResult& aRv)
 already_AddRefed<DOMRequest>
 BluetoothAdapter::IsScoConnected(ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1872,7 +1955,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::AnswerWaitingCall(ErrorResult& aRv)
 {
 #ifdef MOZ_B2G_RIL
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1900,7 +1983,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::IgnoreWaitingCall(ErrorResult& aRv)
 {
 #ifdef MOZ_B2G_RIL
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1928,7 +2011,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::ToggleCalls(ErrorResult& aRv)
 {
 #ifdef MOZ_B2G_RIL
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1956,7 +2039,7 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::SendMediaMetaData(
   const MediaMetaData& aMediaMetaData, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1986,9 +2069,16 @@ already_AddRefed<DOMRequest>
 BluetoothAdapter::SendMediaPlayStatus(
   const MediaPlayStatus& aMediaPlayStatus, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> win = GetOwner();
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  ControlPlayStatus playStatus;
+  auto rv = StringToControlPlayStatus(aMediaPlayStatus.mPlayStatus, playStatus);
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
     return nullptr;
   }
 
@@ -2003,7 +2093,7 @@ BluetoothAdapter::SendMediaPlayStatus(
   }
   bs->SendPlayStatus(aMediaPlayStatus.mDuration,
                      aMediaPlayStatus.mPosition,
-                     aMediaPlayStatus.mPlayStatus,
+                     playStatus,
                      results);
 
   return request.forget();

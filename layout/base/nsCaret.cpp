@@ -46,9 +46,6 @@ using namespace mozilla::gfx;
 // an insignificant dot
 static const int32_t kMinBidiIndicatorPixels = 2;
 
-/*static*/ bool nsCaret::sSelectionCaretEnabled = false;
-/*static*/ bool nsCaret::sSelectionCaretsAffectCaret = false;
-
 /**
  * Find the first frame in an in-order traversal of the frame subtree rooted
  * at aFrame which is either a text frame logically at the end of a line,
@@ -65,7 +62,7 @@ CheckForTrailingTextFrameRecursive(nsIFrame* aFrame, nsIFrame* aStopAtFrame)
   if (!aFrame->IsFrameOfType(nsIFrame::eLineParticipant))
     return nullptr;
 
-  for (nsIFrame* f = aFrame->GetFirstPrincipalChild(); f; f = f->GetNextSibling())
+  for (nsIFrame* f : aFrame->PrincipalChildList())
   {
     nsIFrame* r = CheckForTrailingTextFrameRecursive(f, aStopAtFrame);
     if (r)
@@ -147,15 +144,6 @@ nsresult nsCaret::Init(nsIPresShell *inPresShell)
   mShowDuringSelection =
     LookAndFeel::GetInt(LookAndFeel::eIntID_ShowCaretDuringSelection,
                         mShowDuringSelection ? 1 : 0) != 0;
-
-  static bool addedCaretPref = false;
-  if (!addedCaretPref) {
-    Preferences::AddBoolVarCache(&sSelectionCaretEnabled,
-      "selectioncaret.enabled");
-    Preferences::AddBoolVarCache(&sSelectionCaretsAffectCaret,
-      "selectioncaret.visibility.affectscaret");
-    addedCaretPref = true;
-  }
 
   // get the selection from the pres shell, and set ourselves up as a selection
   // listener
@@ -266,8 +254,7 @@ bool nsCaret::IsVisible()
     return false;
   }
 
-  if (!mShowDuringSelection &&
-      !(sSelectionCaretEnabled && sSelectionCaretsAffectCaret)) {
+  if (!mShowDuringSelection) {
     Selection* selection = GetSelectionInternal();
     if (!selection) {
       return false;
@@ -275,20 +262,6 @@ bool nsCaret::IsVisible()
     bool isCollapsed;
     if (NS_FAILED(selection->GetIsCollapsed(&isCollapsed)) || !isCollapsed) {
       return false;
-    }
-  }
-
-  // The Android IME can have a visible caret when there is a composition
-  // selection, due to auto-suggest/auto-correct styling (underlining),
-  // but never when the SelectionCarets are visible.
-  if (sSelectionCaretEnabled && sSelectionCaretsAffectCaret) {
-    nsCOMPtr<nsISelectionController> selCon = do_QueryReferent(mPresShell);
-    if (selCon) {
-      bool visible = false;
-      selCon->GetSelectionCaretsVisibility(&visible);
-      if (visible) {
-        return false;
-      }
     }
   }
 
@@ -348,9 +321,8 @@ nsCaret::GetGeometryForFrame(nsIFrame* aFrame,
                "We should not be in the middle of reflow");
   nscoord baseline = frame->GetCaretBaseline();
   nscoord ascent = 0, descent = 0;
-  RefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(aFrame, getter_AddRefs(fm),
-    nsLayoutUtils::FontSizeInflationFor(aFrame));
+  RefPtr<nsFontMetrics> fm =
+    nsLayoutUtils::GetInflatedFontMetricsForFrame(aFrame);
   NS_ASSERTION(fm, "We should be able to get the font metrics");
   if (fm) {
     ascent = fm->MaxAscent();
@@ -564,8 +536,7 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
   return frame;
 }
 
-void nsCaret::PaintCaret(nsDisplayListBuilder *aBuilder,
-                         DrawTarget& aDrawTarget,
+void nsCaret::PaintCaret(DrawTarget& aDrawTarget,
                          nsIFrame* aForFrame,
                          const nsPoint &aOffset)
 {

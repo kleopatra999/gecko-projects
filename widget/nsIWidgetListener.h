@@ -11,6 +11,7 @@
 #include "mozilla/TimeStamp.h"
 
 #include "nsRegionFwd.h"
+#include "Units.h"
 
 class nsView;
 class nsIPresShell;
@@ -79,6 +80,12 @@ public:
   virtual void SizeModeChanged(nsSizeMode aSizeMode);
 
   /**
+   * Called when the DPI (device resolution scaling factor) is changed,
+   * such that UI elements may need to be rescaled.
+   */
+  virtual void UIResolutionChanged();
+
+  /**
    * Called when the z-order of the window is changed. Returns true if the
    * notification was handled. aPlacement indicates the new z order. If
    * placement is nsWindowZRelative, then aRequestBelow should be the
@@ -128,7 +135,8 @@ public:
    * This is called at a time when it is not OK to change the geometry of
    * this widget or of other widgets.
    */
-  virtual bool PaintWindow(nsIWidget* aWidget, nsIntRegion aRegion);
+  virtual bool PaintWindow(nsIWidget* aWidget,
+                           mozilla::LayoutDeviceIntRegion aRegion);
 
   /**
    * Indicates that a paint occurred.

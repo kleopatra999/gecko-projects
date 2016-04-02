@@ -88,7 +88,7 @@ protected:
    * that are relative to the upper-left corner of the window.
    *
    * aScreenX and aScreenY should be the screen coordinates of the mouse click
-   * for the drag. These are in global display pixels.
+   * for the drag. These are in desktop pixels.
    *
    * On return, aScreenDragRect will contain the screen coordinates of the
    * area being dragged. This is used by the platform-specific part of the
@@ -112,8 +112,7 @@ protected:
    * Draw a drag image for an image node specified by aImageLoader or aCanvas.
    * This is called by DrawDrag.
    */
-  nsresult DrawDragForImage(nsPresContext* aPresContext,
-                            nsIImageLoadingContent* aImageLoader,
+  nsresult DrawDragForImage(nsIImageLoadingContent* aImageLoader,
                             mozilla::dom::HTMLCanvasElement* aCanvas,
                             int32_t aScreenX, int32_t aScreenY,
                             nsIntRect* aScreenDragRect,

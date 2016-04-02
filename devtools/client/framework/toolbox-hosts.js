@@ -1,3 +1,5 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,8 +9,10 @@
 const {Cu} = require("chrome");
 const EventEmitter = require("devtools/shared/event-emitter");
 const promise = require("promise");
-Cu.import("resource://gre/modules/Services.jsm");
+const Services = require("Services");
 Cu.import("resource://devtools/client/shared/DOMHelpers.jsm");
+
+loader.lazyRequireGetter(this, "system", "devtools/shared/system");
 
 /* A host should always allow this much space for the page to be displayed.
  * There is also a min-height on the browser, but we still don't want to set
@@ -283,6 +287,15 @@ WindowHost.prototype = {
     let frameLoad = () => {
       win.removeEventListener("load", frameLoad, true);
       win.focus();
+
+      let key;
+      if (system.constants.platform === "macosx") {
+        key = win.document.getElementById("toolbox-key-toggle-osx");
+      } else {
+        key = win.document.getElementById("toolbox-key-toggle");
+      }
+      key.removeAttribute("disabled");
+
       this.frame = win.document.getElementById("toolbox-iframe");
       this.emit("ready", this.frame);
 

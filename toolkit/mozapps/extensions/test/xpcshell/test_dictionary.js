@@ -39,7 +39,7 @@ mapFile("/data/test_dictionary.rdf", testserver);
 var HunspellEngine = {
   dictionaryDirs: [],
   listener: null,
-  
+
   QueryInterface: function hunspell_qi(iid) {
     if (iid.equals(Components.interfaces.nsISupports) ||
         iid.equals(Components.interfaces.nsIFactory) ||
@@ -89,7 +89,7 @@ var HunspellEngine = {
     Components.manager.nsIComponentRegistrar.registerFactory(this.classID,
       "Test hunspell", this.contractID, this);
   },
-  
+
   deactivate: function hunspell_deactivate() {
     Components.manager.nsIComponentRegistrar.unregisterFactory(this.classID, this);
     Components.manager.nsIComponentRegistrar.registerFactory(this.origClassID,
@@ -348,7 +348,7 @@ function run_test_8() {
 
   let dir = profileDir.clone();
   dir.append("ab-CD@dictionaries.addons.mozilla.org");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   let zip = AM_Cc["@mozilla.org/libjar/zip-reader;1"].
             createInstance(AM_Ci.nsIZipReader);
   zip.open(do_get_addon("test_dictionary"));
@@ -356,7 +356,7 @@ function run_test_8() {
   zip.extract("install.rdf", dir);
   dir = dir.parent;
   dir.append("dictionaries");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   dir.append("ab-CD.dic");
   zip.extract("dictionaries/ab-CD.dic", dir);
   zip.close();
@@ -401,7 +401,7 @@ function run_test_12() {
 
   let dir = profileDir.clone();
   dir.append("ab-CD@dictionaries.addons.mozilla.org");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   let zip = AM_Cc["@mozilla.org/libjar/zip-reader;1"].
             createInstance(AM_Ci.nsIZipReader);
   zip.open(do_get_addon("test_dictionary"));
@@ -409,7 +409,7 @@ function run_test_12() {
   zip.extract("install.rdf", dir);
   dir = dir.parent;
   dir.append("dictionaries");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   dir.append("ab-CD.dic");
   zip.extract("dictionaries/ab-CD.dic", dir);
   zip.close();
@@ -481,7 +481,7 @@ function run_test_17() {
 
   let dir = userExtDir.clone();
   dir.append("ab-CD@dictionaries.addons.mozilla.org");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   let zip = AM_Cc["@mozilla.org/libjar/zip-reader;1"].
             createInstance(AM_Ci.nsIZipReader);
   zip.open(do_get_addon("test_dictionary"));
@@ -489,7 +489,7 @@ function run_test_17() {
   zip.extract("install.rdf", dir);
   dir = dir.parent;
   dir.append("dictionaries");
-  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+  dir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
   dir.append("ab-CD.dic");
   zip.extract("dictionaries/ab-CD.dic", dir);
   zip.close();

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure the right text shows when the page has no sources.
@@ -18,8 +20,10 @@ function test() {
     gDebugger = gPanel.panelWin;
     gEditor = gDebugger.DebuggerView.editor;
     gSources = gDebugger.DebuggerView.Sources;
+    const constants = gDebugger.require('./content/constants');
 
-    reloadActiveTab(gPanel, gDebugger.EVENTS.SOURCES_ADDED)
+    reloadActiveTab(gPanel);
+    waitForNavigation(gPanel)
       .then(testSourcesEmptyText)
       .then(() => closeDebuggerAndFinish(gPanel))
       .then(null, aError => {

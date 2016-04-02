@@ -8,9 +8,9 @@
 const TEST_URI = "chrome://devtools/content/shared/widgets/filter-frame.xhtml";
 const {CSSFilterEditorWidget} = require("devtools/client/shared/widgets/FilterWidget");
 
-const { ViewHelpers } = Cu.import("resource://devtools/client/shared/widgets/ViewHelpers.jsm", {});
+const { LocalizationHelper } = require("devtools/client/shared/l10n");
 const STRINGS_URI = "chrome://devtools/locale/filterwidget.properties";
-const L10N = new ViewHelpers.L10N(STRINGS_URI);
+const L10N = new LocalizationHelper(STRINGS_URI);
 
 add_task(function*() {
   yield addTab("about:blank");
@@ -39,6 +39,16 @@ add_task(function*() {
           label: "drop-shadow",
           value: "5px 5px black",
           unit: null
+        }
+      ]
+    },
+    {
+      cssValue: "hue-rotate(420.2deg)",
+      expected: [
+        {
+          label: "hue-rotate",
+          value: "420.2",
+          unit: "deg"
         }
       ]
     },

@@ -18,6 +18,8 @@ pref("security.ssl.enable_alpn", true);
 
 pref("security.ssl3.ecdhe_rsa_aes_128_gcm_sha256", true);
 pref("security.ssl3.ecdhe_ecdsa_aes_128_gcm_sha256", true);
+pref("security.ssl3.ecdhe_ecdsa_chacha20_poly1305_sha256", true);
+pref("security.ssl3.ecdhe_rsa_chacha20_poly1305_sha256", true);
 pref("security.ssl3.ecdhe_rsa_aes_128_sha", true);
 pref("security.ssl3.ecdhe_ecdsa_aes_128_sha", true);
 pref("security.ssl3.ecdhe_rsa_aes_256_sha", true);
@@ -40,6 +42,16 @@ pref("security.password_lifetime",       30);
 pref("security.OCSP.enabled", 1);
 pref("security.OCSP.require", false);
 pref("security.OCSP.GET.enabled", false);
+
+pref("security.pki.cert_short_lifetime_in_days", 10);
+// NB: Changes to this pref affect CERT_CHAIN_SHA1_POLICY_STATUS telemetry.
+// See the comment in CertVerifier.cpp.
+// 3 = allow SHA-1 for certificates issued before 2016 or by an imported root.
+pref("security.pki.sha1_enforcement_level", 3);
+
+pref("security.webauth.u2f", false);
+pref("security.webauth.u2f.softtoken", false);
+pref("security.webauth.u2f.usbtoken", false);
 
 pref("security.ssl.errorReporting.enabled", true);
 pref("security.ssl.errorReporting.url", "https://data.mozilla.com/submit/sslreports");

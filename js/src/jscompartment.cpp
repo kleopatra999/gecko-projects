@@ -17,7 +17,9 @@
 #include "jswrapper.h"
 
 #include "gc/Marking.h"
+#include "gc/Policy.h"
 #include "jit/JitCompartment.h"
+#include "jit/JitOptions.h"
 #include "js/Date.h"
 #include "js/Proxy.h"
 #include "js/RootingAPI.h"
@@ -40,7 +42,8 @@ using mozilla::DebugOnly;
 using mozilla::PodArrayZero;
 
 JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options = JS::CompartmentOptions())
-  : options_(options),
+  : creationOptions_(options.creationOptions()),
+    behaviors_(options.behaviors()),
     zone_(zone),
     runtime_(zone->runtimeFromMainThread()),
     principals_(nullptr),
@@ -49,7 +52,6 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     marked(true),
     warnedAboutFlagsArgument(false),
     warnedAboutExprClosure(false),
-    addonId(options.addonIdOrNull()),
 #ifdef DEBUG
     firedOnNewGlobalObject(false),
 #endif
@@ -61,7 +63,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     lastAnimationTime(0),
     regExps(runtime_),
     globalWriteBarriered(false),
-    neuteredTypedObjects(0),
+    detachedTypedObjects(0),
     objectMetadataState(ImmediateMetadata()),
     propertyTree(thisForCtor()),
     selfHostingScriptSource(nullptr),
@@ -69,9 +71,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     lazyArrayBuffers(nullptr),
     nonSyntacticLexicalScopes_(nullptr),
     gcIncomingGrayPointers(nullptr),
-    gcPreserveJitCode(options.preserveJitCode()),
     debugModeBits(0),
-    rngState(0),
     watchpointMap(nullptr),
     scriptCountsMap(nullptr),
     debugScriptMap(nullptr),
@@ -87,7 +87,8 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
 {
     PodArrayZero(sawDeprecatedLanguageExtension);
     runtime_->numCompartments++;
-    MOZ_ASSERT_IF(options.mergeable(), options.invisibleToDebugger());
+    MOZ_ASSERT_IF(creationOptions_.mergeable(),
+                  creationOptions_.invisibleToDebugger());
 }
 
 JSCompartment::~JSCompartment()
@@ -157,29 +158,22 @@ JSRuntime::createJitRuntime(JSContext* cx)
 
     MOZ_ASSERT(!jitRuntime_);
 
-    jit::JitRuntime* jrt = cx->new_<jit::JitRuntime>();
+    jit::JitRuntime* jrt = cx->new_<jit::JitRuntime>(cx->runtime());
     if (!jrt)
         return nullptr;
 
     // Protect jitRuntime_ from being observed (by InterruptRunningJitCode)
     // while it is being initialized. Unfortunately, initialization depends on
     // jitRuntime_ being non-null, so we can't just wait to assign jitRuntime_.
-    JitRuntime::AutoMutateBackedges amb(jrt);
+    JitRuntime::AutoPreventBackedgePatching apbp(cx->runtime(), jrt);
     jitRuntime_ = jrt;
 
+    AutoEnterOOMUnsafeRegion noOOM;
     if (!jitRuntime_->initialize(cx)) {
-        ReportOutOfMemory(cx);
-
-        js_delete(jitRuntime_);
-        jitRuntime_ = nullptr;
-
-        JSCompartment* comp = cx->runtime()->atomsCompartment();
-        if (comp->jitCompartment_) {
-            js_delete(comp->jitCompartment_);
-            comp->jitCompartment_ = nullptr;
-        }
-
-        return nullptr;
+        // Handling OOM here is complicated: if we delete jitRuntime_ now, we
+        // will destroy the ExecutableAllocator, even though there may still be
+        // JitCode instances holding references to ExecutablePools.
+        noOOM.crash("OOM in createJitRuntime");
     }
 
     return jitRuntime_;
@@ -231,7 +225,9 @@ class WrapperMapRef : public BufferableRef
         if (key.kind == CrossCompartmentKey::ObjectWrapper ||
             key.kind == CrossCompartmentKey::DebuggerObject ||
             key.kind == CrossCompartmentKey::DebuggerEnvironment ||
-            key.kind == CrossCompartmentKey::DebuggerSource)
+            key.kind == CrossCompartmentKey::DebuggerSource ||
+            key.kind == CrossCompartmentKey::DebuggerWasmScript ||
+            key.kind == CrossCompartmentKey::DebuggerWasmSource)
         {
             MOZ_ASSERT(IsInsideNursery(key.wrapped) ||
                        key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Object);
@@ -666,19 +662,19 @@ JSCompartment::sweepAfterMinorGC()
     globalWriteBarriered = false;
 
     if (innerViews.needsSweepAfterMinorGC())
-        innerViews.sweepAfterMinorGC(runtimeFromMainThread());
+        innerViews.sweepAfterMinorGC();
 }
 
 void
 JSCompartment::sweepInnerViews()
 {
-    innerViews.sweep(runtimeFromAnyThread());
+    innerViews.sweep();
 }
 
 void
 JSCompartment::sweepSavedStacks()
 {
-    savedStacks_.sweep(runtimeFromAnyThread());
+    savedStacks_.sweep();
 }
 
 void
@@ -760,44 +756,39 @@ JSCompartment::sweepNativeIterators()
 void
 JSCompartment::sweepCrossCompartmentWrappers()
 {
-    /* Remove dead wrappers from the table. */
-    for (WrapperMap::Enum e(crossCompartmentWrappers); !e.empty(); e.popFront()) {
-        CrossCompartmentKey key = e.front().key();
-        bool keyDying;
-        switch (key.kind) {
-          case CrossCompartmentKey::ObjectWrapper:
-          case CrossCompartmentKey::DebuggerObject:
-          case CrossCompartmentKey::DebuggerEnvironment:
-          case CrossCompartmentKey::DebuggerSource:
-              MOZ_ASSERT(IsInsideNursery(key.wrapped) ||
-                         key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Object);
-              keyDying = IsAboutToBeFinalizedUnbarriered(
-                  reinterpret_cast<JSObject**>(&key.wrapped));
-              break;
-          case CrossCompartmentKey::StringWrapper:
-              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JS::TraceKind::String);
-              keyDying = IsAboutToBeFinalizedUnbarriered(
-                  reinterpret_cast<JSString**>(&key.wrapped));
-              break;
-          case CrossCompartmentKey::DebuggerScript:
-              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Script);
-              keyDying = IsAboutToBeFinalizedUnbarriered(
-                  reinterpret_cast<JSScript**>(&key.wrapped));
-              break;
-          default:
-              MOZ_CRASH("Unknown key kind");
-        }
-        bool valDying = IsAboutToBeFinalized(&e.front().value());
-        bool dbgDying = key.debugger && IsAboutToBeFinalizedUnbarriered(&key.debugger);
-        if (keyDying || valDying || dbgDying) {
-            MOZ_ASSERT(key.kind != CrossCompartmentKey::StringWrapper);
-            e.removeFront();
-        } else if (key.wrapped != e.front().key().wrapped ||
-                   key.debugger != e.front().key().debugger)
-        {
-            e.rekeyFront(key);
-        }
+    crossCompartmentWrappers.sweep();
+}
+
+bool
+CrossCompartmentKey::needsSweep()
+{
+    bool keyDying;
+    switch (kind) {
+      case CrossCompartmentKey::ObjectWrapper:
+      case CrossCompartmentKey::DebuggerObject:
+      case CrossCompartmentKey::DebuggerEnvironment:
+      case CrossCompartmentKey::DebuggerSource:
+      case CrossCompartmentKey::DebuggerWasmScript:
+      case CrossCompartmentKey::DebuggerWasmSource:
+          MOZ_ASSERT(IsInsideNursery(wrapped) ||
+                     wrapped->asTenured().getTraceKind() == JS::TraceKind::Object);
+          keyDying = IsAboutToBeFinalizedUnbarriered(reinterpret_cast<JSObject**>(&wrapped));
+          break;
+      case CrossCompartmentKey::StringWrapper:
+          MOZ_ASSERT(wrapped->asTenured().getTraceKind() == JS::TraceKind::String);
+          keyDying = IsAboutToBeFinalizedUnbarriered(reinterpret_cast<JSString**>(&wrapped));
+          break;
+      case CrossCompartmentKey::DebuggerScript:
+          MOZ_ASSERT(wrapped->asTenured().getTraceKind() == JS::TraceKind::Script);
+          keyDying = IsAboutToBeFinalizedUnbarriered(reinterpret_cast<JSScript**>(&wrapped));
+          break;
+      default:
+          MOZ_CRASH("Unknown key kind");
     }
+
+    bool dbgDying = debugger && IsAboutToBeFinalizedUnbarriered(&debugger);
+    MOZ_ASSERT_IF(keyDying || dbgDying, kind != CrossCompartmentKey::StringWrapper);
+    return keyDying || dbgDying;
 }
 
 void
@@ -829,6 +820,7 @@ JSCompartment::fixupAfterMovingGC()
     fixupGlobal();
     fixupInitialShapeTable();
     objectGroups.fixupTablesAfterMovingGC();
+    dtoaCache.purge();
 
 #ifdef DEBUG
     // Assert that none of the JSScript pointers, which are used as key of the
@@ -898,7 +890,7 @@ JSCompartment::clearObjectMetadata()
 }
 
 void
-JSCompartment::setNewObjectMetadata(JSContext* cx, JSObject* obj)
+JSCompartment::setNewObjectMetadata(JSContext* cx, HandleObject obj)
 {
     assertSameCompartment(cx, this, obj);
 
@@ -1027,7 +1019,7 @@ JSCompartment::updateDebuggerObservesFlag(unsigned flag)
                            ? unsafeUnbarrieredMaybeGlobal()
                            : maybeGlobal();
     const GlobalObject::DebuggerVector* v = global->getDebuggers();
-    for (Debugger * const* p = v->begin(); p != v->end(); p++) {
+    for (auto p = v->begin(); p != v->end(); p++) {
         Debugger* dbg = *p;
         if (flag == DebuggerObservesAllExecution ? dbg->observesAllExecution() :
             flag == DebuggerObservesCoverage ? dbg->observesCoverage() :
@@ -1075,6 +1067,15 @@ JSCompartment::updateDebuggerObservesCoverage()
     clearScriptCounts();
 }
 
+bool
+JSCompartment::collectCoverage() const
+{
+    return !JitOptions.disablePgo ||
+           debuggerObservesCoverage() ||
+           runtimeFromAnyThread()->profilingScripts ||
+           runtimeFromAnyThread()->lcovOutput.isEnabled();
+}
+
 void
 JSCompartment::clearScriptCounts()
 {
@@ -1084,8 +1085,9 @@ JSCompartment::clearScriptCounts()
     // Clear all hasScriptCounts_ flags of JSScript, in order to release all
     // ScriptCounts entry of the current compartment.
     for (ScriptCountsMap::Range r = scriptCountsMap->all(); !r.empty(); r.popFront()) {
-        ScriptCounts* value = &r.front().value();
+        ScriptCounts* value = r.front().value();
         r.front().key()->takeOverScriptCountsMapEntry(value);
+        js_delete(value);
     }
 
     js_delete(scriptCountsMap);
@@ -1115,7 +1117,9 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                       size_t* crossCompartmentWrappersArg,
                                       size_t* regexpCompartment,
                                       size_t* savedStacksSet,
-                                      size_t* nonSyntacticLexicalScopesArg)
+                                      size_t* nonSyntacticLexicalScopesArg,
+                                      size_t* jitCompartment,
+                                      size_t* privateData)
 {
     *compartmentObject += mallocSizeOf(this);
     objectGroups.addSizeOfExcludingThis(mallocSizeOf, tiAllocationSiteTables,
@@ -1133,6 +1137,12 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
     *savedStacksSet += savedStacks_.sizeOfExcludingThis(mallocSizeOf);
     if (nonSyntacticLexicalScopes_)
         *nonSyntacticLexicalScopesArg += nonSyntacticLexicalScopes_->sizeOfIncludingThis(mallocSizeOf);
+    if (jitCompartment_)
+        *jitCompartment += jitCompartment_->sizeOfIncludingThis(mallocSizeOf);
+
+    auto callback = runtime_->sizeOfIncludingThisCompartmentCallback;
+    if (callback)
+        *privateData += callback(mallocSizeOf, this);
 }
 
 void
@@ -1145,7 +1155,7 @@ JSCompartment::reportTelemetry()
     // Hazard analysis can't tell that the telemetry callbacks don't GC.
     JS::AutoSuppressGCAnalysis nogc;
 
-    int id = addonId
+    int id = creationOptions_.addonIdOrNull()
              ? JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_ADDONS
              : JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT;
 
@@ -1160,7 +1170,9 @@ void
 JSCompartment::addTelemetry(const char* filename, DeprecatedLanguageExtension e)
 {
     // Only report telemetry for web content and add-ons, not chrome JS.
-    if (isSystem_ || (!addonId && (!filename || strncmp(filename, "http", 4) != 0)))
+    if (isSystem_)
+        return;
+    if (!creationOptions_.addonIdOrNull() && (!filename || strncmp(filename, "http", 4) != 0))
         return;
 
     sawDeprecatedLanguageExtension[e] = true;
@@ -1185,13 +1197,26 @@ AutoSetNewObjectMetadata::~AutoSetNewObjectMetadata()
         return;
 
     if (!cx_->isExceptionPending() && cx_->compartment()->hasObjectPendingMetadata()) {
+        // This destructor often runs upon exit from a function that is
+        // returning an unrooted pointer to a Cell. The allocation metadata
+        // callback often allocates; if it causes a GC, then the Cell pointer
+        // being returned won't be traced or relocated.
+        //
+        // The only extant callbacks are those internal to SpiderMonkey that
+        // capture the JS stack. In fact, we're considering removing general
+        // callbacks altogther in bug 1236748. Since it's not running arbitrary
+        // code, it's adequate to simply suppress GC while we run the callback.
+        AutoSuppressGC autoSuppressGC(cx_);
+
         JSObject* obj = cx_->compartment()->objectMetadataState.as<PendingMetadata>();
+
         // Make sure to restore the previous state before setting the object's
         // metadata. SetNewObjectMetadata asserts that the state is not
         // PendingMetadata in order to ensure that metadata callbacks are called
         // in order.
         cx_->compartment()->objectMetadataState = prevState_;
-        SetNewObjectMetadata(cx_, obj);
+
+        obj = SetNewObjectMetadata(cx_, obj);
     } else {
         cx_->compartment()->objectMetadataState = prevState_;
     }

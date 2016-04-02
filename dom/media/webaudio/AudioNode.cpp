@@ -54,9 +54,6 @@ AudioNode::AudioNode(AudioContext* aContext,
   , mChannelInterpretation(aChannelInterpretation)
   , mId(gId++)
   , mPassThrough(false)
-#ifdef DEBUG
-  , mDemiseNotified(false)
-#endif
 {
   MOZ_ASSERT(aContext);
   DOMEventTargetHelper::BindToOwner(aContext->GetParentObject());
@@ -68,10 +65,8 @@ AudioNode::~AudioNode()
   MOZ_ASSERT(mInputNodes.IsEmpty());
   MOZ_ASSERT(mOutputNodes.IsEmpty());
   MOZ_ASSERT(mOutputParams.IsEmpty());
-#ifdef DEBUG
-  MOZ_ASSERT(mDemiseNotified,
+  MOZ_ASSERT(!mStream,
              "The webaudio-node-demise notification must have been sent");
-#endif
   if (mContext) {
     mContext->UnregisterNode(this);
   }
@@ -198,6 +193,10 @@ AudioNode::Connect(AudioNode& aDestination, uint32_t aOutput,
     return &aDestination;
   }
 
+  WEB_AUDIO_API_LOG("%f: %s %u Connect() to %s %u",
+                    Context()->CurrentTime(), NodeType(), Id(),
+                    aDestination.NodeType(), aDestination.Id());
+
   // The MediaStreamGraph will handle cycle detection. We don't need to do it
   // here.
 
@@ -300,6 +299,9 @@ AudioNode::Disconnect(uint32_t aOutput, ErrorResult& aRv)
     return;
   }
 
+  WEB_AUDIO_API_LOG("%f: %s %u Disconnect()", Context()->CurrentTime(),
+                    NodeType(), Id());
+
   // An upstream node may be starting to play on the graph thread, and the
   // engine for a downstream node may be sending a PlayingRefChangeHandler
   // ADDREF message to this (main) thread.  Wait for a round trip before
@@ -383,9 +385,6 @@ AudioNode::DestroyMediaStream()
       id.AppendPrintf("%u", mId);
       obs->NotifyObservers(nullptr, "webaudio-node-demise", id.get());
     }
-#ifdef DEBUG
-    mDemiseNotified = true;
-#endif
   }
 }
 

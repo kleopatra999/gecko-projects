@@ -208,14 +208,13 @@ BookmarkImporter.prototype = {
 
       let uri = NetUtil.newURI(spec);
       let channel = NetUtil.newChannel({
-        uri,
-        loadingPrincipal: Services.scriptSecurityManager.createCodebasePrincipal(uri, {}),
-        contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_XMLHTTPREQUEST
+        uri: uri,
+        loadUsingSystemPrincipal: true
       });
       let streamLoader = Cc["@mozilla.org/network/stream-loader;1"]
                            .createInstance(Ci.nsIStreamLoader);
       streamLoader.init(streamObserver);
-      channel.asyncOpen(streamLoader, channel);
+      channel.asyncOpen2(streamLoader);
     });
   },
 
@@ -256,8 +255,11 @@ BookmarkImporter.prototype = {
     } else {
       // Ensure tag folder gets processed last
       nodes[0].children.sort(function sortRoots(aNode, bNode) {
-        return (aNode.root && aNode.root == "tagsFolder") ? 1 :
-               (bNode.root && bNode.root == "tagsFolder") ? -1 : 0;
+        if (aNode.root && aNode.root == "tagsFolder")
+          return 1;
+        if (bNode.root && bNode.root == "tagsFolder")
+          return -1;
+        return 0;
       });
 
       let batch = {
@@ -485,10 +487,12 @@ BookmarkImporter.prototype = {
             // Create a fake faviconURI to use (FIXME: bug 523932)
             let faviconURI = NetUtil.newURI("fake-favicon-uri:" + aData.uri);
             PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-              faviconURI, aData.icon, 0);
+              faviconURI, aData.icon, 0,
+              Services.scriptSecurityManager.getSystemPrincipal());
             PlacesUtils.favicons.setAndFetchFaviconForPage(
               NetUtil.newURI(aData.uri), faviconURI, false,
-              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE);
+              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, null,
+              Services.scriptSecurityManager.getSystemPrincipal());
           } catch (ex) {
             Components.utils.reportError("Failed to import favicon data:" + ex);
           }
@@ -497,7 +501,8 @@ BookmarkImporter.prototype = {
           try {
             PlacesUtils.favicons.setAndFetchFaviconForPage(
               NetUtil.newURI(aData.uri), NetUtil.newURI(aData.iconUri), false,
-              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE);
+              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, null,
+              Services.scriptSecurityManager.getSystemPrincipal());
           } catch (ex) {
             Components.utils.reportError("Failed to import favicon URI:" + ex);
           }

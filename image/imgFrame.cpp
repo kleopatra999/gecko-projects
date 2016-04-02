@@ -140,6 +140,7 @@ imgFrame::imgFrame()
   , mBlendMethod(BlendMethod::OVER)
   , mHasNoAlpha(false)
   , mAborted(false)
+  , mFinished(false)
   , mOptimizable(false)
   , mPalettedImageData(nullptr)
   , mPaletteDepth(0)
@@ -160,7 +161,8 @@ imgFrame::~imgFrame()
 {
 #ifdef DEBUG
   MonitorAutoLock lock(mMonitor);
-  MOZ_ASSERT(mAborted || IsImageCompleteInternal());
+  MOZ_ASSERT(mAborted || AreAllPixelsWritten());
+  MOZ_ASSERT(mAborted || mFinished);
 #endif
 
   free(mPalettedImageData);
@@ -321,7 +323,12 @@ imgFrame::InitWithDrawable(gfxDrawable* aDrawable,
 
   // If we reach this point, we should regard ourselves as complete.
   mDecoded = GetRect();
-  MOZ_ASSERT(IsImageComplete());
+  mFinished = true;
+
+#ifdef DEBUG
+  MonitorAutoLock lock(mMonitor);
+  MOZ_ASSERT(AreAllPixelsWritten());
+#endif
 
   return NS_OK;
 }
@@ -522,7 +529,7 @@ imgFrame::SurfaceForDrawing(bool               aDoPadding,
                        DrawOptions(1.0f, CompositionOp::OP_SOURCE));
     } else {
       SurfacePattern pattern(aSurface,
-                             ExtendMode::REPEAT,
+                             aRegion.GetExtendMode(),
                              Matrix::Translation(mDecoded.x, mDecoded.y));
       target->FillRect(ToRect(aRegion.Intersect(available).Rect()), pattern);
     }
@@ -565,7 +572,7 @@ bool imgFrame::Draw(gfxContext* aContext, const ImageRegion& aRegion,
                       mOffset.x);
 
   bool doPadding = padding != nsIntMargin(0,0,0,0);
-  bool doPartialDecode = !IsImageCompleteInternal();
+  bool doPartialDecode = !AreAllPixelsWritten();
 
   if (mSinglePixel && !doPadding && !doPartialDecode) {
     if (mSinglePixelColor.a == 0.0) {
@@ -586,6 +593,7 @@ bool imgFrame::Draw(gfxContext* aContext, const ImageRegion& aRegion,
   gfxRect imageRect(0, 0, mImageSize.width, mImageSize.height);
   bool doTile = !imageRect.Contains(aRegion.Rect()) &&
                 !(aImageFlags & imgIContainer::FLAG_CLAMP);
+
   ImageRegion region(aRegion);
   // SurfaceForDrawing changes the current transform, and we need it to still
   // be changed when we call gfxUtils::DrawPixelSnapped. We still need to
@@ -625,11 +633,6 @@ imgFrame::ImageUpdatedInternal(const nsIntRect& aUpdateRect)
   nsIntRect boundsRect(mOffset, mSize);
   mDecoded.IntersectRect(mDecoded, boundsRect);
 
-  // If the image is now complete, wake up anyone who's waiting.
-  if (IsImageCompleteInternal()) {
-    mMonitor.NotifyAll();
-  }
-
   return NS_OK;
 }
 
@@ -642,7 +645,7 @@ imgFrame::Finish(Opacity aFrameOpacity /* = Opacity::SOME_TRANSPARENCY */,
   MonitorAutoLock lock(mMonitor);
   MOZ_ASSERT(mLockCount > 0, "Image data should be locked");
 
-  if (aFrameOpacity == Opacity::OPAQUE) {
+  if (aFrameOpacity == Opacity::FULLY_OPAQUE) {
     mHasNoAlpha = true;
   }
 
@@ -650,6 +653,10 @@ imgFrame::Finish(Opacity aFrameOpacity /* = Opacity::SOME_TRANSPARENCY */,
   mTimeout = aRawTimeout;
   mBlendMethod = aBlendMethod;
   ImageUpdatedInternal(GetRect());
+  mFinished = true;
+
+  // The image is now complete, wake up anyone who's waiting.
+  mMonitor.NotifyAll();
 }
 
 nsIntRect
@@ -833,8 +840,8 @@ imgFrame::UnlockImageData()
     return NS_ERROR_FAILURE;
   }
 
-  MOZ_ASSERT(mLockCount > 1 || IsImageCompleteInternal() || mAborted,
-             "Should have marked complete or aborted before unlocking");
+  MOZ_ASSERT(mLockCount > 1 || mFinished || mAborted,
+             "Should have Finish()'d or aborted before unlocking");
 
   // If we're about to become unlocked, we don't need to hold on to our data
   // surface anymore. (But we don't need to do anything for paletted images,
@@ -991,20 +998,27 @@ imgFrame::Abort()
 }
 
 bool
-imgFrame::IsImageComplete() const
+imgFrame::IsAborted() const
 {
   MonitorAutoLock lock(mMonitor);
-  return IsImageCompleteInternal();
+  return mAborted;
+}
+
+bool
+imgFrame::IsFinished() const
+{
+  MonitorAutoLock lock(mMonitor);
+  return mFinished;
 }
 
 void
-imgFrame::WaitUntilComplete() const
+imgFrame::WaitUntilFinished() const
 {
   MonitorAutoLock lock(mMonitor);
 
   while (true) {
     // Return if we're aborted or complete.
-    if (mAborted || IsImageCompleteInternal()) {
+    if (mAborted || mFinished) {
       return;
     }
 
@@ -1014,7 +1028,7 @@ imgFrame::WaitUntilComplete() const
 }
 
 bool
-imgFrame::IsImageCompleteInternal() const
+imgFrame::AreAllPixelsWritten() const
 {
   mMonitor.AssertCurrentThreadOwns();
   return mDecoded.IsEqualInterior(nsIntRect(mOffset.x, mOffset.y,

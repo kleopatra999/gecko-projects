@@ -222,7 +222,7 @@ ReadStream::Inner::Serialize(CacheReadStream* aReadStreamOut)
   aReadStreamOut->id() = mId;
   mControl->SerializeControl(aReadStreamOut);
 
-  nsAutoTArray<FileDescriptor, 4> fds;
+  AutoTArray<FileDescriptor, 4> fds;
   SerializeInputStream(mStream, aReadStreamOut->params(), fds);
 
   mControl->SerializeFds(aReadStreamOut, fds);
@@ -358,8 +358,8 @@ ReadStream::Inner::NoteClosed()
   }
 
   nsCOMPtr<nsIRunnable> runnable = new NoteClosedRunnable(this);
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    mOwningThread->Dispatch(runnable, nsIThread::DISPATCH_NORMAL)));
+  MOZ_ALWAYS_SUCCEEDS(
+    mOwningThread->Dispatch(runnable, nsIThread::DISPATCH_NORMAL));
 }
 
 void
@@ -376,8 +376,8 @@ ReadStream::Inner::Forget()
   }
 
   nsCOMPtr<nsIRunnable> runnable = new ForgetRunnable(this);
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    mOwningThread->Dispatch(runnable, nsIThread::DISPATCH_NORMAL)));
+  MOZ_ALWAYS_SUCCEEDS(
+    mOwningThread->Dispatch(runnable, nsIThread::DISPATCH_NORMAL));
 }
 
 void
@@ -451,7 +451,7 @@ ReadStream::Create(const CacheReadStream& aReadStream)
   }
   MOZ_ASSERT(control);
 
-  nsAutoTArray<FileDescriptor, 4> fds;
+  AutoTArray<FileDescriptor, 4> fds;
   control->DeserializeFds(aReadStream, fds);
 
   nsCOMPtr<nsIInputStream> stream =

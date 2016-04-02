@@ -51,6 +51,7 @@ class nsIURI;
 class nsNodeSupportsWeakRefTearoff;
 class nsNodeWeakReference;
 class nsDOMMutationObserver;
+struct ServoNodeData;
 
 namespace mozilla {
 class EventListenerManager;
@@ -313,14 +314,17 @@ public:
 
 #ifdef MOZILLA_INTERNAL_API
   explicit nsINode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
-  : mNodeInfo(aNodeInfo),
-    mParent(nullptr),
-    mBoolFlags(0),
-    mNextSibling(nullptr),
-    mPreviousSibling(nullptr),
-    mFirstChild(nullptr),
-    mSubtreeRoot(this),
-    mSlots(nullptr)
+  : mNodeInfo(aNodeInfo)
+  , mParent(nullptr)
+  , mBoolFlags(0)
+  , mNextSibling(nullptr)
+  , mPreviousSibling(nullptr)
+  , mFirstChild(nullptr)
+  , mSubtreeRoot(this)
+  , mSlots(nullptr)
+#ifdef MOZ_STYLO
+  , mServoNodeData(nullptr)
+#endif
   {
   }
 #endif
@@ -482,7 +486,7 @@ public:
    *
    * https://dom.spec.whatwg.org/#dom-node-ownerdocument
    *
-   * For all other cases GetOwnerDoc and GetOwnerDocument behave identically.
+   * For all other cases OwnerDoc and GetOwnerDocument behave identically.
    */
   nsIDocument *OwnerDoc() const
   {
@@ -721,7 +725,7 @@ public:
   {
     return InsertChildAt(aKid, GetChildCount(), aNotify);
   }
-  
+
   /**
    * Remove a child from this node.  This method handles calling UnbindFromTree
    * on the child appropriately.
@@ -884,7 +888,7 @@ public:
   virtual void* UnsetProperty(uint16_t aCategory,
                               nsIAtom *aPropertyName,
                               nsresult *aStatus = nullptr);
-  
+
   bool HasProperties() const
   {
     return HasFlag(NODE_HAS_PROPERTIES);
@@ -916,7 +920,7 @@ public:
   {
     return mParent;
   }
-  
+
   /**
    * Get the parent nsINode for this node if it is an Element.
    * @return the parent node
@@ -939,6 +943,11 @@ public:
    */
   nsINode* SubtreeRoot() const;
 
+  nsINode* RootNode() const
+  {
+    return SubtreeRoot();
+  }
+
   /**
    * See nsIDOMEventTarget
    */
@@ -960,7 +969,7 @@ public:
 
   virtual bool HasApzAwareListeners() const override;
 
-  virtual nsIDOMWindow* GetOwnerGlobalForBindings() override;
+  virtual nsPIDOMWindowOuter* GetOwnerGlobalForBindings() override;
   virtual nsIGlobalObject* GetOwnerGlobal() const override;
 
   /**
@@ -1246,7 +1255,7 @@ protected:
     }
     return nullptr;
   }
-  
+
 public:
   void GetTextContent(nsAString& aTextContent,
                       mozilla::ErrorResult& aError)
@@ -1301,7 +1310,7 @@ public:
   nsresult GetUserData(const nsAString& aKey, nsIVariant** aResult)
   {
     NS_IF_ADDREF(*aResult = GetUserData(aKey));
-  
+
     return NS_OK;
   }
 
@@ -1462,7 +1471,7 @@ private:
     NodeIsCCMarkedRoot,
     // Maybe set if this node is in black subtree.
     NodeIsCCBlackTree,
-    // Maybe set if the node is a root of a subtree 
+    // Maybe set if the node is a root of a subtree
     // which needs to be kept in the purple buffer.
     NodeIsPurpleRoot,
     // Set if the node has an explicit base URI stored
@@ -1615,8 +1624,11 @@ public:
                "ClearHasTextNodeDirectionalityMap on non-text node");
     ClearBoolFlag(NodeHasTextNodeDirectionalityMap);
   }
-  bool HasTextNodeDirectionalityMap() const
-    { return GetBoolFlag(NodeHasTextNodeDirectionalityMap); }
+  bool HasTextNodeDirectionalityMap() const {
+    MOZ_ASSERT(NodeType() == nsIDOMNode::TEXT_NODE,
+               "HasTextNodeDirectionalityMap on non-text node");
+    return GetBoolFlag(NodeHasTextNodeDirectionalityMap);
+  }
 
   void SetHasDirAuto() { SetBoolFlag(NodeHasDirAuto); }
   void ClearHasDirAuto() { ClearBoolFlag(NodeHasDirAuto); }
@@ -1761,6 +1773,7 @@ public:
   }
   nsINode* RemoveChild(nsINode& aChild, mozilla::ErrorResult& aError);
   already_AddRefed<nsINode> CloneNode(bool aDeep, mozilla::ErrorResult& aError);
+  bool IsSameNode(nsINode* aNode);
   bool IsEqualNode(nsINode* aNode);
   void GetNamespaceURI(nsAString& aNamespaceURI) const
   {
@@ -1971,6 +1984,23 @@ public:
 #undef TOUCH_EVENT
 #undef EVENT
 
+  ServoNodeData* GetServoNodeData() {
+#ifdef MOZ_STYLO
+    return mServoNodeData;
+#else
+    MOZ_CRASH("Accessing servo node data in non-stylo build");
+#endif
+  }
+
+  void SetServoNodeData(ServoNodeData* aData) {
+#ifdef MOZ_STYLO
+  MOZ_ASSERT(!mServoNodeData);
+  mServoNodeData = aData;
+#else
+    MOZ_CRASH("Setting servo node data in non-stylo build");
+#endif
+  }
+
 protected:
   static bool Traverse(nsINode *tmp, nsCycleCollectionTraversalCallback &cb);
   static void Unlink(nsINode *tmp);
@@ -2008,6 +2038,11 @@ protected:
 
   // Storage for more members that are usually not needed; allocated lazily.
   nsSlots* mSlots;
+
+#ifdef MOZ_STYLO
+  // Layout data managed by Servo.
+  ServoNodeData* mServoNodeData;
+#endif
 };
 
 inline nsIDOMNode* GetAsDOMNode(nsINode* aNode)

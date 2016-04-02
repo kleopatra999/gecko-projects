@@ -8,9 +8,12 @@
 
 #include "mozilla/UniquePtr.h"
 #include "nsTArray.h"
+#include "nsCOMPtr.h"
+#include "nsClassHashtable.h"
 
 class nsIFile;
 class nsCString;
+class nsISimpleEnumerator;
 
 namespace mozilla {
 
@@ -39,6 +42,38 @@ ToBase64(const nsTArray<uint8_t>& aBytes);
 
 bool
 FileExists(nsIFile* aFile);
+
+// Enumerate directory entries for a specified path.
+class DirectoryEnumerator {
+public:
+
+  enum Mode {
+    DirsOnly, // Enumeration only includes directories.
+    FilesAndDirs // Enumeration includes directories and non-directory files.
+  };
+
+  DirectoryEnumerator(nsIFile* aPath, Mode aMode);
+
+  already_AddRefed<nsIFile> Next();
+
+private:
+  Mode mMode;
+  nsCOMPtr<nsISimpleEnumerator> mIter;
+};
+
+class GMPInfoFileParser {
+public:
+  bool Init(nsIFile* aFile);
+  bool Contains(const nsCString& aKey) const;
+  nsCString Get(const nsCString& aKey) const;
+private:
+  nsClassHashtable<nsCStringHashKey, nsCString> mValues;
+};
+
+bool
+ReadIntoArray(nsIFile* aFile,
+              nsTArray<uint8_t>& aOutDst,
+              size_t aMaxLength);
 
 } // namespace mozilla
 

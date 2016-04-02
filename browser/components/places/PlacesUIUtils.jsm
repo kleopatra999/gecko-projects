@@ -960,7 +960,7 @@ this.PlacesUIUtils = {
           concreteId: PlacesUtils.bookmarksMenuFolderId },
       "UnfiledBookmarks":
         { title: null,
-          concreteTitle: PlacesUtils.getString("UnsortedBookmarksFolderTitle"),
+          concreteTitle: PlacesUtils.getString("OtherBookmarksFolderTitle"),
           concreteId: PlacesUtils.unfiledBookmarksFolderId },
     };
     // All queries but PlacesRoot.
@@ -1223,16 +1223,7 @@ this.PlacesUIUtils = {
   shouldShowTabsFromOtherComputersMenuitem: function() {
     let weaveOK = Weave.Status.checkSetup() != Weave.CLIENT_NOT_CONFIGURED &&
                   Weave.Svc.Prefs.get("firstSync", "") != "notReady";
-    let cloudSyncOK = CloudSync && CloudSync.ready && CloudSync().tabsReady && CloudSync().tabs.hasRemoteTabs();
-    return weaveOK || cloudSyncOK;
-  },
-
-  shouldEnableTabsFromOtherComputersMenuitem: function() {
-    let weaveEnabled = Weave.Service.isLoggedIn &&
-                       Weave.Service.engineManager.get("tabs") &&
-                       Weave.Service.engineManager.get("tabs").enabled;
-    let cloudSyncEnabled = CloudSync && CloudSync.ready && CloudSync().tabsReady && CloudSync().tabs.hasRemoteTabs();
-    return weaveEnabled || cloudSyncEnabled;
+    return weaveOK;
   },
 
   /**

@@ -22,7 +22,7 @@ sys.path.insert(1, os.path.dirname(sys.path[0]))
 from mozprocess import ProcessHandler
 
 from mozharness.base.log import FATAL
-from mozharness.base.script import BaseScript, PostScriptRun
+from mozharness.base.script import BaseScript
 from mozharness.base.vcs.vcsbase import VCSMixin
 from mozharness.mozilla.blob_upload import BlobUploadMixin, blobupload_config_options
 from mozharness.mozilla.mozbase import MozbaseMixin
@@ -32,13 +32,6 @@ from mozharness.mozilla.testing.unittest import EmulatorMixin
 
 class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin, BaseScript, MozbaseMixin):
     config_options = [[
-        ["--robocop-url"],
-        {"action": "store",
-         "dest": "robocop_url",
-         "default": None,
-         "help": "URL to the robocop apk",
-         }
-    ], [
         ["--host-utils-url"],
         {"action": "store",
          "dest": "xre_url",
@@ -110,13 +103,13 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         self.installer_path = c.get('installer_path')
         self.test_url = c.get('test_url')
         self.test_manifest = c.get('test_manifest')
-        self.robocop_url = c.get('robocop_url')
         self.robocop_path = os.path.join(abs_dirs['abs_work_dir'], "robocop.apk")
         self.host_utils_url = c.get('host_utils_url')
         self.minidump_stackwalk_path = c.get("minidump_stackwalk_path")
         self.emulator = c.get('emulator')
         self.test_suite_definitions = c['test_suite_definitions']
         self.test_suite = c.get('test_suite')
+        self.sdk_level = None
         assert self.test_suite in self.test_suite_definitions
 
     def _query_tests_dir(self):
@@ -345,9 +338,9 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
     def _verify_emulator_and_restart_on_fail(self):
         emulator_ok = self._verify_emulator()
-        self._dump_host_state()
-        self._screenshot("emulator-startup-screenshot-")
         if not emulator_ok:
+            self._dump_host_state()
+            self._screenshot("emulator-startup-screenshot-")
             self._kill_processes(self.config["emulator_process_name"])
             self._dump_emulator_log()
             self._restart_adbd()
@@ -356,7 +349,10 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
     def _install_fennec_apk(self):
         install_ok = False
-        cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', self.installer_path]
+        if int(self.sdk_level) >= 23:
+            cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', '-g', self.installer_path]
+        else:
+            cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', self.installer_path]
         out = self._run_with_timeout(300, cmd)
         if 'Success' in out:
             install_ok = True
@@ -364,7 +360,10 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
     def _install_robocop_apk(self):
         install_ok = False
-        cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', self.robocop_path]
+        if int(self.sdk_level) >= 23:
+            cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', '-g', self.robocop_path]
+        else:
+            cmd = [self.adb_path, '-s', self.emulator['device_id'], 'install', '-r', self.robocop_path]
         out = self._run_with_timeout(300, cmd)
         if 'Success' in out:
             install_ok = True
@@ -594,7 +593,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
 
     def verify_emulator(self):
         '''
-        Check to see if the emulator can be contacted via adb, telnet, and sut, if configured. 
+        Check to see if the emulator can be contacted via adb, telnet, and sut, if configured.
         If any communication attempt fails, kill the emulator, re-launch, and re-check.
         '''
         self.mkdir_p(self.query_abs_dirs()['abs_blob_upload_dir'])
@@ -627,8 +626,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             robocop_url = self.installer_url[:self.installer_url.rfind('/')] + '/robocop.apk'
             self.info("Downloading robocop...")
             self.download_file(robocop_url, 'robocop.apk', dirs['abs_work_dir'], error_level=FATAL)
-        self.mkdir_p(dirs['abs_xre_dir'])
-        self._download_unzip(self.host_utils_url, dirs['abs_xre_dir'])
+        self.download_unzip(self.host_utils_url, dirs['abs_xre_dir'])
 
     def install(self):
         """
@@ -637,12 +635,8 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         assert self.installer_path is not None, \
             "Either add installer_path to the config or use --installer-path."
 
-        config = {
-            'device-id': self.emulator["device_id"],
-            'enable_automation': True,
-            'device_package_name': self._query_package_name()
-        }
-        config = dict(config.items() + self.config.items())
+        self.sdk_level = self._run_with_timeout(30, [self.adb_path, '-s', self.emulator['device_id'],
+            'shell', 'getprop', 'ro.build.version.sdk'])
 
         # Install Fennec
         install_ok = self._retry(3, 30, self._install_fennec_apk, "Install Fennec APK")
@@ -689,10 +683,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             config=self.config,
             log_obj=self.log_obj,
             error_list=self.error_list)
-        return_code = self.run_command(cmd,
-                                       cwd=cwd,
-                                       env=env,
-                                       output_parser=parser)
+        self.run_command(cmd, cwd=cwd, env=env, output_parser=parser)
         tbpl_status, log_level = parser.evaluate_parser(0)
         parser.append_tinderboxprint_line(self.test_suite)
 

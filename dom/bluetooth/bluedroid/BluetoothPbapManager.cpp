@@ -10,7 +10,7 @@
 #include "BluetoothService.h"
 #include "BluetoothSocket.h"
 #include "BluetoothUtils.h"
-#include "BluetoothUuid.h"
+#include "BluetoothUuidHelper.h"
 
 #include "mozilla/dom/BluetoothPbapParametersBinding.h"
 #include "mozilla/Endian.h"
@@ -19,7 +19,6 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
-#include "nsAutoPtr.h"
 #include "nsIInputStream.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
@@ -94,6 +93,8 @@ BluetoothPbapManager::HandleShutdown()
 
   sInShutdown = true;
   Disconnect(nullptr);
+  Uninit();
+
   sPbapManager = nullptr;
 }
 
@@ -105,27 +106,19 @@ BluetoothPbapManager::BluetoothPbapManager() : mPhonebookSizeRequired(false)
 }
 
 BluetoothPbapManager::~BluetoothPbapManager()
-{
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (NS_WARN_IF(!obs)) {
-    return;
-  }
+{ }
 
-  NS_WARN_IF(NS_FAILED(
-    obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID)));
-}
-
-bool
+nsresult
 BluetoothPbapManager::Init()
 {
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
   if (NS_WARN_IF(!obs)) {
-    return false;
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
-  if (NS_WARN_IF(NS_FAILED(
-        obs->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false)))) {
-    return false;
+  auto rv = obs->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
   }
 
   /**
@@ -137,7 +130,64 @@ BluetoothPbapManager::Init()
    * absence of read events when device boots up.
    */
 
-  return true;
+  return NS_OK;
+}
+
+void
+BluetoothPbapManager::Uninit()
+{
+  if (mServerSocket) {
+    mServerSocket->SetObserver(nullptr);
+
+    if (mServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+      mServerSocket->Close();
+    }
+    mServerSocket = nullptr;
+  }
+
+  if (mSocket) {
+    mSocket->SetObserver(nullptr);
+
+    if (mSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+      mSocket->Close();
+    }
+    mSocket = nullptr;
+  }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (NS_WARN_IF(!obs)) {
+    return;
+  }
+
+  NS_WARN_IF(NS_FAILED(
+    obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID)));
+}
+
+// static
+void
+BluetoothPbapManager::InitPbapInterface(BluetoothProfileResultHandler* aRes)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (aRes) {
+    aRes->Init();
+  }
+}
+
+// static
+void
+BluetoothPbapManager::DeinitPbapInterface(BluetoothProfileResultHandler* aRes)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (sPbapManager) {
+    sPbapManager->Uninit();
+    sPbapManager = nullptr;
+  }
+
+  if (aRes) {
+    aRes->Deinit();
+  }
 }
 
 //static
@@ -157,8 +207,8 @@ BluetoothPbapManager::Get()
   }
 
   // Create a new instance, register, and return
-  BluetoothPbapManager *manager = new BluetoothPbapManager();
-  if (NS_WARN_IF(!manager->Init())) {
+  RefPtr<BluetoothPbapManager> manager = new BluetoothPbapManager();
+  if (NS_WARN_IF(NS_FAILED(manager->Init()))) {
     return nullptr;
   }
 
@@ -181,10 +231,11 @@ BluetoothPbapManager::Listen()
    * BT stops; otherwise no more read events would be received even if
    * BT restarts.
    */
-  if (mServerSocket) {
+  if (mServerSocket &&
+      mServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
     mServerSocket->Close();
-    mServerSocket = nullptr;
   }
+  mServerSocket = nullptr;
 
   mServerSocket = new BluetoothSocket(this);
 
@@ -206,7 +257,7 @@ BluetoothPbapManager::Listen()
 // Virtual function of class SocketConsumer
 void
 BluetoothPbapManager::ReceiveSocketData(BluetoothSocket* aSocket,
-                                        nsAutoPtr<UnixSocketBuffer>& aMessage)
+                                        UniquePtr<UnixSocketBuffer>& aMessage)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -357,24 +408,22 @@ BluetoothPbapManager::ReceiveSocketData(BluetoothSocket* aSocket,
 bool
 BluetoothPbapManager::CompareHeaderTarget(const ObexHeaderSet& aHeader)
 {
-  if (!aHeader.Has(ObexHeaderId::Target)) {
+  const ObexHeader* header = aHeader.GetHeader(ObexHeaderId::Target);
+
+  if (!header) {
     BT_LOGR("No ObexHeaderId::Target in header");
     return false;
   }
 
-  uint8_t* targetPtr;
-  int targetLength;
-  aHeader.GetTarget(&targetPtr, &targetLength);
-
-  if (targetLength != sizeof(BluetoothUuid)) {
-    BT_LOGR("Length mismatch: %d != 16", targetLength);
+  if (header->mDataLength != sizeof(BluetoothUuid)) {
+    BT_LOGR("Length mismatch: %d != 16", header->mDataLength);
     return false;
   }
 
   for (uint8_t i = 0; i < sizeof(BluetoothUuid); i++) {
-    if (targetPtr[i] != kPbapObexTarget.mUuid[i]) {
+    if (header->mData[i] != kPbapObexTarget.mUuid[i]) {
       BT_LOGR("UUID mismatch: received target[%d]=0x%x != 0x%x",
-              i, targetPtr[i], kPbapObexTarget.mUuid[i]);
+              i, header->mData[i], kPbapObexTarget.mUuid[i]);
       return false;
     }
   }
@@ -519,9 +568,7 @@ BluetoothPbapManager::NotifyPasswordRequest(const ObexHeaderSet& aHeader)
   MOZ_ASSERT(aHeader.Has(ObexHeaderId::AuthChallenge));
 
   // Get authentication challenge data
-  int dataLength;
-  nsAutoArrayPtr<uint8_t> dataPtr;
-  aHeader.GetAuthChallenge(dataPtr, &dataLength);
+  const ObexHeader* authHeader = aHeader.GetHeader(ObexHeaderId::AuthChallenge);
 
   // Get nonce from authentication challenge
   // Section 3.5.1 "Digest Challenge", IrOBEX spec 1.2
@@ -529,16 +576,16 @@ BluetoothPbapManager::NotifyPasswordRequest(const ObexHeaderSet& aHeader)
   //   [tagId:1][length:1][nonce:16]
   uint8_t offset = 0;
   do {
-    uint8_t tagId = dataPtr[offset++];
-    uint8_t length = dataPtr[offset++];
+    uint8_t tagId = authHeader->mData[offset++];
+    uint8_t length = authHeader->mData[offset++];
 
     BT_LOGR("AuthChallenge header includes tagId %d", tagId);
     if (tagId == ObexDigestChallenge::Nonce) {
-      memcpy(mRemoteNonce, &dataPtr[offset], DIGEST_LENGTH);
+      memcpy(mRemoteNonce, &authHeader->mData[offset], DIGEST_LENGTH);
     }
 
     offset += length;
-  } while (offset < dataLength);
+  } while (offset < authHeader->mDataLength);
 
   // Ensure bluetooth service is available
   BluetoothService* bs = BluetoothService::Get();
@@ -747,14 +794,14 @@ BluetoothPbapManager::ReplyToConnect(const nsAString& aPassword)
     // The request-digest is required and calculated as follows:
     //   H(nonce ":" password)
     uint32_t hashStringLength = DIGEST_LENGTH + aPassword.Length() + 1;
-    nsAutoArrayPtr<char> hashString(new char[hashStringLength]);
+    UniquePtr<char[]> hashString(new char[hashStringLength]);
 
-    memcpy(hashString, mRemoteNonce, DIGEST_LENGTH);
+    memcpy(hashString.get(), mRemoteNonce, DIGEST_LENGTH);
     hashString[DIGEST_LENGTH] = ':';
     memcpy(&hashString[DIGEST_LENGTH + 1],
            NS_ConvertUTF16toUTF8(aPassword).get(),
            aPassword.Length());
-    MD5Hash(hashString, hashStringLength);
+    MD5Hash(hashString.get(), hashStringLength);
 
     // 2 tag-length-value triplets: <request-digest:16><nonce:16>
     uint8_t digestResponse[(DIGEST_LENGTH + 2) * 2];
@@ -866,6 +913,7 @@ BluetoothPbapManager::ReplyToAuthChallenge(const nsAString& aPassword)
   // Cancel authentication
   if (aPassword.IsEmpty()) {
     ReplyError(ObexResponseCode::Unauthorized);
+    return;
   }
 
   ReplyToConnect(aPassword);
@@ -975,7 +1023,7 @@ BluetoothPbapManager::ReplyToGet(uint16_t aPhonebookSize)
    *   or
    * - Part 2b: [headerId:1][length:2][Body:var]
    */
-  uint8_t* res = new uint8_t[mRemoteMaxPacketLength];
+  auto res = MakeUnique<uint8_t[]>(mRemoteMaxPacketLength);
   uint8_t opcode;
 
   // ---- Part 1: [response code:1][length:2] ---- //
@@ -1041,8 +1089,8 @@ BluetoothPbapManager::ReplyToGet(uint16_t aPhonebookSize)
 
       // Read vCard data from input stream
       uint32_t numRead = 0;
-      nsAutoArrayPtr<char> buf(new char[remainingPacketSize]);
-      rv = mVCardDataStream->Read(buf, remainingPacketSize, &numRead);
+      UniquePtr<char[]> buf(new char[remainingPacketSize]);
+      rv = mVCardDataStream->Read(buf.get(), remainingPacketSize, &numRead);
       if (NS_FAILED(rv)) {
         BT_LOGR("Failed to read from input stream. rv=0x%x",
                 static_cast<uint32_t>(rv));
@@ -1062,8 +1110,7 @@ BluetoothPbapManager::ReplyToGet(uint16_t aPhonebookSize)
     }
   }
 
-  SendObexData(res, opcode, index);
-  delete [] res;
+  SendObexData(Move(res), opcode, index);
 
   return true;
 }
@@ -1108,6 +1155,14 @@ BluetoothPbapManager::SendObexData(uint8_t* aData, uint8_t aOpcode, int aSize)
 }
 
 void
+BluetoothPbapManager::SendObexData(UniquePtr<uint8_t[]> aData, uint8_t aOpcode,
+                                   int aSize)
+{
+  SetObexPacketInfo(aData.get(), aOpcode, aSize);
+  mSocket->SendSocketData(new UnixSocketRawData(Move(aData), aSize));
+}
+
+void
 BluetoothPbapManager::OnSocketConnectSuccess(BluetoothSocket* aSocket)
 {
   MOZ_ASSERT(aSocket);
@@ -1127,7 +1182,16 @@ BluetoothPbapManager::OnSocketConnectSuccess(BluetoothSocket* aSocket)
 void
 BluetoothPbapManager::OnSocketConnectError(BluetoothSocket* aSocket)
 {
+  if (mServerSocket &&
+      mServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+    mServerSocket->Close();
+  }
   mServerSocket = nullptr;
+
+  if (mSocket &&
+      mSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+    mSocket->Close();
+  }
   mSocket = nullptr;
 }
 
@@ -1143,7 +1207,8 @@ BluetoothPbapManager::OnSocketDisconnect(BluetoothSocket* aSocket)
 
   AfterPbapDisconnected();
   mDeviceAddress.Clear();
-  mSocket = nullptr;
+
+  mSocket = nullptr; // should already be closed
 
   Listen();
 }

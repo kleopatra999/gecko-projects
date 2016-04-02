@@ -31,7 +31,7 @@
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/cache/CacheStorage.h"
 #include "mozilla/dom/CSSBinding.h"
-#include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
+#include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/PromiseBinding.h"
@@ -40,6 +40,7 @@
 #ifdef MOZ_WEBRTC
 #include "mozilla/dom/RTCIdentityProviderRegistrar.h"
 #endif
+#include "mozilla/dom/FileReaderBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TextDecoderBinding.h"
 #include "mozilla/dom/TextEncoderBinding.h"
@@ -49,11 +50,10 @@
 
 using namespace mozilla;
 using namespace JS;
-using namespace js;
 using namespace xpc;
 
 using mozilla::dom::DestroyProtoAndIfaceCache;
-using mozilla::dom::indexedDB::IndexedDatabaseManager;
+using mozilla::dom::IndexedDatabaseManager;
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(SandboxPrivate)
 
@@ -289,13 +289,11 @@ SandboxFetch(JSContext* cx, JS::HandleObject scope, const CallArgs& args)
     ErrorResult rv;
     RefPtr<dom::Promise> response =
         FetchRequest(global, Constify(request), Constify(options), rv);
-    rv.WouldReportJSException();
-    if (rv.Failed()) {
-        return ThrowMethodFailed(cx, rv);
-    }
-    if (!GetOrCreateDOMReflector(cx, response, args.rval())) {
+    if (rv.MaybeSetPendingException(cx)) {
         return false;
     }
+
+    args.rval().setObject(*response->PromiseObj());
     return true;
 }
 
@@ -512,7 +510,7 @@ sandbox_addProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v)
     // After bug 1015790 is fixed, we should be able to remove this unwrapping.
     RootedObject unwrappedProto(cx, js::UncheckedUnwrap(proto, /* stopAtWindowProxy = */ false));
 
-    Rooted<JSPropertyDescriptor> pd(cx);
+    Rooted<JS::PropertyDescriptor> pd(cx);
     if (!JS_GetPropertyDescriptorById(cx, proto, id, &pd))
         return false;
 
@@ -598,7 +596,7 @@ static const JSFunctionSpec SandboxFunctions[] = {
 bool
 xpc::IsSandbox(JSObject* obj)
 {
-    const Class* clasp = GetObjectClass(obj);
+    const js::Class* clasp = js::GetObjectClass(obj);
     return clasp == &SandboxClass || clasp == &SandboxWriteToProtoClass;
 }
 
@@ -711,8 +709,12 @@ WrapCallable(JSContext* cx, HandleObject callable, HandleObject sandboxProtoProx
                  &xpc::sandboxProxyHandler);
 
     RootedValue priv(cx, ObjectValue(*callable));
+    // We want to claim to have the same proto as our wrapped callable, so set
+    // ourselves up with a lazy proto.
+    js::ProxyOptions options;
+    options.setLazyProto(true);
     JSObject* obj = js::NewProxyObject(cx, &xpc::sandboxCallableProxyHandler,
-                                       priv, nullptr);
+                                       priv, nullptr, options);
     if (obj) {
         js::SetProxyExtra(obj, SandboxCallableProxyHandler::SandboxProxySlot,
                           ObjectValue(*sandboxProtoProxy));
@@ -722,7 +724,7 @@ WrapCallable(JSContext* cx, HandleObject callable, HandleObject sandboxProtoProx
 }
 
 template<typename Op>
-bool WrapAccessorFunction(JSContext* cx, Op& op, JSPropertyDescriptor* desc,
+bool WrapAccessorFunction(JSContext* cx, Op& op, PropertyDescriptor* desc,
                           unsigned attrFlag, HandleObject sandboxProtoProxy)
 {
     if (!op) {
@@ -746,7 +748,7 @@ bool
 xpc::SandboxProxyHandler::getPropertyDescriptor(JSContext* cx,
                                                 JS::Handle<JSObject*> proxy,
                                                 JS::Handle<jsid> id,
-                                                JS::MutableHandle<JSPropertyDescriptor> desc) const
+                                                JS::MutableHandle<PropertyDescriptor> desc) const
 {
     JS::RootedObject obj(cx, wrappedObject(proxy));
 
@@ -781,7 +783,7 @@ bool
 xpc::SandboxProxyHandler::getOwnPropertyDescriptor(JSContext* cx,
                                                    JS::Handle<JSObject*> proxy,
                                                    JS::Handle<jsid> id,
-                                                   JS::MutableHandle<JSPropertyDescriptor> desc)
+                                                   JS::MutableHandle<PropertyDescriptor> desc)
                                                    const
 {
     if (!getPropertyDescriptor(cx, proxy, id, desc))
@@ -802,7 +804,14 @@ bool
 xpc::SandboxProxyHandler::has(JSContext* cx, JS::Handle<JSObject*> proxy,
                               JS::Handle<jsid> id, bool* bp) const
 {
-    return BaseProxyHandler::has(cx, proxy, id, bp);
+    // This uses getPropertyDescriptor for backward compatibility with
+    // the old BaseProxyHandler::has implementation.
+    Rooted<PropertyDescriptor> desc(cx);
+    if (!getPropertyDescriptor(cx, proxy, id, &desc))
+        return false;
+
+    *bp = !!desc.object();
+    return true;
 }
 bool
 xpc::SandboxProxyHandler::hasOwn(JSContext* cx, JS::Handle<JSObject*> proxy,
@@ -817,7 +826,33 @@ xpc::SandboxProxyHandler::get(JSContext* cx, JS::Handle<JSObject*> proxy,
                               JS::Handle<jsid> id,
                               JS::MutableHandle<Value> vp) const
 {
-    return BaseProxyHandler::get(cx, proxy, receiver, id, vp);
+    // This uses getPropertyDescriptor for backward compatibility with
+    // the old BaseProxyHandler::get implementation.
+    Rooted<PropertyDescriptor> desc(cx);
+    if (!getPropertyDescriptor(cx, proxy, id, &desc))
+        return false;
+    desc.assertCompleteIfFound();
+
+    if (!desc.object()) {
+        vp.setUndefined();
+        return true;
+    }
+
+    // Everything after here follows [[Get]] for ordinary objects.
+    if (desc.isDataDescriptor()) {
+        vp.set(desc.value());
+        return true;
+    }
+
+    MOZ_ASSERT(desc.isAccessorDescriptor());
+    RootedObject getter(cx, desc.getterObject());
+
+    if (!getter) {
+        vp.setUndefined();
+        return true;
+    }
+
+    return Call(cx, receiver, getter, HandleValueArray::empty(), vp);
 }
 
 bool
@@ -893,6 +928,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             fetch = true;
         } else if (!strcmp(name.ptr(), "caches")) {
             caches = true;
+        } else if (!strcmp(name.ptr(), "FileReader")) {
+            fileReader = true;
         } else {
             JS_ReportError(cx, "Unknown property name: %s", name.ptr());
             return false;
@@ -904,11 +941,12 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
 bool
 xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
 {
+    // Properties will be exposed to System automatically but not to Sandboxes
+    // if |[Exposed=System]| is specified.
+    // This function holds common properties not exposed automatically but able
+    // to be requested either in |Cu.importGlobalProperties| or
+    // |wantGlobalProperties| of a sandbox.
     if (CSS && !dom::CSSBinding::GetConstructorObject(cx, obj))
-        return false;
-
-    if (indexedDB &&
-        !IndexedDatabaseManager::DefineIndexedDB(cx, obj))
         return false;
 
     if (XMLHttpRequest &&
@@ -961,7 +999,33 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     if (caches && !dom::cache::CacheStorage::DefineCaches(cx, obj))
         return false;
 
+    if (fileReader && !dom::FileReaderBinding::GetConstructorObject(cx, obj))
+        return false;
+
     return true;
+}
+
+bool
+xpc::GlobalProperties::DefineInXPCComponents(JSContext* cx, JS::HandleObject obj)
+{
+    if (indexedDB &&
+        !IndexedDatabaseManager::DefineIndexedDB(cx, obj))
+        return false;
+
+    return Define(cx, obj);
+}
+
+bool
+xpc::GlobalProperties::DefineInSandbox(JSContext* cx, JS::HandleObject obj)
+{
+    MOZ_ASSERT(IsSandbox(obj));
+
+    if (indexedDB &&
+        !(IndexedDatabaseManager::ResolveSandboxBinding(cx, obj) &&
+          IndexedDatabaseManager::DefineIndexedDB(cx, obj)))
+        return false;
+
+    return Define(cx, obj);
 }
 
 nsresult
@@ -983,16 +1047,21 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     MOZ_ASSERT(principal);
 
     JS::CompartmentOptions compartmentOptions;
-    if (options.sameZoneAs)
-        compartmentOptions.setSameZoneAs(js::UncheckedUnwrap(options.sameZoneAs));
-    else if (options.freshZone)
-        compartmentOptions.setZone(JS::FreshZone);
-    else
-        compartmentOptions.setZone(JS::SystemZone);
 
-    compartmentOptions.setInvisibleToDebugger(options.invisibleToDebugger)
-                      .setDiscardSource(options.discardSource)
-                      .setTrace(TraceXPCGlobal);
+    auto& creationOptions = compartmentOptions.creationOptions();
+
+    if (xpc::SharedMemoryEnabled())
+        creationOptions.setSharedMemoryAndAtomicsEnabled(true);
+
+    if (options.sameZoneAs)
+        creationOptions.setSameZoneAs(js::UncheckedUnwrap(options.sameZoneAs));
+    else if (options.freshZone)
+        creationOptions.setZone(JS::FreshZone);
+    else
+        creationOptions.setZone(JS::SystemZone);
+
+    creationOptions.setInvisibleToDebugger(options.invisibleToDebugger)
+                   .setTrace(TraceXPCGlobal);
 
     // Try to figure out any addon this sandbox should be associated with.
     // The addon could have been passed in directly, as part of the metadata,
@@ -1006,11 +1075,13 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
             addonId = id;
     }
 
-    compartmentOptions.setAddonId(addonId);
+    creationOptions.setAddonId(addonId);
 
-    const Class* clasp = options.writeToGlobalPrototype
-                       ? &SandboxWriteToProtoClass
-                       : &SandboxClass;
+    compartmentOptions.behaviors().setDiscardSource(options.discardSource);
+
+    const js::Class* clasp = options.writeToGlobalPrototype
+                             ? &SandboxWriteToProtoClass
+                             : &SandboxClass;
 
     RootedObject sandbox(cx, xpc::CreateGlobalObject(cx, js::Jsvalify(clasp),
                                                      principal, compartmentOptions));
@@ -1123,13 +1194,15 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
              !JS_DefineFunction(cx, sandbox, "isProxy", SandboxIsProxy, 1, 0)))
             return NS_ERROR_XPC_UNEXPECTED;
 
-        if (!options.globalProperties.Define(cx, sandbox))
+        if (!options.globalProperties.DefineInSandbox(cx, sandbox))
             return NS_ERROR_XPC_UNEXPECTED;
 
+#ifndef SPIDERMONKEY_PROMISE
         // Promise is supposed to be part of ES, and therefore should appear on
         // every global.
         if (!dom::PromiseBinding::GetConstructorObject(cx, sandbox))
             return NS_ERROR_XPC_UNEXPECTED;
+#endif // SPIDERMONKEY_PROMISE
     }
 
     // We handle the case where the context isn't in a compartment for the
@@ -1186,7 +1259,7 @@ ParsePrincipal(JSContext* cx, HandleString codebase, nsIPrincipal** principal)
     // We could allow passing in the app-id and browser-element info to the
     // sandbox constructor. But creating a sandbox based on a string is a
     // deprecated API so no need to add features to it.
-    OriginAttributes attrs;
+    PrincipalOriginAttributes attrs;
     nsCOMPtr<nsIPrincipal> prin =
         BasePrincipal::CreateCodebasePrincipal(uri, attrs);
     prin.forget(principal);
@@ -1530,8 +1603,8 @@ AssembleSandboxMemoryReporterName(JSContext* cx, nsCString& sandboxName)
     if (frame) {
         nsString location;
         int32_t lineNumber = 0;
-        frame->GetFilename(location);
-        frame->GetLineNumber(&lineNumber);
+        frame->GetFilename(cx, location);
+        frame->GetLineNumber(cx, &lineNumber);
 
         sandboxName.AppendLiteral(" (from: ");
         sandboxName.Append(NS_ConvertUTF16toUTF8(location));
@@ -1674,9 +1747,8 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
                           PromiseFlatString(source).get(), source.Length(), &v);
 
         // If the sandbox threw an exception, grab it off the context.
-        if (JS_GetPendingException(sandcx, &exn)) {
-            MOZ_ASSERT(!ok);
-            JS_ClearPendingException(sandcx);
+        if (aes.HasException()) {
+            aes.StealException(&exn);
         }
     }
 

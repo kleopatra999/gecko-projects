@@ -19,6 +19,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsStreamUtils.h"
 #include "nsThreadUtils.h"
+#include "PresentationLog.h"
 #include "PresentationSessionTransport.h"
 
 #define BUFFER_SIZE 65536
@@ -153,6 +154,8 @@ PresentationSessionTransport::InitWithChannelDescription(nsIPresentationChannelD
   if (serverHost.IsEmpty()) {
     return NS_ERROR_INVALID_ARG;
   }
+
+  PRES_DEBUG("%s:ServerHost[%s],ServerPort[%d]\n", __func__, serverHost.get(), serverPort);
 
   SetReadyState(CONNECTING);
 
@@ -291,21 +294,6 @@ PresentationSessionTransport::EnableDataNotification()
 }
 
 NS_IMETHODIMP
-PresentationSessionTransport::GetCallback(nsIPresentationSessionTransportCallback** aCallback)
-{
-  nsCOMPtr<nsIPresentationSessionTransportCallback> callback = mCallback;
-  callback.forget(aCallback);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-PresentationSessionTransport::SetCallback(nsIPresentationSessionTransportCallback* aCallback)
-{
-  mCallback = aCallback;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 PresentationSessionTransport::GetSelfAddress(nsINetAddr** aSelfAddress)
 {
   if (NS_WARN_IF(!mTransport)) {
@@ -375,6 +363,8 @@ PresentationSessionTransport::Send(nsIInputStream* aData)
 NS_IMETHODIMP
 PresentationSessionTransport::Close(nsresult aReason)
 {
+  PRES_DEBUG("%s:reason[%x]\n", __func__, aReason);
+
   if (mReadyState == CLOSED || mReadyState == CLOSING) {
     return NS_OK;
   }
@@ -405,6 +395,7 @@ PresentationSessionTransport::SetReadyState(ReadyState aReadyState)
   } else if (mReadyState == CLOSED && mCallback) {
     // Notify the transport channel has been shut down.
     NS_WARN_IF(NS_FAILED(mCallback->NotifyTransportClosed(mCloseStatus)));
+    mCallback = nullptr;
   }
 }
 
@@ -415,6 +406,8 @@ PresentationSessionTransport::OnTransportStatus(nsITransport* aTransport,
                                                 int64_t aProgress,
                                                 int64_t aProgressMax)
 {
+  PRES_DEBUG("%s:aStatus[%x]\n", __func__, aStatus);
+
   MOZ_ASSERT(NS_IsMainThread());
 
   if (aStatus != NS_NET_STATUS_CONNECTED_TO) {
@@ -463,6 +456,8 @@ PresentationSessionTransport::OnStopRequest(nsIRequest* aRequest,
                                             nsISupports* aContext,
                                             nsresult aStatusCode)
 {
+  PRES_DEBUG("%s:aStatusCode[%x]\n", __func__, aStatusCode);
+
   MOZ_ASSERT(NS_IsMainThread());
 
   uint32_t count;

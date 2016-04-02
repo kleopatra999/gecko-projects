@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure that pausing on exceptions works after reload.
@@ -25,9 +27,13 @@ function test() {
     isnot(gOptions._pauseOnExceptionsItem.getAttribute("checked"), "true",
       "The pause-on-exceptions menu item should not be checked.");
 
-    enablePauseOnExceptions()
+    waitForSourceShown(aPanel, ".html")
+      .then(enablePauseOnExceptions)
       .then(disableIgnoreCaughtExceptions)
       .then(() => reloadActiveTab(gPanel, gDebugger.EVENTS.SOURCE_SHOWN))
+      .then(() => {
+          generateMouseClickInTab(gTab, "content.document.querySelector('button')");
+      })
       .then(testPauseOnExceptionsAfterReload)
       .then(disablePauseOnExceptions)
       .then(enableIgnoreCaughtExceptions)
@@ -124,7 +130,6 @@ function enablePauseOnExceptions() {
 
   gOptions._pauseOnExceptionsItem.setAttribute("checked", "true");
   gOptions._togglePauseOnExceptions();
-
   return deferred.promise;
 }
 

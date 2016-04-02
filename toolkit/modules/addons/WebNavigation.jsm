@@ -66,17 +66,17 @@ var Manager = {
 
   receiveMessage({name, data, target}) {
     switch (name) {
-    case "Extension:StateChange":
-      this.onStateChange(target, data);
-      break;
+      case "Extension:StateChange":
+        this.onStateChange(target, data);
+        break;
 
-    case "Extension:LocationChange":
-      this.onLocationChange(target, data);
-      break;
+      case "Extension:LocationChange":
+        this.onLocationChange(target, data);
+        break;
 
-    case "Extension:DOMContentLoaded":
-      this.onLoad(target, data);
-      break;
+      case "Extension:DOMContentLoaded":
+        this.onLoad(target, data);
+        break;
     }
   },
 
@@ -99,8 +99,11 @@ var Manager = {
 
   onLocationChange(browser, data) {
     let url = data.location;
-    if (data.flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
+
+    if (data.isReferenceFragmentUpdated) {
       this.fire("onReferenceFragmentUpdated", browser, data, {url});
+    } else if (data.isHistoryStateUpdated) {
+      this.fire("onHistoryStateUpdated", browser, data, {url});
     } else {
       this.fire("onCommitted", browser, data, {url});
     }
@@ -142,9 +145,8 @@ const EVENTS = [
   "onCompleted",
   "onErrorOccurred",
   "onReferenceFragmentUpdated",
-
-  //"onCreatedNavigationTarget",
-  //"onHistoryStateUpdated",
+  "onHistoryStateUpdated",
+  // "onCreatedNavigationTarget",
 ];
 
 var WebNavigation = {};
@@ -153,5 +155,5 @@ for (let event of EVENTS) {
   WebNavigation[event] = {
     addListener: Manager.addListener.bind(Manager, event),
     removeListener: Manager.removeListener.bind(Manager, event),
-  }
+  };
 }

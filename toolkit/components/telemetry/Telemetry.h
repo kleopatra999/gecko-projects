@@ -84,6 +84,16 @@ void Accumulate(const char *name, const nsCString& key, uint32_t sample = 1);
 void AccumulateTimeDelta(ID id, TimeStamp start, TimeStamp end = TimeStamp::Now());
 
 /**
+ * Enable/disable recording for this histogram at runtime.
+ * Recording is enabled by default, unless listed at kRecordingInitiallyDisabledIDs[].
+ * id must be a valid telemetry enum, otherwise an assertion is triggered.
+ *
+ * @param id - histogram id
+ * @param enabled - whether or not to enable recording from now on.
+ */
+void SetHistogramRecordingEnabled(ID id, bool enabled);
+
+/**
  * Return a raw Histogram for direct manipulation for users who can not use Accumulate().
  */
 base::Histogram* GetHistogramById(ID id);
@@ -263,7 +273,7 @@ class ProcessedStack;
  * @param aFirefoxUptime - Firefox uptime at the time of the hang, in minutes
  * @param aAnnotations - Any annotations to be added to the report
  */
-#if defined(MOZ_ENABLE_PROFILER_SPS) && !defined(MOZILLA_XPCOMRT_API)
+#if defined(MOZ_ENABLE_PROFILER_SPS)
 void RecordChromeHang(uint32_t aDuration,
                       ProcessedStack &aStack,
                       int32_t aSystemUptime,

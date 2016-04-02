@@ -22,6 +22,7 @@
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
+#include "nsContentUtils.h"
 #include "nsIDocument.h"
 #include "nsIGlobalObject.h"
 #include "nsIScriptSecurityManager.h"
@@ -261,8 +262,8 @@ CacheStorage::DefineCaches(JSContext* aCx, JS::Handle<JSObject*> aGlobal)
                        false, /* private browsing */
                        true,  /* force trusted */
                        rv);
-  if (NS_WARN_IF(rv.Failed())) {
-    return ThrowMethodFailed(aCx, rv);
+  if (NS_WARN_IF(rv.MaybeSetPendingException(aCx))) {
+    return false;
   }
 
   JS::Rooted<JS::Value> caches(aCx);
@@ -476,8 +477,7 @@ CacheStorage::Constructor(const GlobalObject& aGlobal,
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
 
   bool privateBrowsing = false;
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(global);
-  if (window) {
+  if (nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(global)) {
     nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
     if (doc) {
       nsCOMPtr<nsILoadContext> loadContext = doc->GetLoadContext();

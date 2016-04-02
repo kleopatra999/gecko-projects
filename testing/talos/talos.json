@@ -15,31 +15,31 @@
             "talos_options": ["--e10s"]
         },
         "dromaeojs": {
-            "tests": ["dromaeo_css", "kraken", "v8_7"]
+            "tests": ["dromaeo_css", "kraken"]
         },
         "dromaeojs-e10s": {
-            "tests": ["dromaeo_css", "kraken", "v8_7"],
+            "tests": ["dromaeo_css", "kraken"],
             "talos_options": ["--e10s"]
         },
         "other": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"]
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"]
         },
         "other-e10s": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"],
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"],
             "talos_options": ["--e10s"]
         },
         "other_nol64": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"]
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"]
         },
         "other-e10s_nol64": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"],
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"],
             "talos_options": ["--e10s"]
         },
         "other_l64": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"]
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"]
         },
         "other-e10s_l64": {
-            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore"],
+            "tests": ["a11yr", "ts_paint", "tpaint", "sessionrestore", "sessionrestore_no_auto_restore", "tabpaint"],
             "talos_options": ["--e10s"]
         },
         "g1": {
@@ -64,7 +64,8 @@
             "tests": ["dromaeo_dom"]
         },
         "g3-e10s": {
-            "tests": ["dromaeo_dom"]
+            "tests": ["dromaeo_dom"],
+            "talos_options": ["--e10s"]
         },
         "svgr": {
             "tests": ["tsvgx", "tsvgr_opacity", "tart", "tscrollx", "cart"]
@@ -106,12 +107,6 @@
             "talos_options": [
                 "--noChrome",
                 "--tppagecycles", "7"
-            ]
-        },
-        "remote-trobocheck2": {
-            "tests": ["tcheck2"],
-            "talos_options": [
-                "--fennecIDs", "../fennec_ids.txt"
             ]
         },
         "remote-tp4m_nochrome": {

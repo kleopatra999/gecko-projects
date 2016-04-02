@@ -8,6 +8,7 @@
 #include "SapiService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsWin32Locale.h"
+#include "GeckoProfiler.h"
 
 #include "mozilla/dom/nsSynthVoiceRegistry.h"
 #include "mozilla/dom/nsSpeechTask.h"
@@ -76,6 +77,11 @@ SapiCallback::OnPause()
   if (FAILED(mSapiClient->Pause())) {
     return NS_ERROR_FAILURE;
   }
+  if (!mTask) {
+    // When calling pause() on child porcess, it may not receive end event
+    // from chrome process yet.
+    return NS_ERROR_FAILURE;
+  }
   mTask->DispatchPause(GetTickCount() - mStartingTime, mCurrentIndex);
   return NS_OK;
 }
@@ -84,6 +90,11 @@ NS_IMETHODIMP
 SapiCallback::OnResume()
 {
   if (FAILED(mSapiClient->Resume())) {
+    return NS_ERROR_FAILURE;
+  }
+  if (!mTask) {
+    // When calling resume() on child porcess, it may not receive end event
+    // from chrome process yet.
     return NS_ERROR_FAILURE;
   }
   mTask->DispatchResume(GetTickCount() - mStartingTime, mCurrentIndex);
@@ -167,6 +178,7 @@ SapiService::SpeechEventCallback(WPARAM aWParam, LPARAM aLParam)
 
 NS_INTERFACE_MAP_BEGIN(SapiService)
   NS_INTERFACE_MAP_ENTRY(nsISpeechService)
+  NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsISpeechService)
 NS_INTERFACE_MAP_END
 
@@ -185,9 +197,12 @@ SapiService::~SapiService()
 bool
 SapiService::Init()
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+
   MOZ_ASSERT(!mInitialized);
 
-  if (Preferences::GetBool("media.webspeech.synth.test")) {
+  if (Preferences::GetBool("media.webspeech.synth.test") ||
+      !Preferences::GetBool("media.webspeech.synth.enabled")) {
     // When enabled, we shouldn't add OS backend (Bug 1160844)
     return false;
   }
@@ -298,6 +313,8 @@ SapiService::RegisterVoices()
     mVoices.Put(uri, voiceToken);
   }
 
+  registry->NotifyVoicesChanged();
+
   return true;
 }
 
@@ -316,10 +333,21 @@ SapiService::Speak(const nsAString& aText, const nsAString& aUri,
   if (FAILED(mSapiClient->SetVoice(voiceToken))) {
     return NS_ERROR_FAILURE;
   }
+
   if (FAILED(mSapiClient->SetVolume(static_cast<USHORT>(aVolume * 100)))) {
     return NS_ERROR_FAILURE;
   }
-  if (FAILED(mSapiClient->SetRate(static_cast<long>(10 * log10(aRate))))) {
+
+  // The max supported rate in SAPI engines is 3x, and the min is 1/3x. It is
+  // expressed by an integer. 0 being normal rate, -10 is 1/3 and 10 is 3x.
+  // Values below and above that are allowed, but the engine may clip the rate
+  // to its maximum capable value.
+  // "Each increment between -10 and +10 is logarithmically distributed such
+  //  that incrementing or decrementing by 1 is multiplying or dividing the
+  //  rate by the 10th root of 3"
+  // https://msdn.microsoft.com/en-us/library/ee431826(v=vs.85).aspx
+  long rate = aRate != 0 ? static_cast<long>(10 * log10(aRate) / log10(3)) : 0;
+  if (FAILED(mSapiClient->SetRate(rate))) {
     return NS_ERROR_FAILURE;
   }
 
@@ -361,6 +389,13 @@ NS_IMETHODIMP
 SapiService::GetServiceType(SpeechServiceType* aServiceType)
 {
   *aServiceType = nsISpeechService::SERVICETYPE_INDIRECT_AUDIO;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SapiService::Observe(nsISupports* aSubject, const char* aTopic,
+                     const char16_t* aData)
+{
   return NS_OK;
 }
 

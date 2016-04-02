@@ -85,7 +85,7 @@ public:
   /* Hit test related methods */
 
   void SetHitTestData(const EventRegions& aRegions,
-                      const gfx::Matrix4x4& aTransform,
+                      const CSSTransformMatrix& aTransform,
                       const Maybe<ParentLayerIntRegion>& aClipRegion,
                       const EventRegionsOverride& aOverride);
   bool IsOutsideClip(const ParentLayerPoint& aPoint) const;
@@ -95,6 +95,7 @@ public:
   void SetScrollbarData(FrameMetrics::ViewID aScrollViewId, Layer::ScrollDirection aDir, int32_t aScrollSize);
   bool MatchesScrollDragMetrics(const AsyncDragMetrics& aDragMetrics) const;
   int32_t GetScrollSize() const;
+  bool IsScrollbarNode() const;
 
   /* Convert aPoint into the LayerPixel space for the layer corresponding to
    * this node. */
@@ -135,7 +136,7 @@ private:
 
   /* This is the transform from layer L. This does NOT include any async
    * transforms. */
-  gfx::Matrix4x4 mTransform;
+  CSSTransformMatrix mTransform;
 
   /* This is clip rect for L that we wish to use for hit-testing purposes. Note
    * that this may not be exactly the same as the clip rect on layer L because

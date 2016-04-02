@@ -15,6 +15,7 @@
 #include "mozilla/Range.h"
 #include "mozilla/RangedPtr.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/Variant.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -26,11 +27,11 @@
 
 #include "js/CallArgs.h"
 #include "js/Class.h"
+#include "js/GCVector.h"
 #include "js/HashTable.h"
 #include "js/Id.h"
 #include "js/Principals.h"
 #include "js/RootingAPI.h"
-#include "js/TraceableVector.h"
 #include "js/TracingAPI.h"
 #include "js/Utility.h"
 #include "js/Value.h"
@@ -218,9 +219,9 @@ typedef AutoVectorRooter<Value> AutoValueVector;
 typedef AutoVectorRooter<jsid> AutoIdVector;
 typedef AutoVectorRooter<JSObject*> AutoObjectVector;
 
-using ValueVector = js::TraceableVector<JS::Value>;
-using IdVector = js::TraceableVector<jsid>;
-using ScriptVector = js::TraceableVector<JSScript*>;
+using ValueVector = js::GCVector<JS::Value>;
+using IdVector = js::GCVector<jsid>;
+using ScriptVector = js::GCVector<JSScript*>;
 
 template<class Key, class Value>
 class MOZ_RAII AutoHashMapRooter : protected AutoGCRooter
@@ -305,10 +306,6 @@ class MOZ_RAII AutoHashMapRooter : protected AutoGCRooter
     }
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
         return map.sizeOfIncludingThis(mallocSizeOf);
-    }
-
-    uint32_t generation() const {
-        return map.generation();
     }
 
     /************************************************** Shorthand operations */
@@ -420,10 +417,6 @@ class MOZ_RAII AutoHashSetRooter : protected AutoGCRooter
     }
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
         return set.sizeOfIncludingThis(mallocSizeOf);
-    }
-
-    uint32_t generation() const {
-        return set.generation();
     }
 
     /************************************************** Shorthand operations */
@@ -572,6 +565,9 @@ typedef enum JSGCStatus {
 typedef void
 (* JSGCCallback)(JSRuntime* rt, JSGCStatus status, void* data);
 
+typedef void
+(* JSObjectsTenuredCallback)(JSRuntime* rt, void* data);
+
 typedef enum JSFinalizeStatus {
     /**
      * Called when preparing to sweep a group of compartments, before anything
@@ -606,6 +602,9 @@ typedef void
 typedef bool
 (* JSInterruptCallback)(JSContext* cx);
 
+typedef bool
+(* JSEnqueuePromiseJobCallback)(JSContext* cx, JS::HandleObject job, void* data);
+
 typedef void
 (* JSErrorReporter)(JSContext* cx, const char* message, JSErrorReport* report);
 
@@ -624,10 +623,14 @@ typedef enum JSExnType {
         JSEXN_SYNTAXERR,
         JSEXN_TYPEERR,
         JSEXN_URIERR,
+        JSEXN_DEBUGGEEWOULDRUN,
         JSEXN_LIMIT
 } JSExnType;
 
 typedef struct JSErrorFormatString {
+     /** The error message name in ASCII. */
+    const char* name;
+
     /** The error format string in ASCII. */
     const char* format;
 
@@ -683,6 +686,10 @@ struct JSWrapObjectCallbacks
 
 typedef void
 (* JSDestroyCompartmentCallback)(JSFreeOp* fop, JSCompartment* compartment);
+
+typedef size_t
+(* JSSizeOfIncludingThisCompartmentCallback)(mozilla::MallocSizeOf mallocSizeOf,
+                                             JSCompartment* compartment);
 
 typedef void
 (* JSZoneCallback)(JS::Zone* zone);
@@ -823,10 +830,7 @@ class MOZ_STACK_CLASS SourceBufferHolder final
                                            object that delegates to a prototype
                                            containing this property */
 #define JSPROP_INTERNAL_USE_BIT 0x80    /* internal JS engine use only */
-#define JSPROP_DEFINE_LATE     0x100    /* Don't define property when initially creating
-                                           the constructor. Some objects like Function/Object
-                                           have self-hosted functions that can only be defined
-                                           after the initialization is already finished. */
+//                             0x100    /* Unused */
 #define JSFUN_STUB_GSOPS       0x200    /* use JS_PropertyStub getter/setter
                                            instead of defaulting to class gsops
                                            for property holding function */
@@ -845,7 +849,9 @@ class MOZ_STACK_CLASS SourceBufferHolder final
  */
 #define JSFUN_GENERIC_NATIVE   0x800
 
-#define JSFUN_FLAGS_MASK       0xe00    /* | of all the JSFUN_* flags */
+#define JSFUN_HAS_REST        0x1000    /* function has ...rest parameter. */
+
+#define JSFUN_FLAGS_MASK      0x1e00    /* | of all the JSFUN_* flags */
 
 /*
  * If set, will allow redefining a non-configurable property, but only on a
@@ -992,7 +998,7 @@ extern JS_PUBLIC_API(JSRuntime*)
 JS_GetRuntime(JSContext* cx);
 
 extern JS_PUBLIC_API(JSRuntime*)
-JS_GetParentRuntime(JSContext* cx);
+JS_GetParentRuntime(JSRuntime* rt);
 
 JS_PUBLIC_API(void)
 JS_SetRuntimePrivate(JSRuntime* rt, void* data);
@@ -1002,6 +1008,9 @@ JS_BeginRequest(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
 JS_EndRequest(JSContext* cx);
+
+extern JS_PUBLIC_API(void)
+JS_SetFutexCanWait(JSRuntime* rt);
 
 namespace js {
 
@@ -1096,13 +1105,21 @@ class JS_PUBLIC_API(RuntimeOptions) {
       : baseline_(true),
         ion_(true),
         asmJS_(true),
+        wasm_(false),
         throwOnAsmJSValidationFailure_(false),
         nativeRegExp_(true),
         unboxedArrays_(false),
         asyncStack_(true),
+        throwOnDebuggeeWouldRun_(true),
+        dumpStackOnDebuggeeWouldRun_(false),
         werror_(false),
         strictMode_(false),
-        extraWarnings_(false)
+        extraWarnings_(false),
+#ifdef RELEASE_BUILD
+        matchFlagArgument_(true)
+#else
+        matchFlagArgument_(false)
+#endif
     {
     }
 
@@ -1136,6 +1153,16 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
+    bool wasm() const { return wasm_; }
+    RuntimeOptions& setWasm(bool flag) {
+        wasm_ = flag;
+        return *this;
+    }
+    RuntimeOptions& toggleWasm() {
+        wasm_ = !wasm_;
+        return *this;
+    }
+
     bool throwOnAsmJSValidationFailure() const { return throwOnAsmJSValidationFailure_; }
     RuntimeOptions& setThrowOnAsmJSValidationFailure(bool flag) {
         throwOnAsmJSValidationFailure_ = flag;
@@ -1161,6 +1188,18 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool asyncStack() const { return asyncStack_; }
     RuntimeOptions& setAsyncStack(bool flag) {
         asyncStack_ = flag;
+        return *this;
+    }
+
+    bool throwOnDebuggeeWouldRun() const { return throwOnDebuggeeWouldRun_; }
+    RuntimeOptions& setThrowOnDebuggeeWouldRun(bool flag) {
+        throwOnDebuggeeWouldRun_ = flag;
+        return *this;
+    }
+
+    bool dumpStackOnDebuggeeWouldRun() const { return dumpStackOnDebuggeeWouldRun_; }
+    RuntimeOptions& setDumpStackOnDebuggeeWouldRun(bool flag) {
+        dumpStackOnDebuggeeWouldRun_ = flag;
         return *this;
     }
 
@@ -1194,17 +1233,27 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
+    bool matchFlagArgument() const { return matchFlagArgument_; }
+    RuntimeOptions& setMatchFlagArgument(bool flag) {
+        matchFlagArgument_ = flag;
+        return *this;
+    }
+
   private:
     bool baseline_ : 1;
     bool ion_ : 1;
     bool asmJS_ : 1;
+    bool wasm_ : 1;
     bool throwOnAsmJSValidationFailure_ : 1;
     bool nativeRegExp_ : 1;
     bool unboxedArrays_ : 1;
     bool asyncStack_ : 1;
+    bool throwOnDebuggeeWouldRun_ : 1;
+    bool dumpStackOnDebuggeeWouldRun_ : 1;
     bool werror_ : 1;
     bool strictMode_ : 1;
     bool extraWarnings_ : 1;
+    bool matchFlagArgument_ : 1;
 };
 
 JS_PUBLIC_API(RuntimeOptions&)
@@ -1294,6 +1343,10 @@ JS_GetImplementationVersion(void);
 
 extern JS_PUBLIC_API(void)
 JS_SetDestroyCompartmentCallback(JSRuntime* rt, JSDestroyCompartmentCallback callback);
+
+extern JS_PUBLIC_API(void)
+JS_SetSizeOfIncludingThisCompartmentCallback(JSRuntime* rt,
+                                             JSSizeOfIncludingThisCompartmentCallback callback);
 
 extern JS_PUBLIC_API(void)
 JS_SetDestroyZoneCallback(JSRuntime* rt, JSZoneCallback callback);
@@ -1503,6 +1556,13 @@ JS_GetArrayPrototype(JSContext* cx, JS::HandleObject forObj);
 extern JS_PUBLIC_API(JSObject*)
 JS_GetErrorPrototype(JSContext* cx);
 
+/**
+ * Returns the %IteratorPrototype% object that all built-in iterator prototype
+ * chains go through for the global object of the current compartment of cx.
+ */
+extern JS_PUBLIC_API(JSObject*)
+JS_GetIteratorPrototype(JSContext* cx);
+
 extern JS_PUBLIC_API(JSObject*)
 JS_GetGlobalForObject(JSContext* cx, JSObject* obj);
 
@@ -1647,6 +1707,10 @@ JS_MaybeGC(JSContext* cx);
 extern JS_PUBLIC_API(void)
 JS_SetGCCallback(JSRuntime* rt, JSGCCallback cb, void* data);
 
+extern JS_PUBLIC_API(void)
+JS_SetObjectsTenuredCallback(JSRuntime* rt, JSObjectsTenuredCallback cb,
+                             void* data);
+
 extern JS_PUBLIC_API(bool)
 JS_AddFinalizeCallback(JSRuntime* rt, JSFinalizeCallback cb, void* data);
 
@@ -1719,9 +1783,6 @@ typedef enum JSGCParamKey {
     /** Number of times GC has been invoked. Includes both major and minor GC. */
     JSGC_NUMBER = 4,
 
-    /** Max size of the code cache in bytes. */
-    JSGC_MAX_CODE_CACHE_BYTES = 5,
-
     /** Select GC mode. */
     JSGC_MODE = 6,
 
@@ -1787,7 +1848,10 @@ typedef enum JSGCParamKey {
     JSGC_MAX_EMPTY_CHUNK_COUNT = 22,
 
     /** Whether compacting GC is enabled. */
-    JSGC_COMPACTING_ENABLED = 23
+    JSGC_COMPACTING_ENABLED = 23,
+
+    /** If true, painting can trigger IGC slices. */
+    JSGC_REFRESH_FRAME_SLICES_ENABLED = 24,
 } JSGCParamKey;
 
 extern JS_PUBLIC_API(void)
@@ -1795,12 +1859,6 @@ JS_SetGCParameter(JSRuntime* rt, JSGCParamKey key, uint32_t value);
 
 extern JS_PUBLIC_API(uint32_t)
 JS_GetGCParameter(JSRuntime* rt, JSGCParamKey key);
-
-extern JS_PUBLIC_API(void)
-JS_SetGCParameterForThread(JSContext* cx, JSGCParamKey key, uint32_t value);
-
-extern JS_PUBLIC_API(uint32_t)
-JS_GetGCParameterForThread(JSContext* cx, JSGCParamKey key);
 
 extern JS_PUBLIC_API(void)
 JS_SetGCParametersBasedOnAvailableMemory(JSRuntime* rt, uint32_t availMem);
@@ -2149,7 +2207,128 @@ enum ZoneSpecifier {
     SystemZone = 1
 };
 
-class JS_PUBLIC_API(CompartmentOptions)
+/**
+ * CompartmentCreationOptions specifies options relevant to creating a new
+ * compartment, that are either immutable characteristics of that compartment
+ * or that are discarded after the compartment has been created.
+ *
+ * Access to these options on an existing compartment is read-only: if you
+ * need particular selections, make them before you create the compartment.
+ */
+class JS_PUBLIC_API(CompartmentCreationOptions)
+{
+  public:
+    CompartmentCreationOptions()
+      : addonId_(nullptr),
+        traceGlobal_(nullptr),
+        invisibleToDebugger_(false),
+        mergeable_(false),
+        preserveJitCode_(false),
+        cloneSingletons_(false),
+        experimentalDateTimeFormatFormatToPartsEnabled_(false),
+        sharedMemoryAndAtomics_(false)
+    {
+        zone_.spec = JS::FreshZone;
+    }
+
+    // A null add-on ID means that the compartment is not associated with an
+    // add-on.
+    JSAddonId* addonIdOrNull() const { return addonId_; }
+    CompartmentCreationOptions& setAddonId(JSAddonId* id) {
+        addonId_ = id;
+        return *this;
+    }
+
+    JSTraceOp getTrace() const {
+        return traceGlobal_;
+    }
+    CompartmentCreationOptions& setTrace(JSTraceOp op) {
+        traceGlobal_ = op;
+        return *this;
+    }
+
+    void* zonePointer() const {
+        MOZ_ASSERT(uintptr_t(zone_.pointer) > uintptr_t(JS::SystemZone));
+        return zone_.pointer;
+    }
+    ZoneSpecifier zoneSpecifier() const { return zone_.spec; }
+    CompartmentCreationOptions& setZone(ZoneSpecifier spec);
+    CompartmentCreationOptions& setSameZoneAs(JSObject* obj);
+
+    // Certain scopes (i.e. XBL compilation scopes) are implementation details
+    // of the embedding, and references to them should never leak out to script.
+    // This flag causes the this compartment to skip firing onNewGlobalObject
+    // and makes addDebuggee a no-op for this global.
+    bool invisibleToDebugger() const { return invisibleToDebugger_; }
+    CompartmentCreationOptions& setInvisibleToDebugger(bool flag) {
+        invisibleToDebugger_ = flag;
+        return *this;
+    }
+
+    // Compartments used for off-thread compilation have their contents merged
+    // into a target compartment when the compilation is finished. This is only
+    // allowed if this flag is set. The invisibleToDebugger flag must also be
+    // set for such compartments.
+    bool mergeable() const { return mergeable_; }
+    CompartmentCreationOptions& setMergeable(bool flag) {
+        mergeable_ = flag;
+        return *this;
+    }
+
+    // Determines whether this compartment should preserve JIT code on
+    // non-shrinking GCs.
+    bool preserveJitCode() const { return preserveJitCode_; }
+    CompartmentCreationOptions& setPreserveJitCode(bool flag) {
+        preserveJitCode_ = flag;
+        return *this;
+    }
+
+    bool cloneSingletons() const { return cloneSingletons_; }
+    CompartmentCreationOptions& setCloneSingletons(bool flag) {
+        cloneSingletons_ = flag;
+        return *this;
+    }
+
+    // ECMA-402 is considering adding a "formatToParts" DateTimeFormat method,
+    // that exposes not just a formatted string but its ordered subcomponents.
+    // The method, its semantics, and its name are all well short of being
+    // finalized, so for now it's exposed *only* if requested.
+    //
+    // Until "formatToParts" is included in a final specification edition, it's
+    // subject to change or removal at any time.  Do *not* rely on it in
+    // mission-critical code that can't be changed if ECMA-402 decides not to
+    // accept the method in its current form.
+    bool experimentalDateTimeFormatFormatToPartsEnabled() const {
+        return experimentalDateTimeFormatFormatToPartsEnabled_;
+    }
+    CompartmentCreationOptions& setExperimentalDateTimeFormatFormatToPartsEnabled(bool flag) {
+        experimentalDateTimeFormatFormatToPartsEnabled_ = flag;
+        return *this;
+    }
+
+    bool getSharedMemoryAndAtomicsEnabled() const;
+    CompartmentCreationOptions& setSharedMemoryAndAtomicsEnabled(bool flag);
+
+  private:
+    JSAddonId* addonId_;
+    JSTraceOp traceGlobal_;
+    union {
+        ZoneSpecifier spec;
+        void* pointer; // js::Zone* is not exposed in the API.
+    } zone_;
+    bool invisibleToDebugger_;
+    bool mergeable_;
+    bool preserveJitCode_;
+    bool cloneSingletons_;
+    bool experimentalDateTimeFormatFormatToPartsEnabled_;
+    bool sharedMemoryAndAtomics_;
+};
+
+/**
+ * CompartmentBehaviors specifies behaviors of a compartment that can be
+ * changed after the compartment's been created.
+ */
+class JS_PUBLIC_API(CompartmentBehaviors)
 {
   public:
     class Override {
@@ -2180,65 +2359,32 @@ class JS_PUBLIC_API(CompartmentOptions)
         Mode mode_;
     };
 
-    explicit CompartmentOptions()
+    CompartmentBehaviors()
       : version_(JSVERSION_UNKNOWN)
-      , invisibleToDebugger_(false)
-      , mergeable_(false)
       , discardSource_(false)
       , disableLazyParsing_(false)
-      , cloneSingletons_(false)
-      , traceGlobal_(nullptr)
       , singletonsAsTemplates_(true)
-      , addonId_(nullptr)
-      , preserveJitCode_(false)
     {
-        zone_.spec = JS::FreshZone;
     }
 
     JSVersion version() const { return version_; }
-    CompartmentOptions& setVersion(JSVersion aVersion) {
+    CompartmentBehaviors& setVersion(JSVersion aVersion) {
         MOZ_ASSERT(aVersion != JSVERSION_UNKNOWN);
         version_ = aVersion;
-        return *this;
-    }
-
-    // Certain scopes (i.e. XBL compilation scopes) are implementation details
-    // of the embedding, and references to them should never leak out to script.
-    // This flag causes the this compartment to skip firing onNewGlobalObject
-    // and makes addDebuggee a no-op for this global.
-    bool invisibleToDebugger() const { return invisibleToDebugger_; }
-    CompartmentOptions& setInvisibleToDebugger(bool flag) {
-        invisibleToDebugger_ = flag;
-        return *this;
-    }
-
-    // Compartments used for off-thread compilation have their contents merged
-    // into a target compartment when the compilation is finished. This is only
-    // allowed if this flag is set.  The invisibleToDebugger flag must also be
-    // set for such compartments.
-    bool mergeable() const { return mergeable_; }
-    CompartmentOptions& setMergeable(bool flag) {
-        mergeable_ = flag;
         return *this;
     }
 
     // For certain globals, we know enough about the code that will run in them
     // that we can discard script source entirely.
     bool discardSource() const { return discardSource_; }
-    CompartmentOptions& setDiscardSource(bool flag) {
+    CompartmentBehaviors& setDiscardSource(bool flag) {
         discardSource_ = flag;
         return *this;
     }
 
     bool disableLazyParsing() const { return disableLazyParsing_; }
-    CompartmentOptions& setDisableLazyParsing(bool flag) {
+    CompartmentBehaviors& setDisableLazyParsing(bool flag) {
         disableLazyParsing_ = flag;
-        return *this;
-    }
-
-    bool cloneSingletons() const { return cloneSingletons_; }
-    CompartmentOptions& setCloneSingletons(bool flag) {
-        cloneSingletons_ = flag;
         return *this;
     }
 
@@ -2246,74 +2392,87 @@ class JS_PUBLIC_API(CompartmentOptions)
     bool extraWarnings(JSContext* cx) const;
     Override& extraWarningsOverride() { return extraWarningsOverride_; }
 
-    void* zonePointer() const {
-        MOZ_ASSERT(uintptr_t(zone_.pointer) > uintptr_t(JS::SystemZone));
-        return zone_.pointer;
-    }
-    ZoneSpecifier zoneSpecifier() const { return zone_.spec; }
-    CompartmentOptions& setZone(ZoneSpecifier spec);
-    CompartmentOptions& setSameZoneAs(JSObject* obj);
-
-    void setSingletonsAsValues() {
-        singletonsAsTemplates_ = false;
-    }
     bool getSingletonsAsTemplates() const {
         return singletonsAsTemplates_;
     }
-
-    // A null add-on ID means that the compartment is not associated with an
-    // add-on.
-    JSAddonId* addonIdOrNull() const { return addonId_; }
-    CompartmentOptions& setAddonId(JSAddonId* id) {
-        addonId_ = id;
-        return *this;
-    }
-
-    CompartmentOptions& setTrace(JSTraceOp op) {
-        traceGlobal_ = op;
-        return *this;
-    }
-    JSTraceOp getTrace() const {
-        return traceGlobal_;
-    }
-
-    bool preserveJitCode() const { return preserveJitCode_; }
-    CompartmentOptions& setPreserveJitCode(bool flag) {
-        preserveJitCode_ = flag;
+    CompartmentBehaviors& setSingletonsAsValues() {
+        singletonsAsTemplates_ = false;
         return *this;
     }
 
   private:
     JSVersion version_;
-    bool invisibleToDebugger_;
-    bool mergeable_;
     bool discardSource_;
     bool disableLazyParsing_;
-    bool cloneSingletons_;
     Override extraWarningsOverride_;
-    union {
-        ZoneSpecifier spec;
-        void* pointer; // js::Zone* is not exposed in the API.
-    } zone_;
-    JSTraceOp traceGlobal_;
 
     // To XDR singletons, we need to ensure that all singletons are all used as
     // templates, by making JSOP_OBJECT return a clone of the JSScript
     // singleton, instead of returning the value which is baked in the JSScript.
     bool singletonsAsTemplates_;
-
-    JSAddonId* addonId_;
-    bool preserveJitCode_;
 };
 
-JS_PUBLIC_API(CompartmentOptions&)
-CompartmentOptionsRef(JSCompartment* compartment);
+/**
+ * CompartmentOptions specifies compartment characteristics: both those that
+ * can't be changed on a compartment once it's been created
+ * (CompartmentCreationOptions), and those that can be changed on an existing
+ * compartment (CompartmentBehaviors).
+ */
+class JS_PUBLIC_API(CompartmentOptions)
+{
+  public:
+    explicit CompartmentOptions()
+      : creationOptions_(),
+        behaviors_()
+    {}
 
-JS_PUBLIC_API(CompartmentOptions&)
-CompartmentOptionsRef(JSObject* obj);
+    CompartmentOptions(const CompartmentCreationOptions& compartmentCreation,
+                       const CompartmentBehaviors& compartmentBehaviors)
+      : creationOptions_(compartmentCreation),
+        behaviors_(compartmentBehaviors)
+    {}
 
-JS_PUBLIC_API(CompartmentOptions&)
-CompartmentOptionsRef(JSContext* cx);
+    // CompartmentCreationOptions specify fundamental compartment
+    // characteristics that must be specified when the compartment is created,
+    // that can't be changed after the compartment is created.
+    CompartmentCreationOptions& creationOptions() {
+        return creationOptions_;
+    }
+    const CompartmentCreationOptions& creationOptions() const {
+        return creationOptions_;
+    }
+
+    // CompartmentBehaviors specify compartment characteristics that can be
+    // changed after the compartment is created.
+    CompartmentBehaviors& behaviors() {
+        return behaviors_;
+    }
+    const CompartmentBehaviors& behaviors() const {
+        return behaviors_;
+    }
+
+  private:
+    CompartmentCreationOptions creationOptions_;
+    CompartmentBehaviors behaviors_;
+};
+
+JS_PUBLIC_API(const CompartmentCreationOptions&)
+CompartmentCreationOptionsRef(JSCompartment* compartment);
+
+JS_PUBLIC_API(const CompartmentCreationOptions&)
+CompartmentCreationOptionsRef(JSObject* obj);
+
+JS_PUBLIC_API(const CompartmentCreationOptions&)
+CompartmentCreationOptionsRef(JSContext* cx);
+
+JS_PUBLIC_API(CompartmentBehaviors&)
+CompartmentBehaviorsRef(JSCompartment* compartment);
+
+JS_PUBLIC_API(CompartmentBehaviors&)
+CompartmentBehaviorsRef(JSObject* obj);
+
+JS_PUBLIC_API(CompartmentBehaviors&)
+CompartmentBehaviorsRef(JSContext* cx);
 
 /**
  * During global creation, we fire notifications to callbacks registered
@@ -2347,7 +2506,7 @@ enum OnNewGlobalHookOption {
 extern JS_PUBLIC_API(JSObject*)
 JS_NewGlobalObject(JSContext* cx, const JSClass* clasp, JSPrincipals* principals,
                    JS::OnNewGlobalHookOption hookOption,
-                   const JS::CompartmentOptions& options = JS::CompartmentOptions());
+                   const JS::CompartmentOptions& options);
 /**
  * Spidermonkey does not have a good way of keeping track of what compartments should be marked on
  * their own. We can mark the roots unconditionally, but marking GC things only relevant in live
@@ -2400,27 +2559,27 @@ JS_FreezeObject(JSContext* cx, JS::Handle<JSObject*> obj);
 
 /*** Property descriptors ************************************************************************/
 
-struct JSPropertyDescriptor : public JS::Traceable {
+namespace JS {
+
+struct PropertyDescriptor {
     JSObject* obj;
     unsigned attrs;
     JSGetterOp getter;
     JSSetterOp setter;
     JS::Value value;
 
-    JSPropertyDescriptor()
+    PropertyDescriptor()
       : obj(nullptr), attrs(0), getter(nullptr), setter(nullptr), value(JS::UndefinedValue())
     {}
 
-    static void trace(JSPropertyDescriptor* self, JSTracer* trc) { self->trace(trc); }
+    static void trace(PropertyDescriptor* self, JSTracer* trc) { self->trace(trc); }
     void trace(JSTracer* trc);
 };
-
-namespace JS {
 
 template <typename Outer>
 class PropertyDescriptorOperations
 {
-    const JSPropertyDescriptor& desc() const { return static_cast<const Outer*>(this)->get(); }
+    const PropertyDescriptor& desc() const { return static_cast<const Outer*>(this)->get(); }
 
     bool has(unsigned bit) const {
         MOZ_ASSERT(bit != 0);
@@ -2552,7 +2711,7 @@ class PropertyDescriptorOperations
 template <typename Outer>
 class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<Outer>
 {
-    JSPropertyDescriptor& desc() { return static_cast<Outer*>(this)->get(); }
+    PropertyDescriptor& desc() { return static_cast<Outer*>(this)->get(); }
 
   public:
     void clear() {
@@ -2575,7 +2734,7 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
         setSetter(setterOp);
     }
 
-    void assign(JSPropertyDescriptor& other) {
+    void assign(PropertyDescriptor& other) {
         object().set(other.obj);
         setAttributes(other.attrs);
         setGetter(other.getter);
@@ -2663,18 +2822,18 @@ class MutablePropertyDescriptorOperations : public PropertyDescriptorOperations<
 namespace js {
 
 template <>
-class RootedBase<JSPropertyDescriptor>
-  : public JS::MutablePropertyDescriptorOperations<JS::Rooted<JSPropertyDescriptor>>
+class RootedBase<JS::PropertyDescriptor>
+  : public JS::MutablePropertyDescriptorOperations<JS::Rooted<JS::PropertyDescriptor>>
 {};
 
 template <>
-class HandleBase<JSPropertyDescriptor>
-  : public JS::PropertyDescriptorOperations<JS::Handle<JSPropertyDescriptor>>
+class HandleBase<JS::PropertyDescriptor>
+  : public JS::PropertyDescriptorOperations<JS::Handle<JS::PropertyDescriptor>>
 {};
 
 template <>
-class MutableHandleBase<JSPropertyDescriptor>
-  : public JS::MutablePropertyDescriptorOperations<JS::MutableHandle<JSPropertyDescriptor>>
+class MutableHandleBase<JS::PropertyDescriptor>
+  : public JS::MutablePropertyDescriptorOperations<JS::MutableHandle<JS::PropertyDescriptor>>
 {};
 
 } /* namespace js */
@@ -2685,7 +2844,7 @@ extern JS_PUBLIC_API(bool)
 ObjectToCompletePropertyDescriptor(JSContext* cx,
                                    JS::HandleObject obj,
                                    JS::HandleValue descriptor,
-                                   JS::MutableHandle<JSPropertyDescriptor> desc);
+                                   JS::MutableHandle<PropertyDescriptor> desc);
 
 } // namespace JS
 
@@ -2772,15 +2931,15 @@ JS_SetImmutablePrototype(JSContext* cx, JS::HandleObject obj, bool* succeeded);
  */
 extern JS_PUBLIC_API(bool)
 JS_GetOwnPropertyDescriptorById(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                                JS::MutableHandle<JSPropertyDescriptor> desc);
+                                JS::MutableHandle<JS::PropertyDescriptor> desc);
 
 extern JS_PUBLIC_API(bool)
 JS_GetOwnPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char* name,
-                            JS::MutableHandle<JSPropertyDescriptor> desc);
+                            JS::MutableHandle<JS::PropertyDescriptor> desc);
 
 extern JS_PUBLIC_API(bool)
 JS_GetOwnUCPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char16_t* name,
-                              JS::MutableHandle<JSPropertyDescriptor> desc);
+                              JS::MutableHandle<JS::PropertyDescriptor> desc);
 
 /**
  * Like JS_GetOwnPropertyDescriptorById, but also searches the prototype chain
@@ -2790,11 +2949,11 @@ JS_GetOwnUCPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char16_
  */
 extern JS_PUBLIC_API(bool)
 JS_GetPropertyDescriptorById(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                             JS::MutableHandle<JSPropertyDescriptor> desc);
+                             JS::MutableHandle<JS::PropertyDescriptor> desc);
 
 extern JS_PUBLIC_API(bool)
 JS_GetPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char* name,
-                         JS::MutableHandle<JSPropertyDescriptor> desc);
+                         JS::MutableHandle<JS::PropertyDescriptor> desc);
 
 /**
  * Define a property on obj.
@@ -2809,7 +2968,7 @@ JS_GetPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char* name,
  */
 extern JS_PUBLIC_API(bool)
 JS_DefinePropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                      JS::Handle<JSPropertyDescriptor> desc,
+                      JS::Handle<JS::PropertyDescriptor> desc,
                       JS::ObjectOpResult& result);
 
 /**
@@ -2818,7 +2977,7 @@ JS_DefinePropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
  */
 extern JS_PUBLIC_API(bool)
 JS_DefinePropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                      JS::Handle<JSPropertyDescriptor> desc);
+                      JS::Handle<JS::PropertyDescriptor> desc);
 
 extern JS_PUBLIC_API(bool)
 JS_DefinePropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
@@ -2870,12 +3029,12 @@ JS_DefineProperty(JSContext* cx, JS::HandleObject obj, const char* name, double 
 
 extern JS_PUBLIC_API(bool)
 JS_DefineUCProperty(JSContext* cx, JS::HandleObject obj, const char16_t* name, size_t namelen,
-                    JS::Handle<JSPropertyDescriptor> desc,
+                    JS::Handle<JS::PropertyDescriptor> desc,
                     JS::ObjectOpResult& result);
 
 extern JS_PUBLIC_API(bool)
 JS_DefineUCProperty(JSContext* cx, JS::HandleObject obj, const char16_t* name, size_t namelen,
-                    JS::Handle<JSPropertyDescriptor> desc);
+                    JS::Handle<JS::PropertyDescriptor> desc);
 
 extern JS_PUBLIC_API(bool)
 JS_DefineUCProperty(JSContext* cx, JS::HandleObject obj, const char16_t* name, size_t namelen,
@@ -3214,21 +3373,18 @@ Call(JSContext* cx, JS::HandleValue thisv, JS::HandleObject funObj, const JS::Ha
  */
 extern JS_PUBLIC_API(bool)
 Construct(JSContext* cx, JS::HandleValue fun, HandleObject newTarget,
-          const JS::HandleValueArray &args, MutableHandleValue rval);
+          const JS::HandleValueArray &args, MutableHandleObject objp);
 
 /**
  * Invoke a constructor. This is the C++ equivalent of
  * `rval = new fun(...args)`.
- *
- * The value left in rval on success is always an object in practice,
- * though at the moment this is not enforced by the C++ type system.
  *
  * Implements: ES6 7.3.13 Construct(F, [argumentsList], [newTarget]), when
  * newTarget is omitted.
  */
 extern JS_PUBLIC_API(bool)
 Construct(JSContext* cx, JS::HandleValue fun, const JS::HandleValueArray& args,
-          MutableHandleValue rval);
+          MutableHandleObject objp);
 
 } /* namespace JS */
 
@@ -3348,7 +3504,7 @@ JS_CreateMappedArrayBufferContents(int fd, size_t offset, size_t length);
  * Release the allocated resource of mapped array buffer contents before the
  * object is created.
  * If a new object has been created by JS_NewMappedArrayBufferWithContents()
- * with this content, then JS_NeuterArrayBuffer() should be used instead to
+ * with this content, then JS_DetachArrayBuffer() should be used instead to
  * release the resource used by the object.
  */
 extern JS_PUBLIC_API(void)
@@ -3433,20 +3589,8 @@ JS_IsNativeFunction(JSObject* funobj, JSNative call);
 extern JS_PUBLIC_API(bool)
 JS_IsConstructor(JSFunction* fun);
 
-/**
- * This enum is used to select if properties with JSPROP_DEFINE_LATE flag
- * should be defined on the object.
- * Normal JSAPI consumers probably always want DefineAllProperties here.
- */
-enum PropertyDefinitionBehavior {
-    DefineAllProperties,
-    OnlyDefineLateProperties,
-    DontDefineLateProperties
-};
-
 extern JS_PUBLIC_API(bool)
-JS_DefineFunctions(JSContext* cx, JS::Handle<JSObject*> obj, const JSFunctionSpec* fs,
-                   PropertyDefinitionBehavior behavior = DefineAllProperties);
+JS_DefineFunctions(JSContext* cx, JS::Handle<JSObject*> obj, const JSFunctionSpec* fs);
 
 extern JS_PUBLIC_API(JSFunction*)
 JS_DefineFunction(JSContext* cx, JS::Handle<JSObject*> obj, const char* name, JSNative call,
@@ -3567,6 +3711,8 @@ namespace JS {
  *   derived from ReadOnlyCompileOptions, so the compiler accepts it.
  */
 
+enum class AsmJSOption : uint8_t { Enabled, Disabled, DisabledByDebugger };
+
 /**
  * The common base class for the CompileOptions hierarchy.
  *
@@ -3609,7 +3755,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         strictOption(false),
         extraWarningsOption(false),
         werrorOption(false),
-        asmJSOption(false),
+        asmJSOption(AsmJSOption::Disabled),
         throwOnAsmJSValidationFailureOption(false),
         forceAsync(false),
         installedFile(false),
@@ -3644,7 +3790,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool strictOption;
     bool extraWarningsOption;
     bool werrorOption;
-    bool asmJSOption;
+    AsmJSOption asmJSOption;
     bool throwOnAsmJSValidationFailureOption;
     bool forceAsync;
     bool installedFile;  // 'true' iff pre-compiling js file in packaged app
@@ -4140,6 +4286,159 @@ JS_GetInterruptCallback(JSRuntime* rt);
 extern JS_PUBLIC_API(void)
 JS_RequestInterruptCallback(JSRuntime* rt);
 
+namespace JS {
+
+/**
+ * Sets the callback that's invoked whenever a Promise job should be enqeued.
+ *
+ * SpiderMonkey doesn't schedule Promise resolution jobs itself; instead,
+ * using this function the embedding can provide a callback to do that
+ * scheduling. The provided `callback` is invoked with the promise job
+ * and the `data` pointer passed here as arguments.
+ */
+extern JS_PUBLIC_API(void)
+SetEnqueuePromiseJobCallback(JSRuntime* rt, JSEnqueuePromiseJobCallback callback,
+                             void* data = nullptr);
+
+/**
+ * Returns a new instance of the Promise builtin class in the current
+ * compartment, with the right slot layout. If a `proto` is passed, that gets
+ * set as the instance's [[Prototype]] instead of the original value of
+ * `Promise.prototype`.
+ */
+extern JS_PUBLIC_API(JSObject*)
+NewPromiseObject(JSContext* cx, JS::HandleObject executor, JS::HandleObject proto = nullptr);
+
+/**
+ * Returns true if the given object is an unwrapped PromiseObject, false
+ * otherwise.
+ */
+extern JS_PUBLIC_API(bool)
+IsPromiseObject(JS::HandleObject obj);
+
+/**
+ * Returns the current compartment's original Promise constructor.
+ */
+extern JS_PUBLIC_API(JSObject*)
+GetPromiseConstructor(JSContext* cx);
+
+/**
+ * Returns the current compartment's original Promise.prototype.
+ */
+extern JS_PUBLIC_API(JSObject*)
+GetPromisePrototype(JSContext* cx);
+
+// Keep this in sync with the PROMISE_STATE defines in SelfHostingDefines.h.
+enum class PromiseState {
+    Pending,
+    Fulfilled,
+    Rejected
+};
+
+/**
+ * Returns the given Promise's state as a JS::PromiseState enum value.
+ */
+extern JS_PUBLIC_API(PromiseState)
+GetPromiseState(JS::HandleObject promise);
+
+/**
+ * Returns the given Promise's process-unique ID.
+ */
+JS_PUBLIC_API(double)
+GetPromiseID(JS::HandleObject promise);
+
+/**
+ * Returns the given Promise's result: either the resolution value for
+ * fulfilled promises, or the rejection reason for rejected ones.
+ */
+extern JS_PUBLIC_API(JS::Value)
+GetPromiseResult(JS::HandleObject promise);
+
+/**
+ * Returns a js::SavedFrame linked list of the stack that lead to the given
+ * Promise's allocation.
+ */
+extern JS_PUBLIC_API(JSObject*)
+GetPromiseAllocationSite(JS::HandleObject promise);
+
+extern JS_PUBLIC_API(JSObject*)
+GetPromiseResolutionSite(JS::HandleObject promise);
+
+/**
+ * Calls the current compartment's original Promise.resolve on the original
+ * Promise constructor, with `resolutionValue` passed as an argument.
+ */
+extern JS_PUBLIC_API(JSObject*)
+CallOriginalPromiseResolve(JSContext* cx, JS::HandleValue resolutionValue);
+
+/**
+ * Calls the current compartment's original Promise.reject on the original
+ * Promise constructor, with `resolutionValue` passed as an argument.
+ */
+extern JS_PUBLIC_API(JSObject*)
+CallOriginalPromiseReject(JSContext* cx, JS::HandleValue rejectionValue);
+
+/**
+ * Resolves the given Promise with the given `resolutionValue`.
+ *
+ * Calls the `resolve` function that was passed to the executor function when
+ * the Promise was created.
+ */
+extern JS_PUBLIC_API(bool)
+ResolvePromise(JSContext* cx, JS::HandleObject promise, JS::HandleValue resolutionValue);
+
+/**
+ * Rejects the given `promise` with the given `rejectionValue`.
+ *
+ * Calls the `reject` function that was passed to the executor function when
+ * the Promise was created.
+ */
+extern JS_PUBLIC_API(bool)
+RejectPromise(JSContext* cx, JS::HandleObject promise, JS::HandleValue rejectionValue);
+
+/**
+ * Calls the current compartment's original Promise.prototype.then on the
+ * given `promise`, with `onResolve` and `onReject` passed as arguments.
+ *
+ * Asserts if the passed-in `promise` object isn't an unwrapped instance of
+ * `Promise` or a subclass or `onResolve` and `onReject` aren't both either
+ * `nullptr` or callable objects.
+ */
+extern JS_PUBLIC_API(JSObject*)
+CallOriginalPromiseThen(JSContext* cx, JS::HandleObject promise,
+                        JS::HandleObject onResolve, JS::HandleObject onReject);
+
+/**
+ * Unforgeable, optimized version of the JS builtin Promise.prototype.then.
+ *
+ * Takes a Promise instance and `onResolve`, `onReject` callables to enqueue
+ * as reactions for that promise. In difference to Promise.prototype.then,
+ * this doesn't create and return a new Promise instance.
+ *
+ * Asserts if the passed-in `promise` object isn't an unwrapped instance of
+ * `Promise` or a subclass or `onResolve` and `onReject` aren't both callable
+ * objects.
+ */
+extern JS_PUBLIC_API(bool)
+AddPromiseReactions(JSContext* cx, JS::HandleObject promise,
+                    JS::HandleObject onResolve, JS::HandleObject onReject);
+
+/**
+ * Unforgeable version of the JS builtin Promise.all.
+ *
+ * Takes an AutoObjectVector of Promise objects and returns a promise that's
+ * resolved with an array of resolution values when all those promises ahve
+ * been resolved, or rejected with the rejection value of the first rejected
+ * promise.
+ *
+ * Asserts if the array isn't dense or one of the entries isn't an unwrapped
+ * instance of Promise or a subclass.
+ */
+extern JS_PUBLIC_API(JSObject*)
+GetWaitForAllPromise(JSContext* cx, const JS::AutoObjectVector& promises);
+
+} // namespace JS
+
 extern JS_PUBLIC_API(bool)
 JS_IsRunning(JSContext* cx);
 
@@ -4183,7 +4482,7 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(AutoSetAsyncStackForNewCalls)
 {
     JSContext* cx;
     RootedObject oldAsyncStack;
-    RootedString oldAsyncCause;
+    const char* oldAsyncCause;
     bool oldAsyncCallIsExplicit;
 
   public:
@@ -4200,8 +4499,13 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(AutoSetAsyncStackForNewCalls)
     // ambiguous whether that would clear any scheduled async stack and make the
     // normal stack reappear in the new call, or just keep the async stack
     // already scheduled for the new call, if any.
+    //
+    // asyncCause is owned by the caller and its lifetime must outlive the
+    // lifetime of the AutoSetAsyncStackForNewCalls object. It is strongly
+    // encouraged that asyncCause be a string constant or similar statically
+    // allocated string.
     AutoSetAsyncStackForNewCalls(JSContext* cx, HandleObject stack,
-                                 HandleString asyncCause,
+                                 const char* asyncCause,
                                  AsyncCallKind kind = AsyncCallKind::IMPLICIT);
     ~AutoSetAsyncStackForNewCalls();
 };
@@ -4229,6 +4533,12 @@ extern JS_PUBLIC_API(JSString*)
 JS_AtomizeAndPinJSString(JSContext* cx, JS::HandleString str);
 
 extern JS_PUBLIC_API(JSString*)
+JS_AtomizeStringN(JSContext* cx, const char* s, size_t length);
+
+extern JS_PUBLIC_API(JSString*)
+JS_AtomizeString(JSContext* cx, const char* s);
+
+extern JS_PUBLIC_API(JSString*)
 JS_AtomizeAndPinStringN(JSContext* cx, const char* s, size_t length);
 
 extern JS_PUBLIC_API(JSString*)
@@ -4242,6 +4552,12 @@ JS_NewUCStringCopyN(JSContext* cx, const char16_t* s, size_t n);
 
 extern JS_PUBLIC_API(JSString*)
 JS_NewUCStringCopyZ(JSContext* cx, const char16_t* s);
+
+extern JS_PUBLIC_API(JSString*)
+JS_AtomizeUCStringN(JSContext* cx, const char16_t* s, size_t length);
+
+extern JS_PUBLIC_API(JSString*)
+JS_AtomizeUCString(JSContext* cx, const char16_t* s);
 
 extern JS_PUBLIC_API(JSString*)
 JS_AtomizeAndPinUCStringN(JSContext* cx, const char16_t* s, size_t length);
@@ -4452,7 +4768,7 @@ class MOZ_RAII JSAutoByteString
     }
 
     ~JSAutoByteString() {
-        js_free(mBytes);
+        JS_free(nullptr, mBytes);
     }
 
     /* Take ownership of the given byte array. */
@@ -4497,7 +4813,7 @@ class MOZ_RAII JSAutoByteString
     }
 
   private:
-    char*       mBytes;
+    char* mBytes;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
     /* Copy and assignment are not supported. */
@@ -4555,17 +4871,25 @@ JS_PUBLIC_API(JSString*)
 GetSymbolDescription(HandleSymbol symbol);
 
 /* Well-known symbols. */
+#define JS_FOR_EACH_WELL_KNOWN_SYMBOL(macro) \
+    macro(iterator) \
+    macro(match) \
+    macro(species) \
+    macro(toPrimitive) \
+    macro(unscopables)
+
 enum class SymbolCode : uint32_t {
-    iterator,                       // well-known symbols
-    match,
-    species,
-    toPrimitive,
+    // There is one SymbolCode for each well-known symbol.
+#define JS_DEFINE_SYMBOL_ENUM(name) name,
+    JS_FOR_EACH_WELL_KNOWN_SYMBOL(JS_DEFINE_SYMBOL_ENUM)  // SymbolCode::iterator, etc.
+#undef JS_DEFINE_SYMBOL_ENUM
+    Limit,
     InSymbolRegistry = 0xfffffffe,  // created by Symbol.for() or JS::GetSymbolFor()
     UniqueSymbol = 0xffffffff       // created by Symbol() or JS::NewSymbol()
 };
 
 /* For use in loops that iterate over the well-known symbols. */
-const size_t WellKnownSymbolLimit = 4;
+const size_t WellKnownSymbolLimit = size_t(SymbolCode::Limit);
 
 /**
  * Return the SymbolCode telling what sort of symbol `symbol` is.
@@ -4623,6 +4947,31 @@ typedef bool (* JSONWriteCallback)(const char16_t* buf, uint32_t len, void* data
 JS_PUBLIC_API(bool)
 JS_Stringify(JSContext* cx, JS::MutableHandleValue value, JS::HandleObject replacer,
              JS::HandleValue space, JSONWriteCallback callback, void* data);
+
+namespace JS {
+
+/**
+ * An API akin to JS_Stringify but with the goal of not having observable
+ * side-effects when the stringification is performed.  This means it does not
+ * allow a replacer or a custom space, and has the following constraints on its
+ * input:
+ *
+ * 1) The input must be a plain object or array, not an abitrary value.
+ * 2) Every value in the graph reached by the algorithm starting with this
+ *    object must be one of the following: null, undefined, a string (NOT a
+ *    string object!), a boolean, a finite number (i.e. no NaN or Infinity or
+ *    -Infinity), a plain object with no accessor properties, or an Array with
+ *    no holes.
+ *
+ * The actual behavior differs from JS_Stringify only in asserting the above and
+ * NOT attempting to get the "toJSON" property from things, since that could
+ * clearly have side-effects.
+ */
+JS_PUBLIC_API(bool)
+ToJSONMaybeSafely(JSContext* cx, JS::HandleObject input,
+                  JSONWriteCallback callback, void* data);
+
+} /* namespace JS */
 
 /**
  * JSON.parse as specified by ES5.
@@ -4759,26 +5108,43 @@ JS_ReportAllocationOverflow(JSContext* cx);
 
 class JSErrorReport
 {
+    // Offending source line without final '\n'.
+    const char16_t* linebuf_;
+
+    // Number of chars in linebuf_. Does not include trailing '\0'.
+    size_t linebufLength_;
+
+    // The 0-based offset of error token in linebuf_.
+    size_t tokenOffset_;
+
   public:
     JSErrorReport()
-      : filename(nullptr), lineno(0), column(0), isMuted(false), linebuf(nullptr),
-        tokenptr(nullptr), uclinebuf(nullptr), uctokenptr(nullptr), flags(0), errorNumber(0),
-        ucmessage(nullptr), messageArgs(nullptr), exnType(0)
+      : linebuf_(nullptr), linebufLength_(0), tokenOffset_(0),
+        filename(nullptr), lineno(0), column(0), isMuted(false),
+        flags(0), errorNumber(0), ucmessage(nullptr),
+        messageArgs(nullptr), exnType(0)
     {}
 
     const char*     filename;      /* source file name, URL, etc., or null */
     unsigned        lineno;         /* source line number */
     unsigned        column;         /* zero-based column index in line */
     bool            isMuted;        /* See the comment in ReadOnlyCompileOptions. */
-    const char*     linebuf;       /* offending source line without final \n */
-    const char*     tokenptr;      /* pointer to error token in linebuf */
-    const char16_t* uclinebuf;     /* unicode (original) line buffer */
-    const char16_t* uctokenptr;    /* unicode (original) token pointer */
     unsigned        flags;          /* error/warning, etc. */
     unsigned        errorNumber;    /* the error number, e.g. see js.msg */
     const char16_t* ucmessage;     /* the (default) error message */
     const char16_t** messageArgs;  /* arguments for the error message */
     int16_t         exnType;        /* One of the JSExnType constants */
+
+    const char16_t* linebuf() const {
+        return linebuf_;
+    }
+    size_t linebufLength() const {
+        return linebufLength_;
+    }
+    size_t tokenOffset() const {
+        return tokenOffset_;
+    }
+    void initLinebuf(const char16_t* linebuf, size_t linebufLength, size_t tokenOffset);
 };
 
 /*
@@ -4941,18 +5307,16 @@ JS_ObjectIsDate(JSContext* cx, JS::HandleObject obj, bool* isDate);
 #define JSREG_GLOB      0x02u   /* global exec, creates array of matches */
 #define JSREG_MULTILINE 0x04u   /* treat ^ and $ as begin and end of line */
 #define JSREG_STICKY    0x08u   /* only match starting at lastIndex */
+#define JSREG_UNICODE   0x10u   /* unicode */
 
 extern JS_PUBLIC_API(JSObject*)
-JS_NewRegExpObject(JSContext* cx, JS::HandleObject obj, const char* bytes, size_t length,
-                   unsigned flags);
+JS_NewRegExpObject(JSContext* cx, const char* bytes, size_t length, unsigned flags);
 
 extern JS_PUBLIC_API(JSObject*)
-JS_NewUCRegExpObject(JSContext* cx, JS::HandleObject obj, const char16_t* chars, size_t length,
-                     unsigned flags);
+JS_NewUCRegExpObject(JSContext* cx, const char16_t* chars, size_t length, unsigned flags);
 
 extern JS_PUBLIC_API(bool)
-JS_SetRegExpInput(JSContext* cx, JS::HandleObject obj, JS::HandleString input,
-                  bool multiline);
+JS_SetRegExpInput(JSContext* cx, JS::HandleObject obj, JS::HandleString input);
 
 extern JS_PUBLIC_API(bool)
 JS_ClearRegExpStatics(JSContext* cx, JS::HandleObject obj);
@@ -4963,12 +5327,6 @@ JS_ExecuteRegExp(JSContext* cx, JS::HandleObject obj, JS::HandleObject reobj,
                  JS::MutableHandleValue rval);
 
 /* RegExp interface for clients without a global object. */
-
-extern JS_PUBLIC_API(JSObject*)
-JS_NewRegExpObjectNoStatics(JSContext* cx, char* bytes, size_t length, unsigned flags);
-
-extern JS_PUBLIC_API(JSObject*)
-JS_NewUCRegExpObjectNoStatics(JSContext* cx, char16_t* chars, size_t length, unsigned flags);
 
 extern JS_PUBLIC_API(bool)
 JS_ExecuteRegExpNoStatics(JSContext* cx, JS::HandleObject reobj, char16_t* chars, size_t length,
@@ -5084,8 +5442,15 @@ JS_DropExceptionState(JSContext* cx, JSExceptionState* state);
 extern JS_PUBLIC_API(JSErrorReport*)
 JS_ErrorFromException(JSContext* cx, JS::HandleObject obj);
 
+/**
+ * If the given object is an exception object (or an unwrappable
+ * cross-compartment wrapper for one), return the stack for that exception, if
+ * any.  Will return null if the given object is not an exception object
+ * (including if it's null or a security wrapper that can't be unwrapped) or if
+ * the exception has no stack.
+ */
 extern JS_PUBLIC_API(JSObject*)
-ExceptionStackOrNull(JSContext* cx, JS::HandleObject obj);
+ExceptionStackOrNull(JS::HandleObject obj);
 
 /*
  * Throws a StopIteration exception on cx.
@@ -5128,7 +5493,7 @@ JS_NewObjectForConstructor(JSContext* cx, const JSClass* clasp, const JS::CallAr
 #define JS_DEFAULT_ZEAL_FREQ 100
 
 extern JS_PUBLIC_API(void)
-JS_GetGCZeal(JSContext* cx, uint8_t* zeal, uint32_t* frequency, uint32_t* nextScheduled);
+JS_GetGCZealBits(JSContext* cx, uint32_t* zealBits, uint32_t* frequency, uint32_t* nextScheduled);
 
 extern JS_PUBLIC_API(void)
 JS_SetGCZeal(JSContext* cx, uint8_t zeal, uint32_t frequency);
@@ -5151,7 +5516,8 @@ JS_SetOffthreadIonCompilationEnabled(JSRuntime* rt, bool enabled);
     Register(ION_ENABLE, "ion.enable")                                     \
     Register(BASELINE_ENABLE, "baseline.enable")                           \
     Register(OFFTHREAD_COMPILATION_ENABLE, "offthread-compilation.enable") \
-    Register(SIGNALS_ENABLE, "signals.enable")
+    Register(SIGNALS_ENABLE, "signals.enable")                             \
+    Register(JUMP_THRESHOLD, "jump-threshold")
 
 typedef enum JSJitCompilerOption {
 #define JIT_COMPILER_DECLARE(key, str) \
@@ -5196,26 +5562,38 @@ JS_IsIdentifier(JSContext* cx, JS::HandleString str, bool* isIdentifier);
 extern JS_PUBLIC_API(bool)
 JS_IsIdentifier(const char16_t* chars, size_t length);
 
+namespace js {
+class ScriptSource;
+} // namespace js
+
 namespace JS {
 
-/**
- * AutoFilename encapsulates a pointer to a C-string and keeps the C-string
- * alive for as long as the associated AutoFilename object is alive.
- */
-class MOZ_STACK_CLASS JS_PUBLIC_API(AutoFilename)
+class MOZ_RAII JS_PUBLIC_API(AutoFilename)
 {
-    void* scriptSource_;
+  private:
+    js::ScriptSource* ss_;
+    mozilla::Variant<const char*, UniqueChars> filename_;
 
     AutoFilename(const AutoFilename&) = delete;
-    void operator=(const AutoFilename&) = delete;
+    AutoFilename& operator=(const AutoFilename&) = delete;
 
   public:
-    AutoFilename() : scriptSource_(nullptr) {}
-    ~AutoFilename() { reset(nullptr); }
+    AutoFilename()
+      : ss_(nullptr),
+        filename_(mozilla::AsVariant<const char*>(nullptr))
+    {}
+
+    ~AutoFilename() {
+        reset();
+    }
+
+    void reset();
+
+    void setOwned(UniqueChars&& filename);
+    void setUnowned(const char* filename);
+    void setScriptSource(js::ScriptSource* ss);
 
     const char* get() const;
-
-    void reset(void* newScriptSource);
 };
 
 /**
@@ -5361,11 +5739,13 @@ struct AsmJSCacheOps
     CloseAsmJSCacheEntryForReadOp closeEntryForRead;
     OpenAsmJSCacheEntryForWriteOp openEntryForWrite;
     CloseAsmJSCacheEntryForWriteOp closeEntryForWrite;
-    BuildIdOp buildId;
 };
 
 extern JS_PUBLIC_API(void)
 SetAsmJSCacheOps(JSRuntime* rt, const AsmJSCacheOps* callbacks);
+
+extern JS_PUBLIC_API(void)
+SetBuildIdOp(JSRuntime* rt, BuildIdOp buildIdOp);
 
 /**
  * Convenience class for imitating a JS level for-of loop. Typical usage:

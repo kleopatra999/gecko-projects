@@ -167,10 +167,7 @@ nsresult
 nsAttrValue::Init()
 {
   NS_ASSERTION(!sEnumTableArray, "nsAttrValue already initialized");
-
   sEnumTableArray = new nsTArray<const EnumTable*>;
-  NS_ENSURE_TRUE(sEnumTableArray, NS_ERROR_OUT_OF_MEMORY);
-  
   return NS_OK;
 }
 
@@ -738,7 +735,7 @@ nsAttrValue::GetAsAtom() const
 {
   switch (Type()) {
     case eString:
-      return do_GetAtom(GetStringValue());
+      return NS_Atomize(GetStringValue());
 
     case eAtom:
       {
@@ -750,7 +747,7 @@ nsAttrValue::GetAsAtom() const
       {
         nsAutoString val;
         ToString(val);
-        return do_GetAtom(val);
+        return NS_Atomize(val);
       }
   }
 }
@@ -1231,7 +1228,7 @@ nsAttrValue::ParseAtom(const nsAString& aValue)
 {
   ResetIfSet();
 
-  nsCOMPtr<nsIAtom> atom = NS_NewAtom(aValue);
+  nsCOMPtr<nsIAtom> atom = NS_Atomize(aValue);
   if (atom) {
     SetPtrValueAndType(atom.forget().take(), eAtomBase);
   }
@@ -1263,7 +1260,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
     ++iter;
   } while (iter != end && !nsContentUtils::IsHTMLWhitespace(*iter));
 
-  nsCOMPtr<nsIAtom> classAtom = do_GetAtom(Substring(start, iter));
+  nsCOMPtr<nsIAtom> classAtom = NS_Atomize(Substring(start, iter));
   if (!classAtom) {
     Reset();
     return;
@@ -1304,7 +1301,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
       ++iter;
     } while (iter != end && !nsContentUtils::IsHTMLWhitespace(*iter));
 
-    classAtom = do_GetAtom(Substring(start, iter));
+    classAtom = NS_Atomize(Substring(start, iter));
 
     if (!array->AppendElement(classAtom)) {
       Reset();
@@ -1721,7 +1718,7 @@ nsAttrValue::SetMiscAtomOrString(const nsAString* aValue)
                  "Empty string?");
     MiscContainer* cont = GetMiscContainer();
     if (len <= NS_ATTRVALUE_MAX_STRINGLENGTH_ATOM) {
-      nsCOMPtr<nsIAtom> atom = NS_NewAtom(*aValue);
+      nsCOMPtr<nsIAtom> atom = NS_Atomize(*aValue);
       if (atom) {
         cont->mStringBits =
           reinterpret_cast<uintptr_t>(atom.forget().take()) | eAtomBase;
@@ -1850,14 +1847,8 @@ nsAttrValue::EnsureEmptyAtomArray()
     return true;
   }
 
-  AtomArray* array = new AtomArray;
-  if (!array) {
-    Reset();
-    return false;
-  }
-
   MiscContainer* cont = EnsureEmptyMiscContainer();
-  cont->mValue.mAtomArray = array;
+  cont->mValue.mAtomArray = new AtomArray;
   cont->mType = eAtomArray;
 
   return true;

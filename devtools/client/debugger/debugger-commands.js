@@ -1,3 +1,5 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,8 +8,8 @@
 
 const { Cc, Ci, Cu } = require("chrome");
 const l10n = require("gcli/l10n");
-
-loader.lazyImporter(this, "gDevTools", "resource://devtools/client/framework/gDevTools.jsm");
+loader.lazyRequireGetter(this, "gDevTools",
+                         "devtools/client/framework/devtools", true);
 
 /**
  * The commands and converters that are exported to GCLI
@@ -537,17 +539,15 @@ exports.items.push({
       const blackBoxed = [];
 
       for (let source of toBlackBox) {
-        activeThread.source(source)[cmd.clientMethod](function({ error }) {
-          if (error) {
-            blackBoxed.push(lookup("ErrorDesc") + " " + source.url);
-          } else {
-            blackBoxed.push(source.url);
-          }
-
+        dbg.blackbox(source, cmd.clientMethod === "blackBox").then(() => {
+          blackBoxed.push(source.url);
+        }, err => {
+          blackBoxed.push(lookup("ErrorDesc") + " " + source.url);
+        }).then(() => {
           if (toBlackBox.length === blackBoxed.length) {
             displayResults();
           }
-        });
+        })
       }
 
       // List the results for the user.

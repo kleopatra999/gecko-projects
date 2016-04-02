@@ -115,12 +115,12 @@ nsXULPopupListener::HandleEvent(nsIDOMEvent* aEvent)
   }
 
   // Get the node that was clicked on.
-  EventTarget* target = mouseEvent->InternalDOMEvent()->GetTarget();
+  EventTarget* target = mouseEvent->AsEvent()->InternalDOMEvent()->GetTarget();
   nsCOMPtr<nsIDOMNode> targetNode = do_QueryInterface(target);
 
   if (!targetNode && mIsContext) {
     // Not a DOM node, see if it's the DOM window (bug 380818).
-    nsCOMPtr<nsPIDOMWindow> domWin = do_QueryInterface(target);
+    nsCOMPtr<nsPIDOMWindowInner> domWin = do_QueryInterface(target);
     if (!domWin) {
       return NS_ERROR_DOM_WRONG_TYPE_ERR;
     }
@@ -144,7 +144,7 @@ nsXULPopupListener::HandleEvent(nsIDOMEvent* aEvent)
   }
 
   bool preventDefault;
-  mouseEvent->GetDefaultPrevented(&preventDefault);
+  mouseEvent->AsEvent()->GetDefaultPrevented(&preventDefault);
   if (preventDefault && targetNode && mIsContext) {
     // Someone called preventDefault on a context menu.
     // Let's make sure they are allowed to do so.
@@ -195,9 +195,12 @@ nsXULPopupListener::HandleEvent(nsIDOMEvent* aEvent)
 
   if (mIsContext) {
 #ifndef NS_CONTEXT_MENU_IS_MOUSEUP
+    uint16_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+    mouseEvent->GetMozInputSource(&inputSource);
+    bool isTouch = inputSource == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
     // If the context menu launches on mousedown,
     // we have to fire focus on the content we clicked on
-    FireFocusOnTargetContent(targetNode);
+    FireFocusOnTargetContent(targetNode, isTouch);
 #endif
   }
   else {
@@ -216,7 +219,7 @@ nsXULPopupListener::HandleEvent(nsIDOMEvent* aEvent)
 
 #ifndef NS_CONTEXT_MENU_IS_MOUSEUP
 nsresult
-nsXULPopupListener::FireFocusOnTargetContent(nsIDOMNode* aTargetNode)
+nsXULPopupListener::FireFocusOnTargetContent(nsIDOMNode* aTargetNode, bool aIsTouch)
 {
   nsresult rv;
   nsCOMPtr<nsIDOMDocument> domDoc;
@@ -262,10 +265,14 @@ nsXULPopupListener::FireFocusOnTargetContent(nsIDOMNode* aTargetNode)
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
     if (fm) {
       if (element) {
-        fm->SetFocus(element, nsIFocusManager::FLAG_BYMOUSE |
-                              nsIFocusManager::FLAG_NOSCROLL);
+        uint32_t focusFlags = nsIFocusManager::FLAG_BYMOUSE |
+                              nsIFocusManager::FLAG_NOSCROLL;
+        if (aIsTouch) {
+          focusFlags |= nsIFocusManager::FLAG_BYTOUCH;
+        }
+        fm->SetFocus(element, focusFlags);
       } else if (!suppressBlur) {
-        nsPIDOMWindow *window = doc->GetWindow();
+        nsPIDOMWindowOuter *window = doc->GetWindow();
         fm->ClearFocus(window);
       }
     }

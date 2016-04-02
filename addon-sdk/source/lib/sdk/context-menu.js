@@ -67,8 +67,9 @@ var internal = ns();
 // menu
 var lastContextProcessId = null;
 
+var uuidModule = require('./util/uuid');
 function uuid() {
-  return require('./util/uuid').uuid().toString();
+  return uuidModule.uuid().toString();
 }
 
 function getScheme(spec) {
@@ -355,7 +356,7 @@ function itemActivated(item, clickedNode) {
 function serializeItem(item) {
   return {
     id: internal(item).id,
-    contexts: [c.serialize() for (c of item.context)],
+    contexts: item.context.map(c => c.serialize()),
     contentScript: item.contentScript,
     contentScriptFile: item.contentScriptFile,
   };

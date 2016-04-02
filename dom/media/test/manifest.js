@@ -68,7 +68,7 @@ var gLongerTests = [
 // during resource download.
 var gProgressTests = [
   { name:"r11025_u8_c1.wav", type:"audio/x-wav", duration:1.0, size:11069 },
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 },
   { name:"seek.ogv", type:"video/ogg", duration:3.966, size:285310 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266, size:28942 },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529 },
@@ -115,7 +115,7 @@ var gPausedAfterEndedTests = gSmallTests.concat([
 // Test the mozHasAudio property, and APIs that detect different kinds of
 // tracks
 var gTrackTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444, hasAudio:true, hasVideo:false },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444, hasAudio:true, hasVideo:false },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266, size:28942, hasAudio:false, hasVideo:true },
   { name:"short-video.ogv", type:"video/ogg", duration:1.081, hasAudio:true, hasVideo:true },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529, hasAudio:false, hasVideo:true },
@@ -154,6 +154,14 @@ var gPlayTests = [
   { name:"r11025_s16_c1_trailing.wav", type:"audio/x-wav", duration:1.0 },
   // file with list chunk
   { name:"r16000_u8_c1_list.wav", type:"audio/x-wav", duration:4.2 },
+  // file with 2 extra bytes of metadata
+  { name:"16bit_wave_extrametadata.wav", type:"audio/x-wav", duration:1.108 },
+  // 24-bit samples
+  { name:"wavedata_s24.wav", type:"audio/x-wav", duration:1.0 },
+  // aLaw compressed wave file
+  { name:"wavedata_alaw.wav", type:"audio/x-wav", duration:1.0 },
+  // uLaw compressed wave file
+  { name:"wavedata_ulaw.wav", type:"audio/x-wav", duration:1.0 },
 
   // Ogg stream without eof marker
   { name:"bug461281.ogg", type:"application/ogg", duration:2.208 },
@@ -212,6 +220,9 @@ var gPlayTests = [
   // Test playback of a WebM file with non-zero start time.
   { name:"split.webm", type:"video/webm", duration:1.967 },
 
+  // Test playback of a WebM file with resolution changes.
+  { name:"resolution-change.webm", type:"video/webm", duration:6.533 },
+
   // Test playback of a raw file
   { name:"seek.yuv", type:"video/x-raw-yuv", duration:1.833 },
 
@@ -267,13 +278,18 @@ var gPlayTests = [
 
 // A file for each type we can support.
 var gSnifferTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.233, size:28942 },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529 },
   { name:"gizmo.mp4", type:"video/mp4", duration:5.56, size:383631 },
   // A mp3 file with id3 tags.
   { name:"id3tags.mp3", type:"audio/mpeg", duration:0.28, size:3530},
   { name:"bogus.duh", type:"bogus/duh" }
+];
+
+// Files that contain resolution changes
+var gResolutionChangeTests = [
+  { name:"resolution-change.webm", type:"video/webm", duration:6.533 },
 ];
 
 // Files we must reject as invalid.
@@ -476,7 +492,10 @@ var gSeekTests = [
   { name:"detodos.opus", type:"audio/ogg; codecs=opus", duration:2.9135 },
   { name:"gizmo.mp4", type:"video/mp4", duration:5.56 },
   { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
-  { name:"bogus.duh", type:"bogus/duh", duration:123 }
+  { name:"bogus.duh", type:"bogus/duh", duration:123 },
+
+  // Bug 1242338: hit a numerical problem while seeking to the duration.
+  { name:"bug482461-theora.ogv", type:"video/ogg", duration:4.138 },
 ];
 
 var gFastSeekTests = [
@@ -495,15 +514,22 @@ function IsWindows8OrLater() {
   return winver && winver.length == 2 && parseFloat(winver[1]) >= 6.2;
 }
 
+// These files are WebMs without cues. They're seekable within their buffered
+// ranges. If work renders WebMs fully seekable these files should be moved
+// into gSeekTests
+var gCuelessWebMTests = [
+  { name:"no-cues.webm", type:"video/webm", duration:3.967 },
+];
+
 // These are files that are non seekable, due to problems with the media,
 // for example broken or missing indexes.
 var gUnseekableTests = [
-  { name:"no-cues.webm", type:"video/webm" },
   { name:"bogus.duh", type:"bogus/duh"}
 ];
 
 var androidVersion = -1; // non-Android platforms
-if (manifestNavigator().userAgent.indexOf("Mobile") != -1) {
+if (manifestNavigator().userAgent.indexOf("Mobile") != -1 ||
+    manifestNavigator().userAgent.indexOf("Tablet") != -1) {
   // See nsSystemInfo.cpp, the getProperty('version') returns different value
   // on each platforms, so we need to distinguish the android and B2G platform.
   var versionString = manifestNavigator().userAgent.indexOf("Android") != -1 ?
@@ -560,7 +586,7 @@ var gDecodeErrorTests = [
 
 // These are files that are used for media fragments tests
 var gFragmentTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 }
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 }
 ];
 
 // Used by test_chaining.html. The |links| attributes is the number of links in
@@ -673,6 +699,7 @@ var gMetadataTests = [
   { name:"wave_metadata_bad_len.wav", tags: {
       name:"Track Title",
       artist:"Artist Name",
+      comments:"Comments",
     }
   },
   { name:"wave_metadata_bad_no_null.wav", tags: {
@@ -1349,8 +1376,8 @@ function removeNodeAndSource(n) {
 
 function once(target, name, cb) {
   var p = new Promise(function(resolve, reject) {
-    target.addEventListener(name, function() {
-      target.removeEventListener(name, cb);
+    target.addEventListener(name, function onceEvent() {
+      target.removeEventListener(name, onceEvent);
       resolve();
     });
   });
@@ -1556,4 +1583,8 @@ function isSlowPlatform() {
   return SpecialPowers.Services.appinfo.name == "B2G" || getAndroidVersion() == 10;
 }
 
-SimpleTest.requestFlakyTimeout("untriaged");
+// Could be undefined in a page opened by the parent test page
+// like file_access_controls.html.
+if ("SimpleTest" in window) {
+  SimpleTest.requestFlakyTimeout("untriaged");
+}

@@ -21,7 +21,7 @@ interface nsIURI;
 
 typedef unsigned short CSPDirective;
 
-[scriptable, builtinclass, uuid(b9a029c3-9484-4bf7-826d-0c6b545790bc)]
+[scriptable, builtinclass, uuid(b3c4c0ae-bd5e-4cad-87e0-8d210dbb3f9f)]
 interface nsIContentSecurityPolicy : nsISerializable
 {
   /**
@@ -52,6 +52,7 @@ interface nsIContentSecurityPolicy : nsISerializable
   const unsigned short WEB_MANIFEST_SRC_DIRECTIVE     = 16;
   const unsigned short UPGRADE_IF_INSECURE_DIRECTIVE  = 17;
   const unsigned short CHILD_SRC_DIRECTIVE            = 18;
+  const unsigned short BLOCK_ALL_MIXED_CONTENT        = 19;
 
   /**
    * Accessor method for a read-only string version of the policy at a given
@@ -73,6 +74,15 @@ interface nsIContentSecurityPolicy : nsISerializable
   readonly attribute bool upgradeInsecureRequests;
 
   /**
+   * Returns whether this policy uses the directive block-all-mixed-content.
+   * Please note that block-all-mixed-content takes presedence in case the
+   * directive upgrade-insecure-requests is defined in the same policy and
+   * will therefore block all mixed content without even trying to perform
+   * an upgrade.
+   */
+  readonly attribute bool blockAllMixedContent;
+
+  /**
    * Obtains the referrer policy (as integer) for this browsing context as
    * specified in CSP.  If there are multiple policies and...
    *  - only one sets a referrer policy: that policy is returned
@@ -90,12 +100,17 @@ interface nsIContentSecurityPolicy : nsISerializable
   /**
    * Parse and install a CSP policy.
    * @param aPolicy
-   *        String representation of the policy (e.g., header value)
+   *        String representation of the policy
+   *        (e.g., header value, meta content)
    * @param reportOnly
    *        Should this policy affect content, script and style processing or
    *        just send reports if it is violated?
+   * @param deliveredViaMetaTag
+   *        Indicates whether the policy was delivered via the meta tag.
    */
-  void appendPolicy(in AString policyString, in boolean reportOnly);
+  void appendPolicy(in AString policyString,
+                    in boolean reportOnly,
+                    in boolean deliveredViaMetaTag);
 
   /*
    * Whether this policy allows inline script or style.

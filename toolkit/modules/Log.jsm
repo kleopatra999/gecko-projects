@@ -634,7 +634,7 @@ StructuredFormatter.prototype = {
 function isError(aObj) {
   return (aObj && typeof(aObj) == 'object' && "name" in aObj && "message" in aObj &&
           "fileName" in aObj && "lineNumber" in aObj && "stack" in aObj);
-};
+}
 
 /*
  * Parameter Formatters
@@ -867,7 +867,7 @@ FileAppender.prototype = {
   __proto__: Appender.prototype,
 
   _openFile: function () {
-    return Task.spawn(function _openFile() {
+    return Task.spawn(function* _openFile() {
       try {
         this._file = yield OS.File.open(this._path,
                                         {truncate: true});

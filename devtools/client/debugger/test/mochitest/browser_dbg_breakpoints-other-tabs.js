@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure that setting a breakpoint in one tab, doesn't cause another tab at
@@ -11,13 +13,16 @@ const TAB_URL = EXAMPLE_URL + "doc_breakpoints-other-tabs.html";
 var test = Task.async(function* () {
   const [tab1,, panel1] = yield initDebugger(TAB_URL);
   const [tab2,, panel2] = yield initDebugger(TAB_URL);
+  const queries = panel1.panelWin.require('./content/queries');
+  const actions = bindActionCreators(panel1);
+  const getState = panel1.panelWin.DebuggerController.getState;
 
   yield ensureSourceIs(panel1, "code_breakpoints-other-tabs.js", true);
 
   const sources = panel1.panelWin.DebuggerView.Sources;
 
-  yield panel1.addBreakpoint({
-    actor: sources.selectedValue,
+  yield actions.addBreakpoint({
+    actor: queries.getSelectedSource(getState()).actor,
     line: 2
   });
 

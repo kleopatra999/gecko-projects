@@ -10,6 +10,7 @@ from collections import defaultdict
 import os
 import json
 import copy
+import re
 import sys
 import time
 from collections import namedtuple
@@ -23,41 +24,22 @@ from mach.decorators import (
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 GECKO = os.path.realpath(os.path.join(ROOT, '..', '..'))
-DOCKER_ROOT = os.path.join(ROOT, '..', 'docker')
 
 # XXX: If/when we have the taskcluster queue use construct url instead
 ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
-REGISTRY = open(os.path.join(DOCKER_ROOT, 'REGISTRY')).read().strip()
 
 DEFINE_TASK = 'queue:define-task:aws-provisioner-v1/{}'
-
-TREEHERDER_ROUTE_PREFIX = 'tc-treeherder-stage'
-TREEHERDER_ROUTES = {
-    'staging': 'tc-treeherder-stage',
-    'production': 'tc-treeherder'
-}
 
 DEFAULT_TRY = 'try: -b do -p all -u all'
 DEFAULT_JOB_PATH = os.path.join(
     ROOT, 'tasks', 'branches', 'base_jobs.yml'
 )
 
-def docker_image(name):
-    ''' Determine the docker tag/revision from an in tree docker file '''
-    repository_path = os.path.join(DOCKER_ROOT, name, 'REGISTRY')
-    repository = REGISTRY
-
-    version = open(os.path.join(DOCKER_ROOT, name, 'VERSION')).read().strip()
-
-    if os.path.isfile(repository_path):
-        repository = open(repository_path).read().strip()
-
-    return '{}/{}:{}'.format(repository, name, version)
-
-def get_task(task_id):
-    import urllib2
-    return json.load(urllib2.urlopen("https://queue.taskcluster.net/v1/task/" + task_id))
-
+def merge_dicts(*dicts):
+    merged_dict = {}
+    for dictionary in dicts:
+        merged_dict.update(dictionary)
+    return merged_dict
 
 def gaia_info():
     '''
@@ -87,42 +69,6 @@ def gaia_info():
             'gaia_rev': gaia['git']['git_revision'],
             'gaia_ref': gaia['git']['branch'],
         }
-
-def decorate_task_treeherder_routes(task, suffix):
-    """
-    Decorate the given task with treeherder routes.
-
-    Uses task.extra.treeherderEnv if available otherwise defaults to only
-    staging.
-
-    :param dict task: task definition.
-    :param str suffix: The project/revision_hash portion of the route.
-    """
-
-    if 'extra' not in task:
-        return
-
-    if 'routes' not in task:
-        task['routes'] = []
-
-    treeheder_env = task['extra'].get('treeherderEnv', ['staging'])
-
-    for env in treeheder_env:
-        task['routes'].append('{}.{}'.format(TREEHERDER_ROUTES[env], suffix))
-
-def decorate_task_json_routes(task, json_routes, parameters):
-    """
-    Decorate the given task with routes.json routes.
-
-    :param dict task: task definition.
-    :param json_routes: the list of routes to use from routes.json
-    :param parameters: dictionary of parameters to use in route templates
-    """
-    routes = task.get('routes', [])
-    for route in json_routes:
-        routes.append(route.format(**parameters))
-
-    task['routes'] = routes
 
 def configure_dependent_task(task_path, parameters, taskid, templates, build_treeherder_config):
     """
@@ -187,51 +133,47 @@ def remove_caches_from_task(task):
     :param task: task definition.
     """
     whitelist = [
-        "tc-vcs",
-        "tc-vcs-public-sources",
-        "tooltool-cache",
+        re.compile("^level-[123]-.*-tc-vcs(-public-sources)?$"),
+        re.compile("^tooltool-cache$"),
     ]
     try:
         caches = task["task"]["payload"]["cache"]
         for cache in caches.keys():
-            if cache not in whitelist:
+            if not any(pat.match(cache) for pat in whitelist):
                 caches.pop(cache)
     except KeyError:
         pass
 
-def query_pushinfo(repository, revision):
+def query_vcs_info(repository, revision):
     """Query the pushdate and pushid of a repository/revision.
     This is intended to be used on hg.mozilla.org/mozilla-central and
     similar. It may or may not work for other hg repositories.
     """
-    PushInfo = namedtuple('PushInfo', ['pushid', 'pushdate'])
+    if not repository or not revision:
+        sys.stderr.write('cannot query vcs info because vcs info not provided\n')
+        return None
+
+    VCSInfo = namedtuple('VCSInfo', ['pushid', 'pushdate', 'changesets'])
 
     try:
-        import urllib2
-        url = '%s/json-pushes?changeset=%s' % (repository, revision)
-        sys.stderr.write("Querying URL for pushdate: %s\n" % url)
-        contents = json.load(urllib2.urlopen(url))
+        import requests
+        url = '%s/json-automationrelevance/%s' % (repository.rstrip('/'),
+                                                  revision)
+        sys.stderr.write("Querying version control for metadata: %s\n" % url)
+        contents = requests.get(url).json()
 
-        # The contents should be something like:
-        # {
-        #   "28537": {
-        #    "changesets": [
-        #     "1d0a914ae676cc5ed203cdc05c16d8e0c22af7e5",
-        #    ],
-        #    "date": 1428072488,
-        #    "user": "user@mozilla.com"
-        #   }
-        # }
-        #
-        # So we grab the first element ("28537" in this case) and then pull
-        # out the 'date' field.
-        pushid = contents.iterkeys().next()
-        pushdate = contents[pushid]['date']
-        return PushInfo(pushid, pushdate)
+        changesets = []
+        for c in contents['changesets']:
+            changesets.append({k: c[k] for k in ('desc', 'files', 'node')})
+
+        pushid = contents['changesets'][-1]['pushid']
+        pushdate = contents['changesets'][-1]['pushdate'][0]
+
+        return VCSInfo(pushid, pushdate, changesets)
 
     except Exception:
         sys.stderr.write(
-            "Error querying pushinfo for repository '%s' revision '%s'\n" % (
+            "Error querying VCS info for '%s' revision '%s'\n" % (
                 repository, revision,
             )
         )
@@ -285,6 +227,40 @@ class DecisionTask(object):
         print(json.dumps(task, indent=4))
 
 @CommandProvider
+class LoadImage(object):
+    @Command('taskcluster-load-image', category="ci",
+        description="Load a pre-built Docker image")
+    @CommandArgument('--task-id',
+        help="Load the image at public/image.tar in this task, rather than "
+             "searching the index")
+    @CommandArgument('image_name', nargs='?',
+        help="Load the image of this name based on the current contents of the tree "
+             "(as built for mozilla-central or mozilla-inbound)")
+    def load_image(self, image_name, task_id):
+        from taskcluster_graph.image_builder import (
+            task_id_for_image,
+            docker_load_from_url
+        )
+
+        if not image_name and not task_id:
+            print("Specify either IMAGE-NAME or TASK-ID")
+            sys.exit(1)
+
+        if not task_id:
+            task_id = task_id_for_image({}, 'mozilla-inbound', image_name, create=False)
+            if not task_id:
+                print("No task found in the TaskCluster index for {}".format(image_name))
+                sys.exit(1)
+
+        print("Task ID: {}".format(task_id))
+
+        ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
+        image_name = docker_load_from_url(ARTIFACT_URL.format(task_id, 'public/image.tar'))
+
+        print("Loaded image is named {}".format(image_name))
+
+
+@CommandProvider
 class Graph(object):
     @Command('taskcluster-graph', category="ci",
         description="Create taskcluster task graph")
@@ -315,6 +291,9 @@ class Graph(object):
     @CommandArgument('--owner',
         required=True,
         help='email address of who owns this graph')
+    @CommandArgument('--level',
+        default="1",
+        help='SCM level of this repository')
     @CommandArgument('--extend-graph',
         action="store_true", dest="ci", help='Omit create graph arguments')
     @CommandArgument('--interactive',
@@ -329,9 +308,24 @@ class Graph(object):
     @CommandArgument('--dry-run',
         action='store_true', default=False,
         help="Stub out taskIds and date fields from the task definitions.")
+    @CommandArgument('--ignore-conditions',
+        action='store_true',
+        help='Run tasks even if their conditions are not met')
     def create_graph(self, **params):
-        from taskcluster_graph.commit_parser import parse_commit
+        from functools import partial
+
+        from mozpack.path import match as mozpackmatch
+
         from slugid import nice as slugid
+
+        import taskcluster_graph.transform.routes as routes_transform
+        import taskcluster_graph.transform.treeherder as treeherder_transform
+        from taskcluster_graph.commit_parser import parse_commit
+        from taskcluster_graph.image_builder import (
+            docker_image,
+            normalize_image_details,
+            task_id_for_image
+        )
         from taskcluster_graph.from_now import (
             json_time_from_now,
             current_json_time,
@@ -349,46 +343,52 @@ class Graph(object):
         project = params['project']
         message = params.get('message', '') if project == 'try' else DEFAULT_TRY
 
-        # Message would only be blank when not created from decision task
-        if project == 'try' and not message:
-            sys.stderr.write(
-                    "Must supply commit message when creating try graph. " \
-                    "Example: --message='try: -b do -p all -u all'"
-            )
-            sys.exit(1)
-
         templates = Templates(ROOT)
+
         job_path = os.path.join(ROOT, 'tasks', 'branches', project, 'job_flags.yml')
         job_path = job_path if os.path.exists(job_path) else DEFAULT_JOB_PATH
 
         jobs = templates.load(job_path, {})
 
-        job_graph = parse_commit(message, jobs)
+        job_graph, trigger_tests = parse_commit(message, jobs)
 
         cmdline_interactive = params.get('interactive', False)
 
         # Default to current time if querying the head rev fails
         pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime())
-        pushinfo = query_pushinfo(params['head_repository'], params['head_rev'])
-        if pushinfo:
-            pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime(pushinfo.pushdate))
+        vcs_info = query_vcs_info(params['head_repository'], params['head_rev'])
+        changed_files = set()
+        if vcs_info:
+            pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime(vcs_info.pushdate))
+
+            sys.stderr.write('%d commits influencing task scheduling:\n' %
+                             len(vcs_info.changesets))
+            for c in vcs_info.changesets:
+                sys.stderr.write('%s %s\n' % (
+                    c['node'][0:12], c['desc'].splitlines()[0].encode('ascii', 'ignore')))
+
+                changed_files |= set(c['files'])
 
         # Template parameters used when expanding the graph
+        seen_images = {}
         parameters = dict(gaia_info().items() + {
             'index': 'index',
             'project': project,
             'pushlog_id': params.get('pushlog_id', 0),
             'docker_image': docker_image,
+            'task_id_for_image': partial(task_id_for_image, seen_images, project),
             'base_repository': params['base_repository'] or \
                 params['head_repository'],
             'head_repository': params['head_repository'],
             'head_ref': params['head_ref'] or params['head_rev'],
             'head_rev': params['head_rev'],
             'pushdate': pushdate,
+            'pushtime': pushdate[8:],
             'year': pushdate[0:4],
             'month': pushdate[4:6],
             'day': pushdate[6:8],
             'owner': params['owner'],
+            'level': params['level'],
             'from_now': json_time_from_now,
             'now': current_json_time(),
             'revision_hash': params['revision_hash']
@@ -408,27 +408,66 @@ class Graph(object):
         # Task graph we are generating for taskcluster...
         graph = {
             'tasks': [],
-            'scopes': []
+            'scopes': set(),
         }
 
         if params['revision_hash']:
-            for env in TREEHERDER_ROUTES:
-                graph['scopes'].append('queue:route:{}.{}'.format(TREEHERDER_ROUTES[env], treeherder_route))
+            for env in routes_transform.TREEHERDER_ROUTES:
+                route = 'queue:route:{}.{}'.format(
+                            routes_transform.TREEHERDER_ROUTES[env],
+                            treeherder_route)
+                graph['scopes'].add(route)
 
         graph['metadata'] = {
-            'source': 'http://todo.com/what/goes/here',
+            'source': '{repo}file/{rev}/testing/taskcluster/mach_commands.py'.format(repo=params['head_repository'], rev=params['head_rev']),
             'owner': params['owner'],
             # TODO: Add full mach commands to this example?
             'description': 'Task graph generated via ./mach taskcluster-graph',
             'name': 'task graph local'
         }
 
+        # Filter the job graph according to conditions met by this invocation run.
+        def should_run(task):
+            # Old style build or test task that doesn't define conditions. Always runs.
+            if 'when' not in task:
+                return True
+
+            # Command line override to not filter.
+            if params['ignore_conditions']:
+                return True
+
+            when = task['when']
+
+            # If the task defines file patterns and we have a set of changed
+            # files to compare against, only run if a file pattern matches one
+            # of the changed files.
+            file_patterns = when.get('file_patterns', None)
+            if file_patterns and changed_files:
+                for pattern in file_patterns:
+                    for path in changed_files:
+                        if mozpackmatch(path, pattern):
+                            sys.stderr.write('scheduling %s because pattern %s '
+                                             'matches %s\n' % (task['task'],
+                                                               pattern,
+                                                               path))
+                            return True
+
+                # No file patterns matched. Discard task.
+                sys.stderr.write('discarding %s because no relevant files changed\n' %
+                                 task['task'])
+                return False
+
+            return True
+
+        job_graph = filter(should_run, job_graph)
+
         all_routes = {}
 
         for build in job_graph:
             interactive = cmdline_interactive or build["interactive"]
-            build_parameters = dict(parameters)
+            build_parameters = merge_dicts(parameters, build['additional-parameters']);
             build_parameters['build_slugid'] = slugid()
+            build_parameters['source'] = '{repo}file/{rev}/testing/taskcluster/{file}'.format(repo=params['head_repository'], rev=params['head_rev'], file=build['task'])
             build_task = templates.load(build['task'], build_parameters)
 
             # Copy build_* attributes to expose them to post-build tasks
@@ -438,6 +477,11 @@ class Graph(object):
             build_parameters['build_type'] = task_extra['build_type']
             build_parameters['build_product'] = task_extra['build_product']
 
+            normalize_image_details(graph,
+                                    build_task,
+                                    seen_images,
+                                    build_parameters,
+                                    os.environ.get('TASK_ID', None))
             set_interactive_task(build_task, interactive)
 
             # try builds don't use cache
@@ -445,48 +489,28 @@ class Graph(object):
                 remove_caches_from_task(build_task)
 
             if params['revision_hash']:
-                decorate_task_treeherder_routes(build_task['task'],
-                                                treeherder_route)
-                decorate_task_json_routes(build_task['task'],
-                                          json_routes,
-                                          build_parameters)
+                treeherder_transform.add_treeherder_revision_info(build_task['task'],
+                                                                  params['head_rev'],
+                                                                  params['revision_hash'])
+                routes_transform.decorate_task_treeherder_routes(build_task['task'],
+                                                                 treeherder_route)
+                routes_transform.decorate_task_json_routes(build_task['task'],
+                                                           json_routes,
+                                                           build_parameters)
 
             # Ensure each build graph is valid after construction.
             taskcluster_graph.build_task.validate(build_task)
             graph['tasks'].append(build_task)
 
-            test_packages_url, tests_url, mozharness_url = None, None, None
-
-            if 'test_packages' in build_task['task']['extra']['locations']:
-                test_packages_url = ARTIFACT_URL.format(
+            for location in build_task['task']['extra'].get('locations', {}):
+                build_parameters['{}_url'.format(location)] = ARTIFACT_URL.format(
                     build_parameters['build_slugid'],
-                    build_task['task']['extra']['locations']['test_packages']
+                    build_task['task']['extra']['locations'][location]
                 )
 
-            if 'tests' in build_task['task']['extra']['locations']:
-                tests_url = ARTIFACT_URL.format(
-                    build_parameters['build_slugid'],
-                    build_task['task']['extra']['locations']['tests']
-                )
-
-            if 'mozharness' in build_task['task']['extra']['locations']:
-                mozharness_url = ARTIFACT_URL.format(
-                    build_parameters['build_slugid'],
-                    build_task['task']['extra']['locations']['mozharness']
-                )
-
-            build_url = ARTIFACT_URL.format(
-                build_parameters['build_slugid'],
-                build_task['task']['extra']['locations']['build']
-            )
-            build_parameters['build_url'] = build_url
-
-            # img_url is only necessary for device builds
-            img_url = ARTIFACT_URL.format(
-                build_parameters['build_slugid'],
-                build_task['task']['extra']['locations'].get('img', '')
-            )
-            build_parameters['img_url'] = img_url
+            for url in build_task['task']['extra'].get('url', {}):
+                build_parameters['{}_url'.format(url)] = \
+                    build_task['task']['extra']['url'][url]
 
             define_task = DEFINE_TASK.format(build_task['task']['workerType'])
 
@@ -499,10 +523,10 @@ class Graph(object):
                     ))
                 all_routes[route] = build_task['task']['metadata']['name']
 
-            graph['scopes'].append(define_task)
-            graph['scopes'].extend(build_task['task'].get('scopes', []))
+            graph['scopes'].add(define_task)
+            graph['scopes'] |= set(build_task['task'].get('scopes', []))
             route_scopes = map(lambda route: 'queue:route:' + route, build_task['task'].get('routes', []))
-            graph['scopes'].extend(route_scopes)
+            graph['scopes'] |= set(route_scopes)
 
             # Treeherder symbol configuration for the graph required for each
             # build so tests know which platform they belong to.
@@ -525,24 +549,34 @@ class Graph(object):
 
             for post_build in build['post-build']:
                 # copy over the old parameters to update the template
-                post_parameters = copy.copy(build_parameters)
+                # TODO additional-parameters is currently not an option, only
+                # enabled for build tasks
+                post_parameters = merge_dicts(build_parameters,
+                                              post_build.get('additional-parameters', {}))
                 post_task = configure_dependent_task(post_build['task'],
                                                      post_parameters,
                                                      slugid(),
                                                      templates,
                                                      build_treeherder_config)
+                normalize_image_details(graph,
+                                        post_task,
+                                        seen_images,
+                                        build_parameters,
+                                        os.environ.get('TASK_ID', None))
                 set_interactive_task(post_task, interactive)
+                treeherder_transform.add_treeherder_revision_info(post_task['task'],
+                                                                  params['head_rev'],
+                                                                  params['revision_hash'])
                 graph['tasks'].append(post_task)
 
             for test in build['dependents']:
                 test = test['allowed_build_tasks'][build['task']]
+                # TODO additional-parameters is currently not an option, only
+                # enabled for build tasks
+                test_parameters = merge_dicts(build_parameters,
+                                              test.get('additional-parameters', {}))
                 test_parameters = copy.copy(build_parameters)
-                if tests_url:
-                    test_parameters['tests_url'] = tests_url
-                if test_packages_url:
-                    test_parameters['test_packages_url'] = test_packages_url
-                if mozharness_url:
-                    test_parameters['mozharness_url'] = mozharness_url
+
                 test_definition = templates.load(test['task'], {})['task']
                 chunk_config = test_definition['extra'].get('chunks', {})
 
@@ -571,22 +605,37 @@ class Graph(object):
                                                          slugid(),
                                                          templates,
                                                          build_treeherder_config)
+                    normalize_image_details(graph,
+                                            test_task,
+                                            seen_images,
+                                            build_parameters,
+                                            os.environ.get('TASK_ID', None))
                     set_interactive_task(test_task, interactive)
 
                     if params['revision_hash']:
-                        decorate_task_treeherder_routes(
-                                test_task['task'], treeherder_route)
+                        treeherder_transform.add_treeherder_revision_info(test_task['task'],
+                                                                          params['head_rev'],
+                                                                          params['revision_hash'])
+                        routes_transform.decorate_task_treeherder_routes(
+                            test_task['task'],
+                            treeherder_route
+                        )
 
-                    graph['tasks'].append(test_task)
+                    # This will schedule test jobs N times
+                    for i in range(0, trigger_tests):
+                        graph['tasks'].append(test_task)
+                        # If we're scheduling more tasks each have to be unique
+                        test_task = copy.deepcopy(test_task)
+                        test_task['taskId'] = slugid()
 
                     define_task = DEFINE_TASK.format(
                         test_task['task']['workerType']
                     )
 
-                    graph['scopes'].append(define_task)
-                    graph['scopes'].extend(test_task['task'].get('scopes', []))
+                    graph['scopes'].add(define_task)
+                    graph['scopes'] |= set(test_task['task'].get('scopes', []))
 
-        graph['scopes'] = list(set(graph['scopes']))
+        graph['scopes'] = sorted(graph['scopes'])
 
         if params['print_names_only']:
             tIDs = defaultdict(list)
@@ -614,7 +663,7 @@ class Graph(object):
             graph.pop('scopes', None)
             graph.pop('metadata', None)
 
-        print(json.dumps(graph, indent=4))
+        print(json.dumps(graph, indent=4, sort_keys=True))
 
 @CommandProvider
 class CIBuild(object):
@@ -633,6 +682,9 @@ class CIBuild(object):
     @CommandArgument('--owner',
         default='foobar@mozilla.com',
         help='email address of who owns this graph')
+    @CommandArgument('--level',
+        default="1",
+        help='SCM level of this repository')
     @CommandArgument('build_task',
         help='path to build task definition')
     @CommandArgument('--interactive',
@@ -643,6 +695,7 @@ class CIBuild(object):
         help="Run the task with the interactive feature enabled")
     def create_ci_build(self, **params):
         from taskcluster_graph.templates import Templates
+        from taskcluster_graph.image_builder import docker_image
         import taskcluster_graph.build_task
 
         templates = Templates(ROOT)
@@ -657,6 +710,12 @@ class CIBuild(object):
 
         head_ref = params['head_ref'] or head_rev
 
+        # Default to current time if querying the head rev fails
+        pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime())
+        vcs_info = query_vcs_info(params['head_repository'], params['head_rev'])
+        if vcs_info:
+            pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime(vcs_info.pushdate))
+
         from taskcluster_graph.from_now import (
             json_time_from_now,
             current_json_time,
@@ -664,12 +723,18 @@ class CIBuild(object):
         build_parameters = dict(gaia_info().items() + {
             'docker_image': docker_image,
             'owner': params['owner'],
+            'level': params['level'],
             'from_now': json_time_from_now,
             'now': current_json_time(),
             'base_repository': params['base_repository'] or head_repository,
             'head_repository': head_repository,
             'head_rev': head_rev,
             'head_ref': head_ref,
+            'pushdate': pushdate,
+            'pushtime': pushdate[8:],
+            'year': pushdate[0:4],
+            'month': pushdate[4:6],
+            'day': pushdate[6:8],
         }.items())
 
         try:

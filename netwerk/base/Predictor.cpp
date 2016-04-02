@@ -38,6 +38,7 @@
 #include "mozilla/Telemetry.h"
 
 #include "mozilla/net/NeckoCommon.h"
+#include "mozilla/net/NeckoParent.h"
 
 #include "LoadContextInfo.h"
 #include "mozilla/ipc/URIUtils.h"
@@ -595,7 +596,7 @@ Predictor::Init()
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<LoadContextInfo> lci =
-    new LoadContextInfo(false, false, OriginAttributes());
+    new LoadContextInfo(false, false, NeckoOriginAttributes());
 
   rv = cacheStorageService->DiskCacheStorage(lci, false,
                                              getter_AddRefs(mCacheDiskStorage));
@@ -637,7 +638,7 @@ public:
       // future.
       Preferences::SetBool(PREDICTOR_CLEANED_UP_PREF, true);
     }
-    return mIOThread->Shutdown();
+    return mIOThread->AsyncShutdown();
   }
 
 private:

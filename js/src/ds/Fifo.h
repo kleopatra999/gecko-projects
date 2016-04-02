@@ -9,6 +9,7 @@
 
 #include "mozilla/Move.h"
 
+#include "js/Utility.h"
 #include "js/Vector.h"
 
 namespace js {
@@ -35,7 +36,7 @@ class Fifo
     // An element A is "younger" than an element B if B was inserted into the
     // |Fifo| before A was.
     //
-    // Invariant 1: Every element within |front_| is younger than every element
+    // Invariant 1: Every element within |front_| is older than every element
     // within |rear_|.
     // Invariant 2: Entries within |front_| are sorted from younger to older.
     // Invariant 3: Entries within |rear_| are sorted from older to younger.

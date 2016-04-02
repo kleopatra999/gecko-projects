@@ -25,7 +25,8 @@
 #include "nsIContent.h"
 #include "nsPluginInstanceOwner.h"
 #include "nsWrapperCacheInlines.h"
-#include "js/HashTable.h"
+#include "js/GCHashTable.h"
+#include "js/TracingAPI.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/plugins/PluginAsyncSurrogate.h"
@@ -42,20 +43,32 @@ using namespace mozilla;
 using mozilla::plugins::PluginScriptableObjectParent;
 using mozilla::plugins::ParentNPObject;
 
-struct JSObjWrapperHasher : public js::DefaultHasher<nsJSObjWrapperKey>
+struct JSObjWrapperHasher
 {
   typedef nsJSObjWrapperKey Key;
   typedef Key Lookup;
 
   static uint32_t hash(const Lookup &l) {
-    return HashGeneric(l.mJSObj, l.mNpp);
+    return js::MovableCellHasher<JS::Heap<JSObject*>>::hash(l.mJSObj) ^
+           HashGeneric(l.mNpp);
   }
 
-  static void rekey(Key &k, const Key& newKey) {
-    MOZ_ASSERT(k.mNpp == newKey.mNpp);
-    k.mJSObj = newKey.mJSObj;
+  static bool match(const Key& k, const Lookup &l) {
+      return js::MovableCellHasher<JS::Heap<JSObject*>>::match(k.mJSObj, l.mJSObj) &&
+             k.mNpp == l.mNpp;
   }
 };
+
+namespace js {
+template <>
+struct GCPolicy<nsJSObjWrapper*> {
+    static void trace(JSTracer* trc, nsJSObjWrapper** wrapper, const char* name) {
+        MOZ_ASSERT(wrapper);
+        MOZ_ASSERT(*wrapper);
+        (*wrapper)->trace(trc);
+    }
+};
+} // namespace js
 
 class NPObjWrapperHashEntry : public PLDHashEntryHdr
 {
@@ -72,10 +85,10 @@ public:
 // when a plugin is torn down in case there's a leak in the plugin (we
 // don't want to leak the world just because a plugin leaks an
 // NPObject).
-typedef js::HashMap<nsJSObjWrapperKey,
-                    nsJSObjWrapper*,
-                    JSObjWrapperHasher,
-                    js::SystemAllocPolicy> JSObjWrapperTable;
+typedef js::GCHashMap<nsJSObjWrapperKey,
+                      nsJSObjWrapper*,
+                      JSObjWrapperHasher,
+                      js::SystemAllocPolicy> JSObjWrapperTable;
 static JSObjWrapperTable sJSObjWrappers;
 
 // Whether it's safe to iterate sJSObjWrappers.  Set to true when sJSObjWrappers
@@ -118,28 +131,30 @@ NPObjectIsOutOfProcessProxy(NPObject *obj)
 
 } // namespace
 
-// Helper class that reports any JS exceptions that were thrown while
-// the plugin executed JS.
+// Helper class that suppresses any JS exceptions that were thrown while
+// the plugin executed JS, if the nsJSObjWrapper has a destroy pending.
+// Note that this class is the product (vestige?) of a long evolution in how
+// error reporting worked, and hence the mIsDestroyPending check, and hence this
+// class in general, may or may not actually be necessary.
 
-class MOZ_STACK_CLASS AutoJSExceptionReporter
+class MOZ_STACK_CLASS AutoJSExceptionSuppressor
 {
 public:
-  AutoJSExceptionReporter(dom::AutoJSAPI& jsapi, nsJSObjWrapper* aWrapper)
-    : mJsapi(jsapi)
+  AutoJSExceptionSuppressor(dom::AutoEntryScript& aes, nsJSObjWrapper* aWrapper)
+    : mAes(aes)
     , mIsDestroyPending(aWrapper->mDestroyPending)
   {
-    jsapi.TakeOwnershipOfErrorReporting();
   }
 
-  ~AutoJSExceptionReporter()
+  ~AutoJSExceptionSuppressor()
   {
     if (mIsDestroyPending) {
-      mJsapi.ClearException();
+      mAes.ClearException();
     }
   }
 
 protected:
-  dom::AutoJSAPI& mJsapi;
+  dom::AutoEntryScript& mAes;
   bool mIsDestroyPending;
 };
 
@@ -203,6 +218,20 @@ CreateNPObjectMember(NPP npp, JSContext *cx, JSObject *obj, NPObject* npobj,
                      JS::Handle<jsid> id,  NPVariant* getPropertyResult,
                      JS::MutableHandle<JS::Value> vp);
 
+const static js::ObjectOps sNPObjectJSWrapperObjectOps = {
+    nullptr, // lookupProperty
+    nullptr, // defineProperty
+    nullptr, // hasProperty
+    nullptr, // getProperty
+    nullptr, // setProperty
+    nullptr, // getOwnPropertyDescriptor
+    nullptr, // deleteProperty
+    nullptr, nullptr, // watch/unwatch
+    nullptr, // getElements
+    NPObjWrapper_Enumerate,
+    nullptr,
+};
+
 const static js::Class sNPObjectJSWrapperClass =
   {
     NPRUNTIME_JSCLASS_NAME,
@@ -225,19 +254,7 @@ const static js::Class sNPObjectJSWrapperClass =
       nullptr,                                              /* weakmapKeyDelegateOp */
       NPObjWrapper_ObjectMoved
     },
-    {
-        nullptr, // lookupProperty
-        nullptr, // defineProperty
-        nullptr, // hasProperty
-        nullptr, // getProperty
-        nullptr, // setProperty
-        nullptr, // getOwnPropertyDescriptor
-        nullptr, // deleteProperty
-        nullptr, nullptr, // watch/unwatch
-        nullptr, // getElements
-        NPObjWrapper_Enumerate,
-        nullptr,
-    }
+    &sNPObjectJSWrapperObjectOps
   };
 
 typedef struct NPObjectMemberPrivate {
@@ -278,22 +295,8 @@ OnWrapperDestroyed();
 static void
 TraceJSObjWrappers(JSTracer *trc, void *data)
 {
-  if (!sJSObjWrappers.initialized()) {
-    return;
-  }
-
-  // Trace all JSObjects in the sJSObjWrappers table and rekey the entries if
-  // any of them moved.
-  for (JSObjWrapperTable::Enum e(sJSObjWrappers); !e.empty(); e.popFront()) {
-    nsJSObjWrapperKey key = e.front().key();
-    JS_CallUnbarrieredObjectTracer(trc, &key.mJSObj, "sJSObjWrappers key object");
-    nsJSObjWrapper *wrapper = e.front().value();
-    if (wrapper->mJSObj) {
-      JS_CallObjectTracer(trc, &wrapper->mJSObj, "sJSObjWrappers wrapper object");
-    }
-    if (key != e.front().key()) {
-      e.rekeyFront(key);
-    }
+  if (sJSObjWrappers.initialized()) {
+    sJSObjWrappers.trace(trc);
   }
 }
 
@@ -729,11 +732,13 @@ bool
 nsJSObjWrapper::NP_HasMethod(NPObject *npobj, NPIdentifier id)
 {
   NPP npp = NPPStack::Peek();
-  dom::AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.InitWithLegacyErrorReporting(GetGlobalObject(npp)))) {
+  nsIGlobalObject* globalObject = GetGlobalObject(npp);
+  if (NS_WARN_IF(!globalObject)) {
     return false;
   }
-  JSContext *cx = jsapi.cx();
+
+  dom::AutoEntryScript aes(globalObject, "NPAPI HasMethod");
+  JSContext *cx = aes.cx();
 
   if (!npobj) {
     ThrowJSException(cx,
@@ -746,7 +751,7 @@ nsJSObjWrapper::NP_HasMethod(NPObject *npobj, NPIdentifier id)
 
   JSAutoCompartment ac(cx, npjsobj->mJSObj);
 
-  AutoJSExceptionReporter reporter(jsapi, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
 
   JS::Rooted<JS::Value> v(cx);
   bool ok = GetProperty(cx, npjsobj->mJSObj, id, &v);
@@ -786,7 +791,7 @@ doInvoke(NPObject *npobj, NPIdentifier method, const NPVariant *args,
   JSAutoCompartment ac(cx, jsobj);
   JS::Rooted<JS::Value> fv(cx);
 
-  AutoJSExceptionReporter reporter(aes, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
 
   if (method != NPIdentifier_VOID) {
     if (!GetProperty(cx, jsobj, method, &fv) ||
@@ -855,11 +860,13 @@ bool
 nsJSObjWrapper::NP_HasProperty(NPObject *npobj, NPIdentifier npid)
 {
   NPP npp = NPPStack::Peek();
-  dom::AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.InitWithLegacyErrorReporting(GetGlobalObject(npp)))) {
+  nsIGlobalObject* globalObject = GetGlobalObject(npp);
+  if (NS_WARN_IF(!globalObject)) {
     return false;
   }
-  JSContext *cx = jsapi.cx();
+
+  dom::AutoEntryScript aes(globalObject, "NPAPI HasProperty");
+  JSContext *cx = aes.cx();
 
   if (!npobj) {
     ThrowJSException(cx,
@@ -871,7 +878,7 @@ nsJSObjWrapper::NP_HasProperty(NPObject *npobj, NPIdentifier npid)
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
   bool found, ok = false;
 
-  AutoJSExceptionReporter reporter(jsapi, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, jsobj);
 
@@ -908,7 +915,7 @@ nsJSObjWrapper::NP_GetProperty(NPObject *npobj, NPIdentifier id,
 
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
-  AutoJSExceptionReporter reporter(aes, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JSAutoCompartment ac(cx, npjsobj->mJSObj);
 
   JS::Rooted<JS::Value> v(cx);
@@ -943,7 +950,7 @@ nsJSObjWrapper::NP_SetProperty(NPObject *npobj, NPIdentifier npid,
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
   bool ok = false;
 
-  AutoJSExceptionReporter reporter(aes, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsObj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, jsObj);
 
@@ -962,11 +969,13 @@ bool
 nsJSObjWrapper::NP_RemoveProperty(NPObject *npobj, NPIdentifier npid)
 {
   NPP npp = NPPStack::Peek();
-  dom::AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.InitWithLegacyErrorReporting(GetGlobalObject(npp)))) {
+  nsIGlobalObject* globalObject = GetGlobalObject(npp);
+  if (NS_WARN_IF(!globalObject)) {
     return false;
   }
-  JSContext *cx = jsapi.cx();
+
+  dom::AutoEntryScript aes(globalObject, "NPAPI RemoveProperty");
+  JSContext *cx = aes.cx();
 
   if (!npobj) {
     ThrowJSException(cx,
@@ -977,7 +986,7 @@ nsJSObjWrapper::NP_RemoveProperty(NPObject *npobj, NPIdentifier npid)
 
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
-  AutoJSExceptionReporter reporter(jsapi, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::ObjectOpResult result;
   JS::Rooted<JSObject*> obj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, obj);
@@ -1011,11 +1020,13 @@ nsJSObjWrapper::NP_Enumerate(NPObject *npobj, NPIdentifier **idarray,
                              uint32_t *count)
 {
   NPP npp = NPPStack::Peek();
-  dom::AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.InitWithLegacyErrorReporting(GetGlobalObject(npp)))) {
+  nsIGlobalObject* globalObject = GetGlobalObject(npp);
+  if (NS_WARN_IF(!globalObject)) {
     return false;
   }
-  JSContext *cx = jsapi.cx();
+
+  dom::AutoEntryScript aes(globalObject, "NPAPI Enumerate");
+  JSContext *cx = aes.cx();
 
   *idarray = 0;
   *count = 0;
@@ -1029,7 +1040,7 @@ nsJSObjWrapper::NP_Enumerate(NPObject *npobj, NPIdentifier **idarray,
 
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
 
-  AutoJSExceptionReporter reporter(jsapi, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, jsobj);
 
@@ -1079,33 +1090,6 @@ nsJSObjWrapper::NP_Construct(NPObject *npobj, const NPVariant *args,
                              uint32_t argCount, NPVariant *result)
 {
   return doInvoke(npobj, NPIdentifier_VOID, args, argCount, true, result);
-}
-
-
-
-/*
- * This function is called during minor GCs for each key in the sJSObjWrappers
- * table that has been moved.
- *
- * Note that the wrapper may be dead at this point, and even the table may have
- * been finalized if all wrappers have died.
- */
-static void
-JSObjWrapperKeyMarkCallback(JSTracer *trc, JSObject *obj, void *data) {
-  NPP npp = static_cast<NPP>(data);
-  MOZ_ASSERT(sJSObjWrappersAccessible);
-  if (!sJSObjWrappers.initialized())
-    return;
-
-  JSObject *prior = obj;
-  nsJSObjWrapperKey oldKey(prior, npp);
-  JSObjWrapperTable::Ptr p = sJSObjWrappers.lookup(oldKey);
-  if (!p)
-    return;
-
-  JS_CallUnbarrieredObjectTracer(trc, &obj, "sJSObjWrappers key object");
-  nsJSObjWrapperKey newKey(obj, npp);
-  sJSObjWrappers.rekeyIfMoved(oldKey, newKey);
 }
 
 // Look up or create an NPObject that wraps the JSObject obj.
@@ -1193,15 +1177,11 @@ nsJSObjWrapper::GetNewOrUsed(NPP npp, JSContext *cx, JS::Handle<JSObject*> obj)
 
   // Insert the new wrapper into the hashtable, rooting the JSObject. Its
   // lifetime is now tied to that of the NPObject.
-  nsJSObjWrapperKey key(obj, npp);
-  if (!sJSObjWrappers.putNew(key, wrapper)) {
+  if (!sJSObjWrappers.putNew(nsJSObjWrapperKey(obj, npp), wrapper)) {
     // Out of memory, free the wrapper we created.
     _releaseobject(wrapper);
     return nullptr;
   }
-
-  // Add postbarrier for the hashtable key
-  JS_StoreObjectPostBarrierCallback(cx, JSObjWrapperKeyMarkCallback, obj, wrapper->mNpp);
 
   return wrapper;
 }
@@ -1678,6 +1658,8 @@ NPObjWrapper_Resolve(JSContext *cx, JS::Handle<JSObject*> obj, JS::Handle<jsid> 
   if (JSID_IS_SYMBOL(id))
     return true;
 
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::JS);
+
   NPObject *npobj = GetNPObject(cx, obj);
 
   if (!npobj || !npobj->_class || !npobj->_class->hasProperty ||
@@ -1935,8 +1917,9 @@ nsNPObjWrapper::GetNewOrUsed(NPP npp, JSContext *cx, NPObject *npobj)
       // Reload entry if the JS_NewObject call caused a GC and reallocated
       // the table (see bug 445229). This is guaranteed to succeed.
 
-      NS_ASSERTION(sNPObjWrappers->Search(npobj),
-                   "Hashtable didn't find what we just added?");
+      entry =
+         static_cast<NPObjWrapperHashEntry*>(sNPObjWrappers->Search(npobj));
+      NS_ASSERTION(entry, "Hashtable didn't find what we just added?");
   }
 
   if (!obj) {
@@ -2142,6 +2125,8 @@ static bool
 NPObjectMember_GetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                            JS::MutableHandleValue vp)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+
   if (JSID_IS_SYMBOL(id)) {
     JS::RootedSymbol sym(cx, JSID_TO_SYMBOL(id));
     if (JS::GetSymbolCode(sym) == JS::SymbolCode::toPrimitive) {
@@ -2260,21 +2245,16 @@ NPObjectMember_Trace(JSTracer *trc, JSObject *obj)
   if (!memberPrivate)
     return;
 
-  // Our NPIdentifier is not always interned, so we must root it explicitly.
-  JS_CallIdTracer(trc, &memberPrivate->methodName, "NPObjectMemberPrivate.methodName");
+  // Our NPIdentifier is not always interned, so we must trace it.
+  JS::TraceEdge(trc, &memberPrivate->methodName, "NPObjectMemberPrivate.methodName");
 
-  if (!memberPrivate->fieldValue.isPrimitive()) {
-    JS_CallValueTracer(trc, &memberPrivate->fieldValue,
-                       "NPObject Member => fieldValue");
-  }
+  JS::TraceEdge(trc, &memberPrivate->fieldValue, "NPObject Member => fieldValue");
 
   // There's no strong reference from our private data to the
   // NPObject, so make sure to mark the NPObject wrapper to keep the
   // NPObject alive as long as this NPObjectMember is alive.
-  if (memberPrivate->npobjWrapper) {
-    JS_CallObjectTracer(trc, &memberPrivate->npobjWrapper,
-                        "NPObject Member => npobjWrapper");
-  }
+  JS::TraceEdge(trc, &memberPrivate->npobjWrapper,
+                "NPObject Member => npobjWrapper");
 }
 
 static bool
@@ -2312,11 +2292,13 @@ bool
 nsJSObjWrapper::HasOwnProperty(NPObject *npobj, NPIdentifier npid)
 {
   NPP npp = NPPStack::Peek();
-  dom::AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.InitWithLegacyErrorReporting(GetGlobalObject(npp)))) {
+  nsIGlobalObject* globalObject = GetGlobalObject(npp);
+  if (NS_WARN_IF(!globalObject)) {
     return false;
   }
-  JSContext *cx = jsapi.cx();
+
+  dom::AutoEntryScript aes(globalObject, "NPAPI HasOwnProperty");
+  JSContext *cx = aes.cx();
 
   if (!npobj) {
     ThrowJSException(cx,
@@ -2328,7 +2310,7 @@ nsJSObjWrapper::HasOwnProperty(NPObject *npobj, NPIdentifier npid)
   nsJSObjWrapper *npjsobj = (nsJSObjWrapper *)npobj;
   bool found, ok = false;
 
-  AutoJSExceptionReporter reporter(jsapi, npjsobj);
+  AutoJSExceptionSuppressor suppressor(aes, npjsobj);
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, jsobj);
 

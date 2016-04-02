@@ -21,9 +21,11 @@
 #include "IMFYCbCrImage.h"
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 #include "nsPrintfCString.h"
+#include "MediaTelemetryConstants.h"
 
-extern PRLogModuleInfo* GetPDMLog();
+extern mozilla::LogModule* GetPDMLog();
 #define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 using mozilla::layers::Image;
@@ -78,6 +80,9 @@ WMFVideoMFTManager::WMFVideoMFTManager(
   , mImageContainer(aImageContainer)
   , mDXVAEnabled(aDXVAEnabled)
   , mLayersBackend(aLayersBackend)
+  , mNullOutputCount(0)
+  , mGotValidOutputAfterNullOutput(false)
+  , mGotExcessiveNullOutput(false)
   // mVideoStride, mVideoWidth, mVideoHeight, mUseHwAccel are initialized in
   // Init().
 {
@@ -103,6 +108,20 @@ WMFVideoMFTManager::~WMFVideoMFTManager()
   if (mDXVA2Manager) {
     DeleteOnMainThread(mDXVA2Manager);
   }
+
+  // Record whether the video decoder successfully decoded, or output null
+  // samples but did/didn't recover.
+  uint32_t telemetry = (mNullOutputCount == 0) ? 0 :
+                       (mGotValidOutputAfterNullOutput && mGotExcessiveNullOutput) ? 1 :
+                       mGotExcessiveNullOutput ? 2 :
+                       mGotValidOutputAfterNullOutput ? 3 :
+                       4;
+
+  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([=]() -> void {
+    LOG(nsPrintfCString("Reporting telemetry VIDEO_MFT_OUTPUT_NULL_SAMPLES=%d", telemetry).get());
+    Telemetry::Accumulate(Telemetry::ID::VIDEO_MFT_OUTPUT_NULL_SAMPLES, telemetry);
+  });
+  AbstractThread::MainThread()->Dispatch(task.forget());
 }
 
 const GUID&
@@ -138,13 +157,23 @@ public:
 
   NS_IMETHOD Run() {
     NS_ASSERTION(NS_IsMainThread(), "Must be on main thread.");
+    nsACString* failureReason = &mFailureReason;
+    nsCString secondFailureReason;
     if (mBackend == LayersBackend::LAYERS_D3D11 &&
-        Preferences::GetBool("media.windows-media-foundation.allow-d3d11-dxva", false) &&
+        Preferences::GetBool("media.windows-media-foundation.allow-d3d11-dxva", true) &&
         IsWin8OrLater()) {
-      mDXVA2Manager = DXVA2Manager::CreateD3D11DXVA(mFailureReason);
-    } else {
-      mDXVA2Manager = DXVA2Manager::CreateD3D9DXVA(mFailureReason);
+      mDXVA2Manager = DXVA2Manager::CreateD3D11DXVA(*failureReason);
+      if (mDXVA2Manager) {
+        return NS_OK;
+      }
+      // Try again with d3d9, but record the failure reason
+      // into a new var to avoid overwriting the d3d11 failure.
+      failureReason = &secondFailureReason;
+      mFailureReason.Append(NS_LITERAL_CSTRING("; "));
     }
+    mDXVA2Manager = DXVA2Manager::CreateD3D9DXVA(*failureReason);
+    // Make sure we include the messages from both attempts (if applicable).
+    mFailureReason.Append(secondFailureReason);
     return NS_OK;
   }
   nsAutoPtr<DXVA2Manager> mDXVA2Manager;
@@ -188,14 +217,14 @@ WMFVideoMFTManager::Init()
 {
   bool success = InitInternal(/* aForceD3D9 = */ false);
 
-  // If initialization failed with d3d11 DXVA then try falling back
-  // to d3d9.
-  if (!success && mDXVA2Manager && mDXVA2Manager->IsD3D11()) {
-    mDXVA2Manager = nullptr;
-    nsCString d3d11Failure = mDXVAFailureReason;
-    success = InitInternal(true);
-    mDXVAFailureReason.Append(NS_LITERAL_CSTRING("; "));
-    mDXVAFailureReason.Append(d3d11Failure);
+  if (success && mDXVA2Manager) {
+    // If we had some failures but eventually made it work,
+    // make sure we preserve the messages.
+    if (mDXVA2Manager->IsD3D11()) {
+      mDXVAFailureReason.Append(NS_LITERAL_CSTRING("Using D3D11 API"));
+    } else {
+      mDXVAFailureReason.Append(NS_LITERAL_CSTRING("Using D3D9 API"));
+    }
   }
 
   return success;
@@ -246,6 +275,11 @@ WMFVideoMFTManager::InitInternal(bool aForceD3D9)
     else {
       mDXVAFailureReason.AssignLiteral("Decoder returned false for MF_SA_D3D_AWARE");
     }
+  }
+
+  if (!mUseHwAccel) {
+    Telemetry::Accumulate(Telemetry::MEDIA_DECODER_BACKEND_USED,
+                          uint32_t(media::MediaDecoderBackend::WMFSoftware));
   }
 
   mDecoder = decoder;
@@ -367,12 +401,8 @@ WMFVideoMFTManager::ConfigureVideoFrameGeometry()
   NS_ENSURE_TRUE(videoFormat == MFVideoFormat_NV12 || !mUseHwAccel, E_FAIL);
   NS_ENSURE_TRUE(videoFormat == MFVideoFormat_YV12 || mUseHwAccel, E_FAIL);
 
-  UINT32 width = 0, height = 0;
-  hr = MFGetAttributeSize(mediaType, MF_MT_FRAME_SIZE, &width, &height);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
-
-  mVideoInfo.mImage.width = width;
-  mVideoInfo.mImage.height = height;
+  UINT32 width = mVideoInfo.mImage.width;
+  UINT32 height = mVideoInfo.mImage.height;
   nsIntRect pictureRegion = mVideoInfo.mImage;
   // Calculate and validate the picture region and frame dimensions after
   // scaling by the pixel aspect ratio.
@@ -579,6 +609,23 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset,
       continue;
     }
     if (SUCCEEDED(hr)) {
+      if (!sample) {
+        LOG("Video MFTDecoder returned success but no output!");
+        // On some machines/input the MFT returns success but doesn't output
+        // a video frame. If we detect this, try again, but only up to a
+        // point; after 250 failures, give up. Note we count all failures
+        // over the life of the decoder, as we may end up exiting with a
+        // NEED_MORE_INPUT and coming back to hit the same error. So just
+        // counting with a local variable (like typeChangeCount does) may
+        // not work in this situation.
+        ++mNullOutputCount;
+        if (mNullOutputCount > 250) {
+          LOG("Excessive Video MFTDecoder returning success but no output; giving up");
+          mGotExcessiveNullOutput = true;
+          return E_FAIL;
+        }
+        continue;
+      }
       break;
     }
     // Else unexpected error, assert, and bail.
@@ -599,6 +646,10 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset,
 
   aOutData = frame;
 
+  if (mNullOutputCount) {
+    mGotValidOutputAfterNullOutput = true;
+  }
+
   return S_OK;
 }
 
@@ -614,6 +665,17 @@ WMFVideoMFTManager::IsHardwareAccelerated(nsACString& aFailureReason) const
 {
   aFailureReason = mDXVAFailureReason;
   return mDecoder && mUseHwAccel;
+}
+
+const char*
+WMFVideoMFTManager::GetDescriptionName() const
+{
+  if (mDecoder && mUseHwAccel && mDXVA2Manager) {
+    return (mDXVA2Manager->IsD3D11()) ?
+      "D3D11 Hardware Decoder" : "D3D9 Hardware Decoder";
+  } else {
+    return "wmf software video decoder";
+  }
 }
 
 void

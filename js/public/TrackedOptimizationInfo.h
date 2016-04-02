@@ -25,6 +25,8 @@ namespace JS {
     _(GetProp_InlineAccess)                             \
     _(GetProp_Innerize)                                 \
     _(GetProp_InlineCache)                              \
+    _(GetProp_SharedCache)                              \
+    _(GetProp_ModuleNamespace)                          \
                                                         \
     _(SetProp_CommonSetter)                             \
     _(SetProp_TypedObject)                              \
@@ -48,6 +50,12 @@ namespace JS {
     _(SetElem_Dense)                                    \
     _(SetElem_Arguments)                                \
     _(SetElem_InlineCache)                              \
+                                                        \
+    _(BinaryArith_Concat)                               \
+    _(BinaryArith_SpecializedTypes)                     \
+    _(BinaryArith_SpecializedOnBaselineTypes)           \
+    _(BinaryArith_SharedCache)                          \
+    _(BinaryArith_Call)                                 \
                                                         \
     _(InlineCache_OptimizedStub)                        \
                                                         \
@@ -86,13 +94,17 @@ namespace JS {
     _(ArrayDoubleConversion)                                            \
     _(ArrayRange)                                                       \
     _(ArraySeenNegativeIndex)                                           \
-    _(TypedObjectNeutered)                                              \
+    _(TypedObjectHasDetachedBuffer)                                     \
     _(TypedObjectArrayRange)                                            \
     _(AccessNotDense)                                                   \
     _(AccessNotSimdObject)                                              \
     _(AccessNotTypedObject)                                             \
     _(AccessNotTypedArray)                                              \
     _(AccessNotString)                                                  \
+    _(OperandNotString)                                                 \
+    _(OperandNotNumber)                                                 \
+    _(OperandNotStringOrNumber)                                         \
+    _(OperandNotSimpleArith)                                            \
     _(StaticTypedArrayUint32)                                           \
     _(StaticTypedArrayCantComputeMask)                                  \
     _(OutOfBounds)                                                      \
@@ -103,6 +115,8 @@ namespace JS {
     _(NoSimdJitSupport)                                                 \
     _(SimdTypeNotOptimized)                                             \
     _(UnknownSimdProperty)                                              \
+    _(NotModuleNamespace)                                               \
+    _(UnknownProperty)                                                  \
                                                                         \
     _(ICOptStub_GenericSuccess)                                         \
                                                                         \
@@ -140,6 +154,7 @@ namespace JS {
                                                                         \
     _(ICNameStub_ReadSlot)                                              \
     _(ICNameStub_CallGetter)                                            \
+    _(ICNameStub_TypeOfNoProperty)                                      \
                                                                         \
     _(CantInlineGeneric)                                                \
     _(CantInlineNoTarget)                                               \
@@ -176,6 +191,7 @@ namespace JS {
 
 #define TRACKED_TYPESITE_LIST(_)                \
     _(Receiver)                                 \
+    _(Operand)                                  \
     _(Index)                                    \
     _(Value)                                    \
     _(Call_Target)                              \

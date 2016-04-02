@@ -157,7 +157,7 @@ BOOL PathGetSiblingFilePath(LPWSTR destinationBuffer,
 // declare it here to avoid including that entire header file.
 #define BZ2_CRC32TABLE_UNDECLARED
 
-#if MOZ_IS_GCC
+#if MOZ_IS_GCC || defined(__clang__)
 extern "C"  __attribute__((visibility("default"))) unsigned int BZ2_crc32Table[256];
 #undef BZ2_CRC32TABLE_UNDECLARED
 #elif defined(__SUNPRO_C) || defined(__SUNPRO_CC)
@@ -3219,7 +3219,24 @@ int NS_main(int argc, NS_tchar **argv)
                    sizeof(gCallbackBackupPath)/sizeof(gCallbackBackupPath[0]),
                    NS_T("%s" CALLBACK_BACKUP_EXT), argv[callbackIndex]);
       NS_tremove(gCallbackBackupPath);
-      CopyFileW(argv[callbackIndex], gCallbackBackupPath, false);
+      if(!CopyFileW(argv[callbackIndex], gCallbackBackupPath, true)) {
+        DWORD copyFileError = GetLastError();
+        LOG(("NS_main: failed to copy callback file " LOG_S
+             " into place at " LOG_S, argv[callbackIndex], gCallbackBackupPath));
+        LogFinish();
+        if (copyFileError == ERROR_ACCESS_DENIED) {
+          WriteStatusFile(WRITE_ERROR_ACCESS_DENIED);
+        } else {
+          WriteStatusFile(WRITE_ERROR_CALLBACK_APP);
+        }
+
+        EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 1);
+        LaunchCallbackApp(argv[callbackIndex],
+                          argc - callbackIndex,
+                          argv + callbackIndex,
+                          sUsingService);
+        return 1;
+      }
 
       // Since the process may be signaled as exited by WaitForSingleObject before
       // the release of the executable image try to lock the main executable file
@@ -3721,6 +3738,7 @@ int add_dir_entries(const NS_tchar *dirpath, ActionList *list)
         LOG(("add_dir_entries: found a non-standard file: " LOG_S,
              ftsdirEntry->fts_path));
         // Fall through and try to remove as a file
+        MOZ_FALLTHROUGH;
 
       // Files
       case FTS_F:
@@ -3767,7 +3785,7 @@ int add_dir_entries(const NS_tchar *dirpath, ActionList *list)
           rv = OK;
           break;
         }
-        // Fall through
+        MOZ_FALLTHROUGH;
 
       case FTS_ERR:
         rv = UNEXPECTED_FILE_OPERATION_ERROR;

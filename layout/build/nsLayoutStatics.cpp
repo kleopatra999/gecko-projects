@@ -97,14 +97,6 @@
 #include "AndroidMediaPluginHost.h"
 #endif
 
-#ifdef MOZ_GSTREAMER
-#include "GStreamerFormatHelper.h"
-#endif
-
-#ifdef MOZ_FFMPEG
-#include "FFmpegRuntimeLinker.h"
-#endif
-
 #include "CubebUtils.h"
 #include "Latency.h"
 #include "WebAudioUtils.h"
@@ -139,6 +131,10 @@ using namespace mozilla::system;
 #include "MediaDecoder.h"
 #include "mozilla/layers/CompositorLRU.h"
 #include "mozilla/dom/devicestorage/DeviceStorageStatics.h"
+
+#ifdef MOZ_B2G_BT
+#include "mozilla/dom/BluetoothUUID.h"
+#endif
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -265,6 +261,7 @@ nsLayoutStatics::Initialize()
   }
 
   AsyncLatencyLogger::InitializeStatics();
+  MediaManager::StartupInit();
   CubebUtils::InitLibrary();
 
   nsContentSink::InitializeStatics();
@@ -397,14 +394,6 @@ nsLayoutStatics::Shutdown()
   AndroidMediaPluginHost::Shutdown();
 #endif
 
-#ifdef MOZ_GSTREAMER
-  GStreamerFormatHelper::Shutdown();
-#endif
-
-#ifdef MOZ_FFMPEG
-  FFmpegRuntimeLinker::Unlink();
-#endif
-
   CubebUtils::ShutdownLibrary();
   AsyncLatencyLogger::ShutdownLogger();
   WebAudioUtils::Shutdown();
@@ -455,4 +444,8 @@ nsLayoutStatics::Shutdown()
   CameraPreferences::Shutdown();
 
   PromiseDebugging::Shutdown();
+
+#ifdef MOZ_B2G_BT
+  BluetoothUUID::HandleShutdown();
+#endif
 }

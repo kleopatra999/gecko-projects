@@ -182,7 +182,7 @@ nsListControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
  * @param aPt the offset of this frame, relative to the rendering reference
  * frame
  */
-void nsListControlFrame::PaintFocus(nsRenderingContext& aRC, nsPoint aPt)
+void nsListControlFrame::PaintFocus(DrawTarget* aDrawTarget, nsPoint aPt)
 {
   if (mFocused != this) return;
 
@@ -232,7 +232,7 @@ void nsListControlFrame::PaintFocus(nsRenderingContext& aRC, nsPoint aPt)
                             LookAndFeel::eColorID_WidgetSelectForeground :
                             LookAndFeel::eColorID_WidgetSelectBackground);
 
-  nsCSSRendering::PaintFocus(presContext, aRC, fRect, color);
+  nsCSSRendering::PaintFocus(presContext, aDrawTarget, fRect, color);
 }
 
 void
@@ -265,13 +265,14 @@ static nscoord
 GetMaxOptionBSize(nsIFrame* aContainer, WritingMode aWM)
 {
   nscoord result = 0;
-  for (nsIFrame* option = aContainer->GetFirstPrincipalChild();
-       option; option = option->GetNextSibling()) {
+  for (nsIFrame* option : aContainer->PrincipalChildList()) {
     nscoord optionBSize;
     if (nsCOMPtr<nsIDOMHTMLOptGroupElement>
         (do_QueryInterface(option->GetContent()))) {
-      // An optgroup; drill through any scroll frame and recurse.
-      optionBSize = GetMaxOptionBSize(option->GetContentInsertionFrame(), aWM);
+      // An optgroup; drill through any scroll frame and recurse.  |frame| might
+      // be null here though if |option| is an anonymous leaf frame of some sort.
+      auto frame = option->GetContentInsertionFrame();
+      optionBSize = frame ? GetMaxOptionBSize(frame, aWM) : 0;
     } else {
       // an option
       optionBSize = option->BSize(aWM);
@@ -558,7 +559,7 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
   // rules applied to the combobox dropdown.
 
   mDropdownCanGrow = false;
-  if (visibleBSize <= 0 || blockSizeOfARow <= 0) {
+  if (visibleBSize <= 0 || blockSizeOfARow <= 0 || XRE_IsContentProcess()) {
     // Looks like we have no options.  Just size us to a single row
     // block size.
     state.SetComputedBSize(blockSizeOfARow);
@@ -930,11 +931,13 @@ void
 nsListControlFrame::SetInitialChildList(ChildListID    aListID,
                                         nsFrameList&   aChildList)
 {
-  // First check to see if all the content has been added
-  mIsAllContentHere = mContent->IsDoneAddingChildren();
-  if (!mIsAllContentHere) {
-    mIsAllFramesHere    = false;
-    mHasBeenInitialized = false;
+  if (aListID == kPrincipalList) {
+    // First check to see if all the content has been added
+    mIsAllContentHere = mContent->IsDoneAddingChildren();
+    if (!mIsAllContentHere) {
+      mIsAllFramesHere    = false;
+      mHasBeenInitialized = false;
+    }
   }
   nsHTMLScrollFrame::SetInitialChildList(aListID, aChildList);
 
@@ -1548,16 +1551,9 @@ nsListControlFrame::IsLeftButton(nsIDOMEvent* aMouseEvent)
 nscoord
 nsListControlFrame::CalcFallbackRowBSize(float aFontSizeInflation)
 {
-  nscoord rowBSize = 0;
-
-  RefPtr<nsFontMetrics> fontMet;
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet),
-                                        aFontSizeInflation);
-  if (fontMet) {
-    rowBSize = fontMet->MaxHeight();
-  }
-
-  return rowBSize;
+  RefPtr<nsFontMetrics> fontMet =
+    nsLayoutUtils::GetFontMetricsForFrame(this, aFontSizeInflation);
+  return fontMet->MaxHeight();
 }
 
 nscoord
@@ -1640,7 +1636,7 @@ nsListControlFrame::MouseUp(nsIDOMEvent* aMouseEvent)
     // So we cheat here by either setting or unsetting the clcikCount in the native event
     // so the right thing happens for the onclick event
     WidgetMouseEvent* mouseEvent =
-      aMouseEvent->GetInternalNSEvent()->AsMouseEvent();
+      aMouseEvent->WidgetEventPtr()->AsMouseEvent();
 
     int32_t selectedIndex;
     if (NS_SUCCEEDED(GetIndexFromDOMEvent(aMouseEvent, selectedIndex))) {
@@ -2094,7 +2090,7 @@ nsListControlFrame::KeyDown(nsIDOMEvent* aKeyEvent)
   // XXXmats in onkeydown. That seems sub-optimal though.
 
   const WidgetKeyboardEvent* keyEvent =
-    aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    aKeyEvent->WidgetEventPtr()->AsKeyboardEvent();
   MOZ_ASSERT(keyEvent,
     "DOM event must have WidgetKeyboardEvent for its internal event");
 
@@ -2247,7 +2243,7 @@ nsListControlFrame::KeyPress(nsIDOMEvent* aKeyEvent)
   AutoIncrementalSearchResetter incrementalSearchResetter;
 
   const WidgetKeyboardEvent* keyEvent =
-    aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    aKeyEvent->WidgetEventPtr()->AsKeyboardEvent();
   MOZ_ASSERT(keyEvent,
     "DOM event must have WidgetKeyboardEvent for its internal event");
 
@@ -2255,7 +2251,7 @@ nsListControlFrame::KeyPress(nsIDOMEvent* aKeyEvent)
   // XXX Not I18N compliant
 
   // Don't do incremental search if the key event has already consumed.
-  if (keyEvent->mFlags.mDefaultPrevented) {
+  if (keyEvent->DefaultPrevented()) {
     return NS_OK;
   }
 
@@ -2307,7 +2303,7 @@ nsListControlFrame::KeyPress(nsIDOMEvent* aKeyEvent)
   // string we will use to find options and start searching at the current
   // keystroke.  Otherwise, Truncate the string if it's been a long time
   // since our last keypress.
-  if (keyEvent->time - gLastKeyTime > INCREMENTAL_SEARCH_KEYPRESS_TIME) {
+  if (keyEvent->mTime - gLastKeyTime > INCREMENTAL_SEARCH_KEYPRESS_TIME) {
     // If this is ' ' and we are at the beginning of the string, treat it as
     // "select this option" (bug 191543)
     if (keyEvent->charCode == ' ') {
@@ -2322,7 +2318,7 @@ nsListControlFrame::KeyPress(nsIDOMEvent* aKeyEvent)
     GetIncrementalString().Truncate();
   }
 
-  gLastKeyTime = keyEvent->time;
+  gLastKeyTime = keyEvent->mTime;
 
   // Append this keystroke to the search string. 
   char16_t uniChar = ToLowerCase(static_cast<char16_t>(keyEvent->charCode));

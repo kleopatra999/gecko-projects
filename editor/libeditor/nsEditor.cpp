@@ -34,6 +34,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/Element.h"        // for Element, nsINode::AsElement
 #include "mozilla/dom/Text.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAString.h"                  // for nsAString_internal::Length, etc
 #include "nsCCUncollectableMarker.h"    // for nsCCUncollectableMarker
@@ -176,6 +177,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsEditor)
  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocStateListeners)
  NS_IMPL_CYCLE_COLLECTION_UNLINK(mEventTarget)
  NS_IMPL_CYCLE_COLLECTION_UNLINK(mEventListener)
+ NS_IMPL_CYCLE_COLLECTION_UNLINK(mSavedSel);
+ NS_IMPL_CYCLE_COLLECTION_UNLINK(mRangeUpdater);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsEditor)
@@ -194,6 +197,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsEditor)
  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocStateListeners)
  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventTarget)
  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventListener)
+ NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSavedSel);
+ NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRangeUpdater);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsEditor)
@@ -1192,7 +1197,7 @@ nsEditor::SetAttribute(nsIDOMElement* aElement, const nsAString& aAttribute,
 {
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
   NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
-  nsCOMPtr<nsIAtom> attribute = do_GetAtom(aAttribute);
+  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
 
   RefPtr<ChangeAttributeTxn> txn =
     CreateTxnForSetAttribute(*element, *attribute, aValue);
@@ -1225,7 +1230,7 @@ nsEditor::RemoveAttribute(nsIDOMElement* aElement, const nsAString& aAttribute)
 {
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
   NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
-  nsCOMPtr<nsIAtom> attribute = do_GetAtom(aAttribute);
+  nsCOMPtr<nsIAtom> attribute = NS_Atomize(aAttribute);
 
   RefPtr<ChangeAttributeTxn> txn =
     CreateTxnForRemoveAttribute(*element, *attribute);
@@ -1326,7 +1331,7 @@ nsEditor::CreateNode(const nsAString& aTag,
                      int32_t aPosition,
                      nsIDOMNode** aNewNode)
 {
-  nsCOMPtr<nsIAtom> tag = do_GetAtom(aTag);
+  nsCOMPtr<nsIAtom> tag = NS_Atomize(aTag);
   nsCOMPtr<nsINode> parent = do_QueryInterface(aParent);
   NS_ENSURE_STATE(parent);
   *aNewNode = GetAsDOMNode(CreateNode(tag, parent, aPosition).take());
@@ -1479,7 +1484,7 @@ nsEditor::JoinNodes(nsINode& aLeftNode, nsINode& aRightNode)
                             parent->AsDOMNode());
   }
 
-  nsresult result;
+  nsresult result = NS_OK;
   RefPtr<JoinNodeTxn> txn = CreateTxnForJoinNode(aLeftNode, aRightNode);
   if (txn)  {
     result = DoTransaction(txn);
@@ -1779,7 +1784,7 @@ public:
     // Even if the change is caused by untrusted event, we need to dispatch
     // trusted input event since it's a fact.
     InternalEditorInputEvent inputEvent(true, eEditorInput, widget);
-    inputEvent.time = static_cast<uint64_t>(PR_Now() / 1000);
+    inputEvent.mTime = static_cast<uint64_t>(PR_Now() / 1000);
     inputEvent.mIsComposing = mIsComposing;
     nsEventStatus status = nsEventStatus_eIgnore;
     nsresult rv =
@@ -1987,14 +1992,14 @@ nsEditor::StopPreservingSelection()
 }
 
 void
-nsEditor::EnsureComposition(mozilla::WidgetGUIEvent* aEvent)
+nsEditor::EnsureComposition(mozilla::WidgetCompositionEvent* aCompositionEvent)
 {
   if (mComposition) {
     return;
   }
   // The compositionstart event must cause creating new TextComposition
   // instance at being dispatched by IMEStateManager.
-  mComposition = IMEStateManager::GetTextCompositionFor(aEvent);
+  mComposition = IMEStateManager::GetTextCompositionFor(aCompositionEvent);
   if (!mComposition) {
     MOZ_CRASH("IMEStateManager doesn't return proper composition");
   }
@@ -2663,7 +2668,7 @@ nsEditor::SplitNodeImpl(nsIContent& aExistingRightNode,
                         nsIContent& aNewLeftNode)
 {
   // Remember all selection points.
-  nsAutoTArray<SavedRange, 10> savedRanges;
+  AutoTArray<SavedRange, 10> savedRanges;
   for (size_t i = 0; i < nsISelectionController::NUM_SELECTIONTYPES - 1; ++i) {
     SelectionType type(1 << i);
     SavedRange range;
@@ -2810,7 +2815,7 @@ nsEditor::JoinNodesImpl(nsINode* aNodeToKeep,
   nsINode* parent = GetNodeLocation(aNodeToKeep, &keepOffset);
 
   // Remember all selection points.
-  nsAutoTArray<SavedRange, 10> savedRanges;
+  AutoTArray<SavedRange, 10> savedRanges;
   for (size_t i = 0; i < nsISelectionController::NUM_SELECTIONTYPES - 1; ++i) {
     SelectionType type(1 << i);
     SavedRange range;
@@ -2969,8 +2974,7 @@ nsEditor::GetNodeLocation(nsIDOMNode* aChild, int32_t* outOffset)
 
   nsCOMPtr<nsIDOMNode> parent;
 
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    aChild->GetParentNode(getter_AddRefs(parent))));
+  MOZ_ALWAYS_SUCCEEDS(aChild->GetParentNode(getter_AddRefs(parent)));
   if (parent) {
     *outOffset = GetChildOffset(aChild, parent);
   }
@@ -3836,7 +3840,7 @@ nsEditor::SplitNodeDeep(nsIContent& aNode,
       didSplit = true;
       ErrorResult rv;
       nsCOMPtr<nsIContent> newLeftNode = SplitNode(nodeToSplit, offset, rv);
-      NS_ENSURE_TRUE(!rv.Failed(), -1);
+      NS_ENSURE_TRUE(!NS_FAILED(rv.StealNSResult()), -1);
 
       rightNode = nodeToSplit;
       leftNode = newLeftNode;
@@ -4143,8 +4147,7 @@ void
 nsEditor::DoAfterDoTransaction(nsITransaction *aTxn)
 {
   bool isTransientTransaction;
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    aTxn->GetIsTransient(&isTransientTransaction)));
+  MOZ_ALWAYS_SUCCEEDS(aTxn->GetIsTransient(&isTransientTransaction));
 
   if (!isTransientTransaction)
   {
@@ -4158,8 +4161,7 @@ nsEditor::DoAfterDoTransaction(nsITransaction *aTxn)
       modCount = -modCount;
 
     // don't count transient transactions
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-      IncrementModificationCount(1)));
+    MOZ_ALWAYS_SUCCEEDS(IncrementModificationCount(1));
   }
 }
 
@@ -4168,16 +4170,14 @@ void
 nsEditor::DoAfterUndoTransaction()
 {
   // all undoable transactions are non-transient
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    IncrementModificationCount(-1)));
+  MOZ_ALWAYS_SUCCEEDS(IncrementModificationCount(-1));
 }
 
 void
 nsEditor::DoAfterRedoTransaction()
 {
   // all redoable transactions are non-transient
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    IncrementModificationCount(1)));
+  MOZ_ALWAYS_SUCCEEDS(IncrementModificationCount(1));
 }
 
 already_AddRefed<ChangeAttributeTxn>
@@ -4252,7 +4252,7 @@ nsEditor::CreateTxnForIMEText(const nsAString& aStringToInsert)
 
 
 NS_IMETHODIMP
-nsEditor::CreateTxnForAddStyleSheet(CSSStyleSheet* aSheet, AddStyleSheetTxn* *aTxn)
+nsEditor::CreateTxnForAddStyleSheet(StyleSheetHandle aSheet, AddStyleSheetTxn* *aTxn)
 {
   RefPtr<AddStyleSheetTxn> txn = new AddStyleSheetTxn();
 
@@ -4268,7 +4268,7 @@ nsEditor::CreateTxnForAddStyleSheet(CSSStyleSheet* aSheet, AddStyleSheetTxn* *aT
 
 
 NS_IMETHODIMP
-nsEditor::CreateTxnForRemoveStyleSheet(CSSStyleSheet* aSheet, RemoveStyleSheetTxn* *aTxn)
+nsEditor::CreateTxnForRemoveStyleSheet(StyleSheetHandle aSheet, RemoveStyleSheetTxn* *aTxn)
 {
   RefPtr<RemoveStyleSheetTxn> txn = new RemoveStyleSheetTxn();
 
@@ -4615,7 +4615,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
   // HandleKeyPressEvent()'s switch statement.
 
   WidgetKeyboardEvent* nativeKeyEvent =
-    aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
   NS_ENSURE_TRUE(nativeKeyEvent, NS_ERROR_UNEXPECTED);
   NS_ASSERTION(nativeKeyEvent->mMessage == eKeyPress,
                "HandleKeyPressEvent gets non-keypress event");
@@ -4625,7 +4625,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
     // consume backspace for disabled and readonly textfields, to prevent
     // back in history, which could be confusing to users
     if (nativeKeyEvent->keyCode == nsIDOMKeyEvent::DOM_VK_BACK_SPACE) {
-      aKeyEvent->PreventDefault();
+      aKeyEvent->AsEvent()->PreventDefault();
     }
     return NS_OK;
   }
@@ -4636,7 +4636,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
     case nsIDOMKeyEvent::DOM_VK_SHIFT:
     case nsIDOMKeyEvent::DOM_VK_CONTROL:
     case nsIDOMKeyEvent::DOM_VK_ALT:
-      aKeyEvent->PreventDefault(); // consumed
+      aKeyEvent->AsEvent()->PreventDefault(); // consumed
       return NS_OK;
     case nsIDOMKeyEvent::DOM_VK_BACK_SPACE:
       if (nativeKeyEvent->IsControl() || nativeKeyEvent->IsAlt() ||
@@ -4644,7 +4644,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
         return NS_OK;
       }
       DeleteSelection(nsIEditor::ePrevious, nsIEditor::eStrip);
-      aKeyEvent->PreventDefault(); // consumed
+      aKeyEvent->AsEvent()->PreventDefault(); // consumed
       return NS_OK;
     case nsIDOMKeyEvent::DOM_VK_DELETE:
       // on certain platforms (such as windows) the shift key
@@ -4656,7 +4656,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
         return NS_OK;
       }
       DeleteSelection(nsIEditor::eNext, nsIEditor::eStrip);
-      aKeyEvent->PreventDefault(); // consumed
+      aKeyEvent->AsEvent()->PreventDefault(); // consumed
       return NS_OK;
   }
   return NS_OK;
@@ -5038,8 +5038,8 @@ nsEditor::IsActiveInDOMWindow()
   NS_ENSURE_TRUE(fm, false);
 
   nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocWeak);
-  nsPIDOMWindow* ourWindow = doc->GetWindow();
-  nsCOMPtr<nsPIDOMWindow> win;
+  nsPIDOMWindowOuter* ourWindow = doc->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> win;
   nsIContent* content =
     nsFocusManager::GetFocusedDescendant(ourWindow, false,
                                          getter_AddRefs(win));
@@ -5052,7 +5052,7 @@ nsEditor::IsAcceptableInputEvent(nsIDOMEvent* aEvent)
   // If the event is trusted, the event should always cause input.
   NS_ENSURE_TRUE(aEvent, false);
 
-  WidgetEvent* widgetEvent = aEvent->GetInternalNSEvent();
+  WidgetEvent* widgetEvent = aEvent->WidgetEventPtr();
   if (NS_WARN_IF(!widgetEvent)) {
     return false;
   }
@@ -5085,7 +5085,7 @@ nsEditor::IsAcceptableInputEvent(nsIDOMEvent* aEvent)
     case eCompositionCommitAsIs:
       // Don't allow composition events whose internal event are not
       // WidgetCompositionEvent.
-      widgetGUIEvent = aEvent->GetInternalNSEvent()->AsCompositionEvent();
+      widgetGUIEvent = aEvent->WidgetEventPtr()->AsCompositionEvent();
       needsWidget = true;
       break;
     default:
@@ -5097,7 +5097,7 @@ nsEditor::IsAcceptableInputEvent(nsIDOMEvent* aEvent)
   }
 
   // Accept all trusted events.
-  if (widgetEvent->mFlags.mIsTrusted) {
+  if (widgetEvent->IsTrusted()) {
     return true;
   }
 

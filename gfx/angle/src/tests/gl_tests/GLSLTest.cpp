@@ -346,6 +346,91 @@ class GLSLTest : public ANGLETest
         }
     }
 
+    void CompileGLSLWithUniformsAndSamplers(GLint vertexUniformCount,
+                                            GLint fragmentUniformCount,
+                                            GLint vertexSamplersCount,
+                                            GLint fragmentSamplersCount,
+                                            bool expectSuccess)
+    {
+        std::stringstream vertexShader;
+        std::stringstream fragmentShader;
+
+        // Generate the vertex shader
+        vertexShader << "precision mediump float;\n";
+
+        for (int i = 0; i < vertexUniformCount; i++)
+        {
+            vertexShader << "uniform vec4 v" << i << ";\n";
+        }
+
+        for (int i = 0; i < vertexSamplersCount; i++)
+        {
+            vertexShader << "uniform sampler2D s" << i << ";\n";
+        }
+
+        vertexShader << "void main()\n{\n";
+
+        for (int i = 0; i < vertexUniformCount; i++)
+        {
+            vertexShader << "    gl_Position +=  v" << i << ";\n";
+        }
+
+        for (int i = 0; i < vertexSamplersCount; i++)
+        {
+            vertexShader << "    gl_Position +=  texture2D(s" << i << ", vec2(0.0, 0.0));\n";
+        }
+
+        if (vertexUniformCount == 0 && vertexSamplersCount == 0)
+        {
+            vertexShader << "   gl_Position = vec4(0.0);\n";
+        }
+
+        vertexShader << "}\n";
+
+        // Generate the fragment shader
+        fragmentShader << "precision mediump float;\n";
+
+        for (int i = 0; i < fragmentUniformCount; i++)
+        {
+            fragmentShader << "uniform vec4 v" << i << ";\n";
+        }
+
+        for (int i = 0; i < fragmentSamplersCount; i++)
+        {
+            fragmentShader << "uniform sampler2D s" << i << ";\n";
+        }
+
+        fragmentShader << "void main()\n{\n";
+
+        for (int i = 0; i < fragmentUniformCount; i++)
+        {
+            fragmentShader << "    gl_FragColor +=  v" << i << ";\n";
+        }
+
+        for (int i = 0; i < fragmentSamplersCount; i++)
+        {
+            fragmentShader << "    gl_FragColor +=  texture2D(s" << i << ", vec2(0.0, 0.0));\n";
+        }
+
+        if (fragmentUniformCount == 0 && fragmentSamplersCount == 0)
+        {
+            fragmentShader << "    gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);\n";
+        }
+
+        fragmentShader << "}\n";
+
+        GLuint program = CompileProgram(vertexShader.str(), fragmentShader.str());
+
+        if (expectSuccess)
+        {
+            EXPECT_NE(0u, program);
+        }
+        else
+        {
+            EXPECT_EQ(0u, program);
+        }
+    }
+
     std::string mSimpleVSSource;
 };
 
@@ -377,6 +462,24 @@ TEST_P(GLSLTest, NamelessScopedStructs)
 
 TEST_P(GLSLTest, ScopedStructsOrderBug)
 {
+#if defined(__APPLE__)
+    // TODO(geofflang): Find out why this doesn't compile on Apple OpenGL drivers
+    // (http://anglebug.com/1292)
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on Apple OpenGL." << std::endl;
+        return;
+    }
+#endif
+
+    // TODO(geofflang): Find out why this doesn't compile on AMD OpenGL drivers
+    // (http://anglebug.com/1291)
+    if (isAMD() && getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on AMD OpenGL." << std::endl;
+        return;
+    }
+
     const std::string fragmentShaderSource = SHADER_SOURCE
     (
         precision mediump float;
@@ -531,6 +634,14 @@ TEST_P(GLSLTest, TwoElseIfRewriting)
 
 TEST_P(GLSLTest, InvariantVaryingOut)
 {
+    // TODO(geofflang): Some OpenGL drivers have compile errors when varyings do not have matching
+    // invariant attributes (http://anglebug.com/1293)
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
+
     const std::string fragmentShaderSource = SHADER_SOURCE
     (
         precision mediump float;
@@ -602,6 +713,14 @@ TEST_P(GLSLTest, FrontFacingAndVarying)
 
 TEST_P(GLSLTest, InvariantVaryingIn)
 {
+    // TODO(geofflang): Some OpenGL drivers have compile errors when varyings do not have matching
+    // invariant attributes (http://anglebug.com/1293)
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
+
     const std::string fragmentShaderSource = SHADER_SOURCE
     (
         precision mediump float;
@@ -663,6 +782,14 @@ TEST_P(GLSLTest, InvariantGLPosition)
 
 TEST_P(GLSLTest, InvariantAll)
 {
+    // TODO(geofflang): Some OpenGL drivers have compile errors when varyings do not have matching
+    // invariant attributes (http://anglebug.com/1293)
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
+
     const std::string fragmentShaderSource = SHADER_SOURCE
     (
         precision mediump float;
@@ -682,6 +809,16 @@ TEST_P(GLSLTest, InvariantAll)
 
 TEST_P(GLSLTest, MaxVaryingVec4)
 {
+#if defined(__APPLE__)
+    // TODO(geofflang): Find out why this doesn't compile on Apple AND OpenGL drivers
+    // (http://anglebug.com/1291)
+    if (isAMD() && getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on Apple AMD OpenGL." << std::endl;
+        return;
+    }
+#endif
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
@@ -699,6 +836,13 @@ TEST_P(GLSLTest, MaxMinusTwoVaryingVec4PlusTwoSpecialVariables)
 
 TEST_P(GLSLTest, MaxMinusTwoVaryingVec4PlusThreeSpecialVariables)
 {
+    // TODO(geofflang): Figure out why this fails on OpenGL AMD (http://anglebug.com/1291)
+    if (isAMD() && getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
@@ -706,7 +850,9 @@ TEST_P(GLSLTest, MaxMinusTwoVaryingVec4PlusThreeSpecialVariables)
     VaryingTestBase(0, 0, 0, 0, 0, 0, maxVaryings - 2, 0, true, true, true, true);
 }
 
-TEST_P(GLSLTest, MaxVaryingVec4PlusFragCoord)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxVaryingVec4PlusFragCoord)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -716,7 +862,9 @@ TEST_P(GLSLTest, MaxVaryingVec4PlusFragCoord)
     VaryingTestBase(0, 0, 0, 0, 0, 0, maxVaryings, 0, true, false, false, false);
 }
 
-TEST_P(GLSLTest, MaxVaryingVec4PlusPointCoord)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxVaryingVec4PlusPointCoord)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -743,8 +891,14 @@ TEST_P(GLSLTest, MaxVaryingVec3Array)
 }
 
 // Disabled because of a failure in D3D9
-TEST_P(GLSLTest, DISABLED_MaxVaryingVec3AndOneFloat)
+TEST_P(GLSLTest, MaxVaryingVec3AndOneFloat)
 {
+    if (isD3D9())
+    {
+        std::cout << "Test disabled on D3D9." << std::endl;
+        return;
+    }
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
@@ -752,8 +906,14 @@ TEST_P(GLSLTest, DISABLED_MaxVaryingVec3AndOneFloat)
 }
 
 // Disabled because of a failure in D3D9
-TEST_P(GLSLTest, DISABLED_MaxVaryingVec3ArrayAndOneFloatArray)
+TEST_P(GLSLTest, MaxVaryingVec3ArrayAndOneFloatArray)
 {
+    if (isD3D9())
+    {
+        std::cout << "Test disabled on D3D9." << std::endl;
+        return;
+    }
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
@@ -761,8 +921,31 @@ TEST_P(GLSLTest, DISABLED_MaxVaryingVec3ArrayAndOneFloatArray)
 }
 
 // Disabled because of a failure in D3D9
-TEST_P(GLSLTest, DISABLED_TwiceMaxVaryingVec2)
+TEST_P(GLSLTest, TwiceMaxVaryingVec2)
 {
+    if (isD3D9())
+    {
+        std::cout << "Test disabled on D3D9." << std::endl;
+        return;
+    }
+
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE)
+    {
+        // TODO(geofflang): Figure out why this fails on NVIDIA's GLES driver
+        std::cout << "Test disabled on OpenGL ES." << std::endl;
+        return;
+    }
+
+#if defined(__APPLE__)
+    // TODO(geofflang): Find out why this doesn't compile on Apple AND OpenGL drivers
+    // (http://anglebug.com/1291)
+    if (isAMD() && getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on Apple AMD OpenGL." << std::endl;
+        return;
+    }
+#endif
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
@@ -770,15 +953,40 @@ TEST_P(GLSLTest, DISABLED_TwiceMaxVaryingVec2)
 }
 
 // Disabled because of a failure in D3D9
-TEST_P(GLSLTest, DISABLED_MaxVaryingVec2Arrays)
+TEST_P(GLSLTest, MaxVaryingVec2Arrays)
 {
+    if (isD3DSM3())
+    {
+        std::cout << "Test disabled on SM3." << std::endl;
+        return;
+    }
+
+    if (getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE)
+    {
+        // TODO(geofflang): Figure out why this fails on NVIDIA's GLES driver
+        std::cout << "Test disabled on OpenGL ES." << std::endl;
+        return;
+    }
+
+#if defined(__APPLE__)
+    // TODO(geofflang): Find out why this doesn't compile on Apple AND OpenGL drivers
+    // (http://anglebug.com/1291)
+    if (isAMD() && getPlatformRenderer() == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
+    {
+        std::cout << "Test disabled on Apple AMD OpenGL." << std::endl;
+        return;
+    }
+#endif
+
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
 
     VaryingTestBase(0, 0, 0, maxVaryings, 0, 0, 0, 0, false, false, false, true);
 }
 
-TEST_P(GLSLTest, MaxPlusOneVaryingVec3)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxPlusOneVaryingVec3)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -786,7 +994,9 @@ TEST_P(GLSLTest, MaxPlusOneVaryingVec3)
     VaryingTestBase(0, 0, 0, 0, maxVaryings + 1, 0, 0, 0, false, false, false, false);
 }
 
-TEST_P(GLSLTest, MaxPlusOneVaryingVec3Array)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxPlusOneVaryingVec3Array)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -794,7 +1004,9 @@ TEST_P(GLSLTest, MaxPlusOneVaryingVec3Array)
     VaryingTestBase(0, 0, 0, 0, 0, maxVaryings / 2 + 1, 0, 0, false, false, false, false);
 }
 
-TEST_P(GLSLTest, MaxVaryingVec3AndOneVec2)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxVaryingVec3AndOneVec2)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -802,7 +1014,9 @@ TEST_P(GLSLTest, MaxVaryingVec3AndOneVec2)
     VaryingTestBase(0, 0, 1, 0, maxVaryings, 0, 0, 0, false, false, false, false);
 }
 
-TEST_P(GLSLTest, MaxPlusOneVaryingVec2)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxPlusOneVaryingVec2)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -810,7 +1024,9 @@ TEST_P(GLSLTest, MaxPlusOneVaryingVec2)
     VaryingTestBase(0, 0, 2 * maxVaryings + 1, 0, 0, 0, 0, 0, false, false, false, false);
 }
 
-TEST_P(GLSLTest, MaxVaryingVec3ArrayAndMaxPlusOneFloatArray)
+// Disabled because drivers are allowed to successfully compile shaders that have more than the
+// maximum number of varyings. (http://anglebug.com/1296)
+TEST_P(GLSLTest, DISABLED_MaxVaryingVec3ArrayAndMaxPlusOneFloatArray)
 {
     GLint maxVaryings = 0;
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryings);
@@ -1132,164 +1348,103 @@ TEST_P(GLSLTest, LoopIndexingValidation)
 // can actually be used.
 TEST_P(GLSLTest, VerifyMaxVertexUniformVectors)
 {
-    const std::string &fragmentShaderSource = SHADER_SOURCE
-    (
-        precision mediump float;
-        void main()
-        {
-            gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-        }
-    );
+    int maxUniforms = 10000;
+    glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &maxUniforms);
+    EXPECT_GL_NO_ERROR();
+    std::cout << "Validating GL_MAX_VERTEX_UNIFORM_VECTORS = " << maxUniforms << std::endl;
+
+    CompileGLSLWithUniformsAndSamplers(maxUniforms, 0, 0, 0, true);
+}
+
+// Tests that the maximum uniforms count returned from querying GL_MAX_VERTEX_UNIFORM_VECTORS
+// can actually be used along with the maximum number of texture samplers.
+TEST_P(GLSLTest, VerifyMaxVertexUniformVectorsWithSamplers)
+{
+    if (GetParam().eglParameters.renderer == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE ||
+        GetParam().eglParameters.renderer == EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
 
     int maxUniforms = 10000;
     glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &maxUniforms);
     EXPECT_GL_NO_ERROR();
     std::cout << "Validating GL_MAX_VERTEX_UNIFORM_VECTORS = " << maxUniforms << std::endl;
 
-    std::stringstream vshaderSource;
-    vshaderSource << "precision mediump float;\n";
+    int maxTextureImageUnits = 0;
+    glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &maxTextureImageUnits);
 
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        vshaderSource << "uniform vec4 v" << i << ";\n";
-    }
-
-    vshaderSource << "void main()\n{\n";
-
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        vshaderSource << "    gl_Position +=  v" << i << ";\n";
-    }
-
-    vshaderSource << "}\n";
-
-    GLuint program = CompileProgram(vshaderSource.str(), fragmentShaderSource);
-    EXPECT_NE(0u, program);
+    CompileGLSLWithUniformsAndSamplers(maxUniforms, 0, maxTextureImageUnits, 0, true);
 }
 
 // Tests that the maximum uniforms count + 1 from querying GL_MAX_VERTEX_UNIFORM_VECTORS
 // fails shader compilation.
 TEST_P(GLSLTest, VerifyMaxVertexUniformVectorsExceeded)
 {
-    const std::string &fragmentShaderSource = SHADER_SOURCE
-    (
-        precision mediump float;
-        void main()
-        {
-            gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-        }
-    );
-
     int maxUniforms = 10000;
     glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &maxUniforms);
     EXPECT_GL_NO_ERROR();
-    // Add 1 more to exceed the reported max count
-    maxUniforms += 1;
-    std::cout << "Validating GL_MAX_VERTEX_UNIFORM_VECTORS + 1 = " << maxUniforms << std::endl;
+    std::cout << "Validating GL_MAX_VERTEX_UNIFORM_VECTORS + 1 = " << maxUniforms + 1 << std::endl;
 
-    std::stringstream vshaderSource;
-    vshaderSource << "precision mediump float;\n";
-
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        vshaderSource << "uniform vec4 v" << i << ";\n";
-    }
-
-    vshaderSource << "void main()\n{\n";
-
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        vshaderSource << "    gl_Position +=  v" << i << ";\n";
-    }
-
-    vshaderSource << "}\n";
-
-    GLuint program = CompileProgram(vshaderSource.str(), fragmentShaderSource);
-    EXPECT_EQ(0u, program);
+    CompileGLSLWithUniformsAndSamplers(maxUniforms + 1, 0, 0, 0, false);
 }
 
 // Tests that the maximum uniforms count returned from querying GL_MAX_FRAGMENT_UNIFORM_VECTORS
 // can actually be used.
-TEST_P(GLSLTest, VerifyMaxFragmentUniformVectorsFragment)
+TEST_P(GLSLTest, VerifyMaxFragmentUniformVectors)
 {
-    const std::string &vertexShaderSource = SHADER_SOURCE
-    (
-        precision mediump float;
-        void main()
-        {
-            gl_Position = vec4(0.0);
-        }
-    );
-
     int maxUniforms = 10000;
     glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &maxUniforms);
     EXPECT_GL_NO_ERROR();
     std::cout << "Validating GL_MAX_FRAGMENT_UNIFORM_VECTORS = " << maxUniforms << std::endl;
 
-    std::stringstream fshaderSource;
-    fshaderSource << "precision mediump float;\n";
-
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        fshaderSource << "uniform vec4 v" << i << ";\n";
-    }
-
-    fshaderSource << "void main()\n{\n";
-
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        fshaderSource << "    gl_FragColor +=  v" << i << ";\n";
-    }
-
-    fshaderSource << "}\n";
-
-    GLuint program = CompileProgram(vertexShaderSource, fshaderSource.str());
-    EXPECT_NE(0u, program);
+    CompileGLSLWithUniformsAndSamplers(0, maxUniforms, 0, 0, true);
 }
 
-// Tests that the maximum uniforms count + 1 from querying GL_MAX_FRAGMENT_UNIFORM_VECTORS
-// fails shader compilation.
-TEST_P(GLSLTest, VerifyMaxFragmentUniformVectorsFragmentExceeded)
+// Tests that the maximum uniforms count returned from querying GL_MAX_FRAGMENT_UNIFORM_VECTORS
+// can actually be used along with the maximum number of texture samplers.
+TEST_P(GLSLTest, VerifyMaxFragmentUniformVectorsWithSamplers)
 {
-    const std::string &vertexShaderSource = SHADER_SOURCE
-    (
-        precision mediump float;
-        void main()
-        {
-            gl_Position = vec4(0.0);
-        }
-    );
+    if (GetParam().eglParameters.renderer == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE ||
+        GetParam().eglParameters.renderer == EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE)
+    {
+        std::cout << "Test disabled on OpenGL." << std::endl;
+        return;
+    }
 
     int maxUniforms = 10000;
     glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &maxUniforms);
     EXPECT_GL_NO_ERROR();
-    // Add 1 more to exceed the reported max count
-    maxUniforms += 1;
-    std::cout << "Validating GL_MAX_FRAGMENT_UNIFORM_VECTORS + 1 = " << maxUniforms << std::endl;
 
-    std::stringstream fshaderSource;
-    fshaderSource << "precision mediump float;\n";
+    int maxTextureImageUnits = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureImageUnits);
 
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        fshaderSource << "uniform vec4 v" << i << ";\n";
-    }
+    CompileGLSLWithUniformsAndSamplers(0, maxUniforms, 0, maxTextureImageUnits, true);
+}
 
-    fshaderSource << "void main()\n{\n";
+// Tests that the maximum uniforms count + 1 from querying GL_MAX_FRAGMENT_UNIFORM_VECTORS
+// fails shader compilation.
+TEST_P(GLSLTest, VerifyMaxFragmentUniformVectorsExceeded)
+{
+    int maxUniforms = 10000;
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &maxUniforms);
+    EXPECT_GL_NO_ERROR();
+    std::cout << "Validating GL_MAX_FRAGMENT_UNIFORM_VECTORS + 1 = " << maxUniforms + 1
+              << std::endl;
 
-    for (int i = 0; i < maxUniforms; i++)
-    {
-        fshaderSource << "    gl_FragColor +=  v" << i << ";\n";
-    }
-
-    fshaderSource << "}\n";
-
-    GLuint program = CompileProgram(vertexShaderSource, fshaderSource.str());
-    EXPECT_EQ(0u, program);
+    CompileGLSLWithUniformsAndSamplers(0, maxUniforms + 1, 0, 0, false);
 }
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these tests should be run against.
-ANGLE_INSTANTIATE_TEST(GLSLTest, ES2_D3D9(), ES2_D3D11(), ES2_D3D11_FL9_3());
+ANGLE_INSTANTIATE_TEST(GLSLTest,
+                       ES2_D3D9(),
+                       ES2_D3D11(),
+                       ES2_D3D11_FL9_3(),
+                       ES2_OPENGL(),
+                       ES3_OPENGL(),
+                       ES2_OPENGLES(),
+                       ES3_OPENGLES());
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these tests should be run against.
-ANGLE_INSTANTIATE_TEST(GLSLTest_ES3, ES3_D3D11());
+ANGLE_INSTANTIATE_TEST(GLSLTest_ES3, ES3_D3D11(), ES3_OPENGL(), ES3_OPENGLES());

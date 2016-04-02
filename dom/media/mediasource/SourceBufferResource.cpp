@@ -13,12 +13,9 @@
 #include "mozilla/Logging.h"
 #include "MediaData.h"
 
-PRLogModuleInfo* GetSourceBufferResourceLog()
+mozilla::LogModule* GetSourceBufferResourceLog()
 {
-  static PRLogModuleInfo* sLogModule = nullptr;
-  if (!sLogModule) {
-    sLogModule = PR_NewLogModule("SourceBufferResource");
-  }
+  static mozilla::LazyLogModule sLogModule("SourceBufferResource");
   return sLogModule;
 }
 
@@ -137,7 +134,7 @@ SourceBufferResource::ReadFromCache(char* aBuffer, int64_t aOffset, uint32_t aCo
 }
 
 uint32_t
-SourceBufferResource::EvictData(uint64_t aPlaybackOffset, uint32_t aThreshold,
+SourceBufferResource::EvictData(uint64_t aPlaybackOffset, int64_t aThreshold,
                                 ErrorResult& aRv)
 {
   SBR_DEBUG("EvictData(aPlaybackOffset=%llu,"

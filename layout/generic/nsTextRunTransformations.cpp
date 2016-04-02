@@ -57,8 +57,7 @@ nsTransformedTextRun::Create(const gfxTextRunFactory::Parameters* aParams,
 
 void
 nsTransformedTextRun::SetCapitalization(uint32_t aStart, uint32_t aLength,
-                                        bool* aCapitalization,
-                                        gfxContext* aRefContext)
+                                        bool* aCapitalization)
 {
   if (mCapitalize.IsEmpty()) {
     if (!mCapitalize.AppendElements(GetLength()))
@@ -70,12 +69,11 @@ nsTransformedTextRun::SetCapitalization(uint32_t aStart, uint32_t aLength,
 }
 
 bool
-nsTransformedTextRun::SetPotentialLineBreaks(uint32_t aStart, uint32_t aLength,
-                                             uint8_t* aBreakBefore,
-                                             gfxContext* aRefContext)
+nsTransformedTextRun::SetPotentialLineBreaks(Range aRange,
+                                             uint8_t* aBreakBefore)
 {
-  bool changed = gfxTextRun::SetPotentialLineBreaks(aStart, aLength,
-      aBreakBefore, aRefContext);
+  bool changed =
+    gfxTextRun::SetPotentialLineBreaks(aRange, aBreakBefore);
   if (changed) {
     mNeedsRebuild = true;
   }
@@ -133,9 +131,9 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
 {
   aDest->ResetGlyphRuns();
 
-  gfxTextRun::GlyphRunIterator iter(aSrc, 0, aSrc->GetLength());
+  gfxTextRun::GlyphRunIterator iter(aSrc, gfxTextRun::Range(aSrc));
   uint32_t offset = 0;
-  nsAutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
+  AutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
   while (iter.NextRun()) {
     gfxTextRun::GlyphRun* run = iter.GetGlyphRun();
     nsresult rv = aDest->AddGlyphRun(run->mFont, run->mMatchType,
@@ -215,10 +213,10 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
 
 gfxTextRunFactory::Parameters
 GetParametersForInner(nsTransformedTextRun* aTextRun, uint32_t* aFlags,
-    gfxContext* aRefContext)
+                      DrawTarget* aRefDrawTarget)
 {
   gfxTextRunFactory::Parameters params =
-    { aRefContext, nullptr, nullptr,
+    { aRefDrawTarget, nullptr, nullptr,
       nullptr, 0, aTextRun->GetAppUnitsPerDevUnit()
     };
   *aFlags = aTextRun->GetFlags() & ~gfxFontGroup::TEXT_IS_PERSISTENT;
@@ -266,7 +264,7 @@ GetCasingFor(const nsIAtom* aLang)
   int index = langStr.FindChar('-');
   if (index > 0) {
     langStr.Truncate(index);
-    nsCOMPtr<nsIAtom> truncatedLang = do_GetAtom(langStr);
+    nsCOMPtr<nsIAtom> truncatedLang = NS_Atomize(langStr);
     return GetCasingFor(truncatedLang);
   }
 
@@ -603,13 +601,14 @@ nsCaseTransformTextRunFactory::TransformString(
 
 void
 nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
-    gfxContext* aRefContext, gfxMissingFontRecorder *aMFR)
+                                              DrawTarget* aRefDrawTarget,
+                                              gfxMissingFontRecorder* aMFR)
 {
   nsAutoString convertedString;
-  nsAutoTArray<bool,50> charsToMergeArray;
-  nsAutoTArray<bool,50> deletedCharsArray;
-  nsAutoTArray<uint8_t,50> canBreakBeforeArray;
-  nsAutoTArray<RefPtr<nsTransformedCharStyle>,50> styleArray;
+  AutoTArray<bool,50> charsToMergeArray;
+  AutoTArray<bool,50> deletedCharsArray;
+  AutoTArray<uint8_t,50> canBreakBeforeArray;
+  AutoTArray<RefPtr<nsTransformedCharStyle>,50> styleArray;
 
   bool mergeNeeded = TransformString(aTextRun->mString,
                                      convertedString,
@@ -623,7 +622,7 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
 
   uint32_t flags;
   gfxTextRunFactory::Parameters innerParams =
-      GetParametersForInner(aTextRun, &flags, aRefContext);
+    GetParametersForInner(aTextRun, &flags, aRefDrawTarget);
   gfxFontGroup* fontGroup = aTextRun->GetFontGroup();
 
   nsAutoPtr<nsTransformedTextRun> transformedChild;
@@ -647,10 +646,10 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
   // (and also child will be shaped appropriately)
   NS_ASSERTION(convertedString.Length() == canBreakBeforeArray.Length(),
                "Dropped characters or break-before values somewhere!");
-  child->SetPotentialLineBreaks(0, canBreakBeforeArray.Length(),
-      canBreakBeforeArray.Elements(), aRefContext);
+  gfxTextRun::Range range(0, uint32_t(canBreakBeforeArray.Length()));
+  child->SetPotentialLineBreaks(range, canBreakBeforeArray.Elements());
   if (transformedChild) {
-    transformedChild->FinishSettingProperties(aRefContext, aMFR);
+    transformedChild->FinishSettingProperties(aRefDrawTarget, aMFR);
   }
 
   if (mergeNeeded) {
@@ -667,6 +666,6 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
     // We can't steal the data because the child may be cached and stealing
     // the data would break the cache.
     aTextRun->ResetGlyphRuns();
-    aTextRun->CopyGlyphDataFrom(child, 0, child->GetLength(), 0);
+    aTextRun->CopyGlyphDataFrom(child, gfxTextRun::Range(child), 0);
   }
 }

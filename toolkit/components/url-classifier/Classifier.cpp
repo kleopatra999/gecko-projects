@@ -17,7 +17,7 @@
 #include "mozilla/Logging.h"
 
 // NSPR_LOG_MODULES=UrlClassifierDbService:5
-extern PRLogModuleInfo *gUrlClassifierDbServiceLog;
+extern mozilla::LazyLogModule gUrlClassifierDbServiceLog;
 #define LOG(args) MOZ_LOG(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug, args)
 #define LOG_ENABLED() MOZ_LOG_TEST(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug)
 
@@ -242,14 +242,6 @@ Classifier::Check(const nsACString& aSpec,
   for (uint32_t i = 0; i < fragments.Length(); i++) {
     Completion lookupHash;
     lookupHash.FromPlaintext(fragments[i], mCryptoHash);
-
-    // Get list of host keys to look up
-    Completion hostKey;
-    rv = LookupCache::GetKey(fragments[i], &hostKey, mCryptoHash);
-    if (NS_FAILED(rv)) {
-      // Local host on the network.
-      continue;
-    }
 
     if (LOG_ENABLED()) {
       nsAutoCString checking;
@@ -700,7 +692,7 @@ Classifier::GetLookupCache(const nsACString& aTable)
     }
   }
 
-  LookupCache *cache = new LookupCache(aTable, mStoreDirectory);
+  UniquePtr<LookupCache> cache(new LookupCache(aTable, mStoreDirectory));
   nsresult rv = cache->Init();
   if (NS_FAILED(rv)) {
     return nullptr;
@@ -712,8 +704,8 @@ Classifier::GetLookupCache(const nsACString& aTable)
     }
     return nullptr;
   }
-  mLookupCaches.AppendElement(cache);
-  return cache;
+  mLookupCaches.AppendElement(cache.get());
+  return cache.release();
 }
 
 nsresult

@@ -144,6 +144,8 @@ public:
   nsIAtom* ARIARoleAtom() const;
 
   int32_t GetLevelInternal();
+  void ScrollTo(uint32_t aScrollType);
+  void ScrollToPoint(uint32_t aScrollType, int32_t aX, int32_t aY);
 
   int32_t CaretLineNumber();
   int32_t CaretOffset();
@@ -360,6 +362,12 @@ public:
 
   void Extents(bool aNeedsScreenCoords, int32_t* aX, int32_t* aY,
                int32_t* aWidth, int32_t* aHeight);
+
+  /**
+   * Return the id of the dom node this accessible represents.  Note this
+   * should probably only be used for testing.
+   */
+  void DOMNodeID(nsString& aID);
 
   /**
    * Allow the platform to store a pointers worth of data on us.

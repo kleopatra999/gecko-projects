@@ -258,7 +258,7 @@ BluetoothHfpManager::Init()
   hal::GetCurrentBatteryInformation(&batteryInfo);
   Notify(batteryInfo);
 
-  mListener = new BluetoothRilListener();
+  mListener = MakeUnique<BluetoothRilListener>();
   NS_ENSURE_TRUE(mListener->Listen(true), false);
 
   nsCOMPtr<nsISettingsService> settings =
@@ -446,6 +446,7 @@ public:
 
     sBluetoothHfpInterface->SetNotificationHandler(nullptr);
     sBluetoothHfpInterface = nullptr;
+    sBluetoothHfpManager = nullptr;
 
     if (mRes) {
       mRes->OnError(NS_ERROR_FAILURE);
@@ -458,6 +459,7 @@ public:
 
     sBluetoothHfpInterface->SetNotificationHandler(nullptr);
     sBluetoothHfpInterface = nullptr;
+    sBluetoothHfpManager = nullptr;
 
     if (mRes) {
       mRes->Deinit();
@@ -624,7 +626,7 @@ BluetoothHfpManager::NotifyConnectionStateChanged(const nsAString& aType)
     return;
   }
 
-  DispatchStatusChangedEvent(eventName, deviceAddressStr, status);
+  DispatchStatusChangedEvent(eventName, mDeviceAddress, status);
 
   // Notify profile controller
   if (aType.EqualsLiteral(BLUETOOTH_HFP_STATUS_CHANGED_ID)) {

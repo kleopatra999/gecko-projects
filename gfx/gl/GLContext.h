@@ -51,6 +51,8 @@
 #include "gfx2DGlue.h"
 #include "GeckoProfiler.h"
 
+class nsIWidget;
+
 namespace android {
     class GraphicBuffer;
 } // namespace android
@@ -124,6 +126,7 @@ enum class GLFeature {
     sRGB_framebuffer,
     sRGB_texture,
     sampler_objects,
+    seamless_cube_map_opt_in,
     split_framebuffer,
     standard_derivatives,
     sync,
@@ -135,6 +138,7 @@ enum class GLFeature {
     texture_half_float,
     texture_half_float_linear,
     texture_non_power_of_two,
+    texture_rg,
     texture_storage,
     texture_swizzle,
     transform_feedback2,
@@ -282,8 +286,8 @@ public:
         }
 
         if (profile == ContextProfile::OpenGL) {
-            return profile == ContextProfile::OpenGLCore ||
-                   profile == ContextProfile::OpenGLCompatibility;
+            return mProfile == ContextProfile::OpenGLCore ||
+                   mProfile == ContextProfile::OpenGLCompatibility;
         }
 
         return profile == mProfile;
@@ -300,6 +304,10 @@ public:
 
     const char* VersionString() const {
         return mVersionString.get();
+    }
+
+    inline uint32_t ShadingLanguageVersion() const {
+        return mShadingLanguageVersion;
     }
 
     GLVendor Vendor() const {
@@ -335,7 +343,6 @@ public:
 protected:
     bool mInitialized;
     bool mIsOffscreen;
-    bool mIsGlobalSharedContext;
     bool mContextLost;
 
     /**
@@ -345,6 +352,8 @@ protected:
     uint32_t mVersion;
     nsCString mVersionString;
     ContextProfile mProfile;
+
+    uint32_t mShadingLanguageVersion;
 
     GLVendor mVendor;
     GLRenderer mRenderer;
@@ -413,11 +422,13 @@ public:
         ARB_pixel_buffer_object,
         ARB_robustness,
         ARB_sampler_objects,
+        ARB_seamless_cube_map,
         ARB_sync,
         ARB_texture_compression,
         ARB_texture_float,
         ARB_texture_non_power_of_two,
         ARB_texture_rectangle,
+        ARB_texture_rg,
         ARB_texture_storage,
         ARB_texture_swizzle,
         ARB_timer_query,
@@ -647,7 +658,11 @@ public:
             MOZ_ASSERT(!mHasBeenChecked);
             mHasBeenChecked = true;
 
-            return mGL.fGetError();
+            const GLenum ret = mGL.fGetError();
+
+            while (mGL.fGetError()) {}
+
+            return ret;
         }
 
         ~LocalErrorScope() {
@@ -2309,6 +2324,7 @@ public:
 public:
     void fDrawBuffers(GLsizei n, const GLenum* bufs) {
         BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fDrawBuffers);
         mSymbols.fDrawBuffers(n, bufs);
         AFTER_GL_CALL;
     }
@@ -3319,7 +3335,7 @@ public:
 
     virtual GLenum GetPreferredARGB32Format() const { return LOCAL_GL_RGBA; }
 
-    virtual bool RenewSurface() { return false; }
+    virtual bool RenewSurface(nsIWidget* aWidget) { return false; }
 
     // Shared code for GL extensions and GLX extensions.
     static bool ListHasExtension(const GLubyte *extensions,
@@ -3628,7 +3644,7 @@ void SplitByChar(const nsACString& str, const char delim,
 
 template<size_t N>
 bool
-MarkBitfieldByString(const nsACString& str, const char* (&markStrList)[N],
+MarkBitfieldByString(const nsACString& str, const char* const (&markStrList)[N],
                      std::bitset<N>* const out_markList)
 {
     for (size_t i = 0; i < N; i++) {
@@ -3643,7 +3659,7 @@ MarkBitfieldByString(const nsACString& str, const char* (&markStrList)[N],
 template<size_t N>
 void
 MarkBitfieldByStrings(const std::vector<nsCString>& strList,
-                      bool dumpStrings, const char* (&markStrList)[N],
+                      bool dumpStrings, const char* const (&markStrList)[N],
                       std::bitset<N>* const out_markList)
 {
     for (auto itr = strList.begin(); itr != strList.end(); ++itr) {

@@ -281,87 +281,55 @@ JSTracer::asCallbackTracer()
     return static_cast<JS::CallbackTracer*>(this);
 }
 
-// The JS_Call*Tracer family of functions traces the given GC thing reference.
-// This performs the tracing action configured on the given JSTracer:
-// typically calling the JSTracer::callback or marking the thing as live.
-//
-// The argument to JS_Call*Tracer is an in-out param: when the function
-// returns, the garbage collector might have moved the GC thing. In this case,
-// the reference passed to JS_Call*Tracer will be updated to the object's new
-// location. Callers of this method are responsible for updating any state
-// that is dependent on the object's address. For example, if the object's
-// address is used as a key in a hashtable, then the object must be removed
-// and re-inserted with the correct hash.
-//
-extern JS_PUBLIC_API(void)
-JS_CallValueTracer(JSTracer* trc, JS::Heap<JS::Value>* valuep, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallIdTracer(JSTracer* trc, JS::Heap<jsid>* idp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallObjectTracer(JSTracer* trc, JS::Heap<JSObject*>* objp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallStringTracer(JSTracer* trc, JS::Heap<JSString*>* strp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallScriptTracer(JSTracer* trc, JS::Heap<JSScript*>* scriptp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallFunctionTracer(JSTracer* trc, JS::Heap<JSFunction*>* funp, const char* name);
-
-// The following JS_CallUnbarriered*Tracer functions should only be called where
-// you know for sure that a heap post barrier is not required.  Use with extreme
-// caution!
-extern JS_PUBLIC_API(void)
-JS_CallUnbarrieredValueTracer(JSTracer* trc, JS::Value* valuep, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallUnbarrieredIdTracer(JSTracer* trc, jsid* idp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallUnbarrieredObjectTracer(JSTracer* trc, JSObject** objp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallUnbarrieredStringTracer(JSTracer* trc, JSString** strp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_CallUnbarrieredScriptTracer(JSTracer* trc, JSScript** scriptp, const char* name);
-
-template <typename HashSetEnum>
-inline void
-JS_CallHashSetObjectTracer(JSTracer* trc, HashSetEnum& e, JSObject* const& key, const char* name)
-{
-    JSObject* updated = key;
-    JS_CallUnbarrieredObjectTracer(trc, &updated, name);
-    if (updated != key)
-        e.rekeyFront(updated);
-}
-
-/**
- * Trace an object that is known to always be tenured.  No post barriers are
- * required in this case.
- */
-extern JS_PUBLIC_API(void)
-JS_CallTenuredObjectTracer(JSTracer* trc, JS::TenuredHeap<JSObject*>* objp, const char* name);
-
-extern JS_PUBLIC_API(void)
-JS_TraceRuntime(JSTracer* trc);
-
 namespace JS {
+
+// The JS::TraceEdge family of functions traces the given GC thing reference.
+// This performs the tracing action configured on the given JSTracer: typically
+// calling the JSTracer::callback or marking the thing as live.
+//
+// The argument to JS::TraceEdge is an in-out param: when the function returns,
+// the garbage collector might have moved the GC thing. In this case, the
+// reference passed to JS::TraceEdge will be updated to the thing's new
+// location. Callers of this method are responsible for updating any state that
+// is dependent on the object's address. For example, if the object's address
+// is used as a key in a hashtable, then the object must be removed and
+// re-inserted with the correct hash.
+//
+// Note that while |edgep| must never be null, it is fine for |*edgep| to be
+// nullptr.
+template <typename T>
+extern JS_PUBLIC_API(void)
+TraceEdge(JSTracer* trc, JS::Heap<T>* edgep, const char* name);
+
+extern JS_PUBLIC_API(void)
+TraceEdge(JSTracer* trc, JS::TenuredHeap<JSObject*>* edgep, const char* name);
+
+// Edges that are always traced as part of root marking do not require
+// incremental barriers. This function allows for marking non-barriered
+// pointers, but asserts that this happens during root marking.
+//
+// Note that while |edgep| must never be null, it is fine for |*edgep| to be
+// nullptr.
+template <typename T>
+extern JS_PUBLIC_API(void)
+UnsafeTraceRoot(JSTracer* trc, T* edgep, const char* name);
+
 extern JS_PUBLIC_API(void)
 TraceChildren(JSTracer* trc, GCCellPtr thing);
 
-typedef js::HashSet<Zone*, js::DefaultHasher<Zone*>, js::SystemAllocPolicy> ZoneSet;
-} // namespace JS
+using ZoneSet = js::HashSet<Zone*, js::DefaultHasher<Zone*>, js::SystemAllocPolicy>;
+using CompartmentSet = js::HashSet<JSCompartment*, js::DefaultHasher<JSCompartment*>,
+                                   js::SystemAllocPolicy>;
 
 /**
- * Trace every value within |zones| that is wrapped by a cross-compartment
- * wrapper from a zone that is not an element of |zones|.
+ * Trace every value within |compartments| that is wrapped by a
+ * cross-compartment wrapper from a compartment that is not an element of
+ * |compartments|.
  */
 extern JS_PUBLIC_API(void)
-JS_TraceIncomingCCWs(JSTracer* trc, const JS::ZoneSet& zones);
+TraceIncomingCCWs(JSTracer* trc, const JS::CompartmentSet& compartments);
+
+} // namespace JS
 
 extern JS_PUBLIC_API(void)
 JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc,
@@ -369,45 +337,20 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc,
 
 namespace js {
 
-// Automates static dispatch for GC interaction with TraceableContainers.
-template <typename>
-struct DefaultGCPolicy;
-
-// This policy dispatches GC methods to a method on the type.
+// Trace an edge that is not a GC root and is not wrapped in a barriered
+// wrapper for some reason.
+//
+// This method does not check if |*edgep| is non-null before tracing through
+// it, so callers must check any nullable pointer before calling this method.
 template <typename T>
-struct StructGCPolicy {
-    static void trace(JSTracer* trc, T* t, const char* name) {
-        // This is the default GC policy for storing GC things in containers.
-        // If your build is failing here, it means you either need an
-        // implementation of DefaultGCPolicy<T> for your type or, if this is
-        // the right policy for you, your struct or container is missing a
-        // trace method.
-        t->trace(trc);
-    }
-};
+extern JS_PUBLIC_API(void)
+UnsafeTraceManuallyBarrieredEdge(JSTracer* trc, T* edgep, const char* name);
 
-// This policy ignores any GC interaction, e.g. for non-GC types.
+namespace gc {
 template <typename T>
-struct IgnoreGCPolicy {
-    static void trace(JSTracer* trc, uint32_t* id, const char* name) {}
-};
-
-// The default policy when no other more specific policy fits (e.g. for a
-// direct GC pointer), is to assume a struct type that implements the needed
-// methods.
-template <typename T>
-struct DefaultGCPolicy : public StructGCPolicy<T> {};
-
-template <>
-struct DefaultGCPolicy<jsid>
-{
-    static void trace(JSTracer* trc, jsid* id, const char* name) {
-        JS_CallUnbarrieredIdTracer(trc, id, name);
-    }
-};
-
-template <> struct DefaultGCPolicy<uint32_t> : public IgnoreGCPolicy<uint32_t> {};
-
+extern JS_PUBLIC_API(bool)
+EdgeNeedsSweep(JS::Heap<T>* edgep);
+} // namespace gc
 } // namespace js
 
 #endif /* js_TracingAPI_h */

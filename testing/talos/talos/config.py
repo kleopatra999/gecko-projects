@@ -6,6 +6,8 @@ import sys
 import os
 import copy
 
+from mozlog.commandline import setup_logging
+
 from talos import utils, test
 from talos.cmdline import parse_args
 
@@ -82,15 +84,12 @@ DEFAULTS = dict(
         'extensions.checkCompatibility': False,
         'extensions.enabledScopes': 5,
         'extensions.update.notifyUser': False,
-        'xpinstall.signatures.required': False,
         'hangmonitor.timeout': 0,
         'network.proxy.http': 'localhost',
         'network.proxy.http_port': 80,
         'network.proxy.type': 1,
         'security.enable_java': False,
         'security.fileuri.strict_origin_policy': False,
-        'toolkit.telemetry.prompted': 999,
-        'toolkit.telemetry.notifiedOptOut': 999,
         'dom.send_after_paint_to_content': True,
         'security.turn_off_all_security_so_that_viruses_can_'
         'take_over_this_computer': True,
@@ -110,6 +109,10 @@ DEFAULTS = dict(
             'http://127.0.0.1/trackingprotection/tour',
         'browser.safebrowsing.enabled': False,
         'browser.safebrowsing.malware.enabled': False,
+        'browser.safebrowsing.forbiddenURIs.enabled': False,
+        'browser.safebrowsing.blockedURIs.enabled': False,
+        'privacy.trackingprotection.enabled': False,
+        'privacy.trackingprotection.pbmode.enabled': False,
         'browser.search.isUS': True,
         'browser.search.countryCode': 'US',
         'browser.selfsupport.url':
@@ -189,7 +192,6 @@ DEFAULTS = dict(
 # keys to generated self.config that are global overrides to tests
 GLOBAL_OVERRIDES = (
     'cycles',
-    'responsiveness',
     'sps_profile',
     'sps_profile_interval',
     'sps_profile_entries',
@@ -268,6 +270,7 @@ def update_prefs(config):
     # if e10s is enabled, set prefs accordingly
     if config['e10s']:
         config['preferences']['browser.tabs.remote.autostart'] = True
+        config['preferences']['extensions.e10sBlocksEnabling'] = False
     else:
         config['preferences']['browser.tabs.remote.autostart'] = False
         config['preferences']['browser.tabs.remote.autostart.1'] = False
@@ -411,10 +414,11 @@ def get_browser_config(config):
                 'extra_args', 'buildid', 'env', 'init_url', 'webserver')
     optional = {'bcontroller_config': '${talos}/bcontroller.json',
                 'branch_name': '',
-                'child_process': 'plugin-container',
+                'child_process': 'firefox-webcontent',
                 'develop': False,
                 'e10s': False,
                 'process': '',
+                'framework': 'talos',
                 'repository': None,
                 'sourcestamp': None,
                 'symbols_path': None,
@@ -448,12 +452,12 @@ def get_config(argv=None):
             raise ConfigurationError('No such suite: %r' % cli_opts.suite)
         argv += ['-a', ':'.join(suite_conf['tests'])]
         argv += suite_conf.get('talos_options', [])
-        # and reparse the args
-        cli_opts = parse_args(argv=argv)
+        # args needs to be reparsed now
     elif not cli_opts.activeTests:
         raise ConfigurationError('--activeTests or --suite required!')
 
     cli_opts = parse_args(argv=argv)
+    setup_logging("talos", cli_opts, {"tbpl": sys.stdout})
     config = copy.deepcopy(DEFAULTS)
     config.update(cli_opts.__dict__)
     for validate in CONF_VALIDATORS:

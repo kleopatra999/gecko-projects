@@ -9,6 +9,9 @@
 #ifdef XP_WIN
 #include "WMFDecoderModule.h"
 #endif
+#ifdef MOZ_FFVPX
+#include "FFVPXRuntimeLinker.h"
+#endif
 #ifdef MOZ_FFMPEG
 #include "FFmpegRuntimeLinker.h"
 #endif
@@ -53,6 +56,9 @@ bool PDMFactory::sAndroidMCDecoderEnabled = false;
 bool PDMFactory::sAndroidMCDecoderPreferred = false;
 #endif
 bool PDMFactory::sGMPDecoderEnabled = false;
+#ifdef MOZ_FFVPX
+bool PDMFactory::sFFVPXDecoderEnabled = false;
+#endif
 #ifdef MOZ_FFMPEG
 bool PDMFactory::sFFmpegDecoderEnabled = false;
 #endif
@@ -76,10 +82,10 @@ PDMFactory::Init()
   alreadyInitialized = true;
 
   Preferences::AddBoolVarCache(&sUseBlankDecoder,
-                               "media.use-blank-decoder");
+                               "media.use-blank-decoder", false);
 #ifdef MOZ_GONK_MEDIACODEC
   Preferences::AddBoolVarCache(&sGonkDecoderEnabled,
-                               "media.gonk.enabled", false);
+                               "media.gonk.enabled", true);
 #endif
 #ifdef MOZ_WIDGET_ANDROID
   Preferences::AddBoolVarCache(&sAndroidMCDecoderEnabled,
@@ -89,14 +95,18 @@ PDMFactory::Init()
 #endif
 
   Preferences::AddBoolVarCache(&sGMPDecoderEnabled,
-                               "media.gmp.decoder.enabled", false);
+                               "media.gmp.decoder.enabled", true);
 #ifdef MOZ_FFMPEG
   Preferences::AddBoolVarCache(&sFFmpegDecoderEnabled,
-                               "media.ffmpeg.enabled", false);
+                               "media.ffmpeg.enabled", true);
+#endif
+#ifdef MOZ_FFVPX
+  Preferences::AddBoolVarCache(&sFFVPXDecoderEnabled,
+                               "media.ffvpx.enabled", true);
 #endif
 #ifdef XP_WIN
   Preferences::AddBoolVarCache(&sWMFDecoderEnabled,
-                               "media.wmf.enabled", false);
+                               "media.wmf.enabled", true);
 #endif
 
   Preferences::AddBoolVarCache(&sEnableFuzzingWrapper,
@@ -112,8 +122,11 @@ PDMFactory::Init()
 #ifdef MOZ_APPLEMEDIA
   AppleDecoderModule::Init();
 #endif
+#ifdef MOZ_FFVPX
+  FFVPXRuntimeLinker::Init();
+#endif
 #ifdef MOZ_FFMPEG
-  FFmpegRuntimeLinker::Link();
+  FFmpegRuntimeLinker::Init();
 #endif
   GMPDecoderModule::Init();
 }
@@ -227,7 +240,7 @@ PDMFactory::CreateDecoderWithPDM(PlatformDecoderModule* aPDM,
 }
 
 bool
-PDMFactory::SupportsMimeType(const nsACString& aMimeType)
+PDMFactory::SupportsMimeType(const nsACString& aMimeType) const
 {
   if (mEMEPDM) {
     return mEMEPDM->SupportsMimeType(aMimeType);
@@ -259,6 +272,12 @@ PDMFactory::CreatePDMs()
 #ifdef XP_WIN
   if (sWMFDecoderEnabled) {
     m = new WMFDecoderModule();
+    StartupPDM(m);
+  }
+#endif
+#ifdef MOZ_FFVPX
+  if (sFFVPXDecoderEnabled) {
+    m = FFVPXRuntimeLinker::CreateDecoderModule();
     StartupPDM(m);
   }
 #endif
@@ -305,7 +324,7 @@ PDMFactory::StartupPDM(PlatformDecoderModule* aPDM)
 }
 
 already_AddRefed<PlatformDecoderModule>
-PDMFactory::GetDecoder(const nsACString& aMimeType)
+PDMFactory::GetDecoder(const nsACString& aMimeType) const
 {
   RefPtr<PlatformDecoderModule> pdm;
   for (auto& current : mCurrentPDMs) {

@@ -145,8 +145,7 @@ enum : uint32_t {
     /* Whether any objects have been iterated over. */
     OBJECT_FLAG_ITERATED              = 0x00080000,
 
-    /* For a global object, whether flags were set on the RegExpStatics. */
-    OBJECT_FLAG_REGEXP_FLAGS_SET      = 0x00100000,
+    /* 0x00100000 is not used. */
 
     /*
      * For the function on a run-once script, whether the function has actually
@@ -156,9 +155,9 @@ enum : uint32_t {
 
     /*
      * For a global object, whether any array buffers in this compartment with
-     * typed object views have been neutered.
+     * typed object views have ever been detached.
      */
-    OBJECT_FLAG_TYPED_OBJECT_NEUTERED = 0x00400000,
+    OBJECT_FLAG_TYPED_OBJECT_HAS_DETACHED_BUFFER = 0x00400000,
 
     /*
      * Whether objects with this type should be allocated directly in the
@@ -267,12 +266,12 @@ class TypeSet
         void ensureTrackedProperty(JSContext* cx, jsid id);
 
         ObjectGroup* maybeGroup();
-    };
+    } JS_HAZ_GC_POINTER;
 
     // Information about a single concrete type. We pack this into one word,
     // where small values are particular primitive or other singleton types and
     // larger values are either specific JS objects or object groups.
-    class Type : public JS::Traceable
+    class Type
     {
         friend class TypeSet;
 
@@ -350,13 +349,13 @@ class TypeSet
         inline ObjectGroup* group() const;
         inline ObjectGroup* groupNoBarrier() const;
 
-        static void trace(Type* v, JSTracer* trc) {
-            MarkTypeUnbarriered(trc, v, "TypeSet::Type");
+        void trace(JSTracer* trc) {
+            MarkTypeUnbarriered(trc, this, "TypeSet::Type");
         }
 
         bool operator == (Type o) const { return data == o.data; }
         bool operator != (Type o) const { return data != o.data; }
-    };
+    } JS_HAZ_GC_POINTER;
 
     static inline Type UndefinedType() { return Type(JSVAL_TYPE_UNDEFINED); }
     static inline Type NullType()      { return Type(JSVAL_TYPE_NULL); }
@@ -535,7 +534,7 @@ class TypeSet
     static bool IsTypeMarked(Type* v);
     static bool IsTypeAllocatedDuringIncremental(Type v);
     static bool IsTypeAboutToBeFinalized(Type* v);
-};
+} JS_HAZ_GC_POINTER;
 
 /*
  * A constraint which listens to additions to a type set and propagates those
@@ -597,6 +596,9 @@ class AutoClearTypeInferenceStateOnOOM
 
     void setOOM() {
         oom = true;
+    }
+    bool hadOOM() const {
+        return oom;
     }
 };
 
@@ -660,6 +662,12 @@ class TemporaryTypeSet : public TypeSet
         this->objectSet = objectSet;
     }
 
+    TemporaryTypeSet(LifoAlloc* alloc, jit::MIRType type)
+      : TemporaryTypeSet(alloc, PrimitiveType(ValueTypeFromMIRType(type)))
+    {
+        MOZ_ASSERT(type != jit::MIRType_Value);
+    }
+
     /*
      * Constraints for JIT compilation.
      *
@@ -718,11 +726,19 @@ class TemporaryTypeSet : public TypeSet
      */
     bool getCommonPrototype(CompilerConstraintList* constraints, JSObject** proto);
 
-    /* Get the typed array type of all objects in this set, or Scalar::MaxTypedArrayViewType. */
-    Scalar::Type getTypedArrayType(CompilerConstraintList* constraints);
+    /* Whether the buffer mapped by a TypedArray is shared memory or not */
+    enum TypedArraySharedness {
+        UnknownSharedness=1,    // We can't determine sharedness
+        KnownShared,            // We know for sure the buffer is shared
+        KnownUnshared           // We know for sure the buffer is unshared
+    };
 
-    /* Get the shared typed array type of all objects in this set, or Scalar::MaxTypedArrayViewType. */
-    Scalar::Type getSharedTypedArrayType(CompilerConstraintList* constraints);
+    /* Get the typed array type of all objects in this set, or Scalar::MaxTypedArrayViewType.
+     * If there is such a common type and sharedness is not nullptr then
+     * *sharedness is set to what we know about the sharedness of the memory.
+     */
+    Scalar::Type getTypedArrayType(CompilerConstraintList* constraints,
+                                   TypedArraySharedness* sharedness = nullptr);
 
     /* Whether all objects have JSCLASS_IS_DOMJSCLASS set. */
     bool isDOMClass(CompilerConstraintList* constraints);
@@ -764,6 +780,10 @@ class TemporaryTypeSet : public TypeSet
      * objects in this type set.
      */
     DoubleConversion convertDoubleElements(CompilerConstraintList* constraints);
+
+  private:
+    void getTypedArraySharedness(CompilerConstraintList* constraints,
+                                 TypedArraySharedness* sharedness);
 };
 
 bool
@@ -1022,6 +1042,8 @@ class TypeScript
      */
     static inline void Monitor(JSContext* cx, JSScript* script, jsbytecode* pc,
                                const js::Value& val);
+    static inline void Monitor(JSContext* cx, JSScript* script, jsbytecode* pc,
+                               TypeSet::Type type);
     static inline void Monitor(JSContext* cx, const js::Value& rval);
 
     /* Monitor an assignment at a SETELEM on a non-integer identifier. */
@@ -1206,7 +1228,9 @@ class RecompileInfo
     bool shouldSweep(TypeZone& types);
 };
 
-typedef Vector<RecompileInfo, 0, SystemAllocPolicy> RecompileInfoVector;
+// The RecompileInfoVector has a MinInlineCapacity of one so that invalidating a
+// single IonScript doesn't require an allocation.
+typedef Vector<RecompileInfo, 1, SystemAllocPolicy> RecompileInfoVector;
 
 struct AutoEnterAnalysis;
 

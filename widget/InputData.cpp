@@ -29,8 +29,11 @@ already_AddRefed<Touch> SingleTouchData::ToNewDOMTouch() const
 }
 
 MouseInput::MouseInput(const WidgetMouseEventBase& aMouseEvent)
-  : InputData(MOUSE_INPUT, aMouseEvent.time, aMouseEvent.timeStamp,
-              aMouseEvent.modifiers)
+  : InputData(MOUSE_INPUT, aMouseEvent.mTime, aMouseEvent.mTimeStamp,
+              aMouseEvent.mModifiers)
+  , mType(MOUSE_NONE)
+  , mButtonType(NONE)
+  , mButtons(aMouseEvent.buttons)
 {
   MOZ_ASSERT(NS_IsMainThread(),
              "Can only copy from WidgetTouchEvent on main thread");
@@ -65,16 +68,26 @@ MouseInput::MouseInput(const WidgetMouseEventBase& aMouseEvent)
     case eDragEnd:
       mType = MOUSE_DRAG_END;
       break;
+    case eMouseEnterIntoWidget:
+      mType = MOUSE_WIDGET_ENTER;
+      break;
+    case eMouseExitFromWidget:
+      mType = MOUSE_WIDGET_EXIT;
+      break;
     default:
       MOZ_ASSERT_UNREACHABLE("Mouse event type not supported");
       break;
   }
+
+  mOrigin =
+    ScreenPoint(ViewAs<ScreenPixel>(aMouseEvent.refPoint,
+      PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
 }
 
 bool
-MouseInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+MouseInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 {
-  Maybe<ParentLayerPoint> point = UntransformTo<ParentLayerPixel>(aTransform, mOrigin);
+  Maybe<ParentLayerPoint> point = UntransformBy(aTransform, mOrigin);
   if (!point) {
     return false;
   }
@@ -83,9 +96,81 @@ MouseInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
   return true;
 }
 
+WidgetMouseEvent
+MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
+{
+  MOZ_ASSERT(NS_IsMainThread(),
+             "Can only convert To WidgetTouchEvent on main thread");
+
+  EventMessage msg = eVoidEvent;
+  uint32_t clickCount = 0;
+  switch (mType) {
+    case MOUSE_MOVE:
+      msg = eMouseMove;
+      break;
+    case MOUSE_UP:
+      msg = eMouseUp;
+      clickCount = 1;
+      break;
+    case MOUSE_DOWN:
+      msg = eMouseDown;
+      clickCount = 1;
+      break;
+    case MOUSE_DRAG_START:
+      msg = eDragStart;
+      break;
+    case MOUSE_DRAG_END:
+      msg = eDragEnd;
+      break;
+    case MOUSE_WIDGET_ENTER:
+      msg = eMouseEnterIntoWidget;
+      break;
+    case MOUSE_WIDGET_EXIT:
+      msg = eMouseExitFromWidget;
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Did not assign a type to WidgetMouseEvent in MouseInput");
+      break;
+  }
+
+  WidgetMouseEvent event(true, msg, aWidget, WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
+
+  if (msg == eVoidEvent) {
+    return event;
+  }
+
+  switch (mButtonType) {
+    case MouseInput::LEFT_BUTTON:
+      event.button = WidgetMouseEventBase::eLeftButton;
+      break;
+    case MouseInput::MIDDLE_BUTTON:
+      event.button = WidgetMouseEventBase::eMiddleButton;
+      break;
+    case MouseInput::RIGHT_BUTTON:
+      event.button = WidgetMouseEventBase::eRightButton;
+      break;
+    case MouseInput::NONE:
+    default:
+      break;
+  }
+
+  event.buttons = mButtons;
+  event.mModifiers = modifiers;
+  event.mTime = mTime;
+  event.mTimeStamp = mTimeStamp;
+  event.refPoint =
+    RoundedToInt(ViewAs<LayoutDevicePixel>(mOrigin,
+      PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
+  event.clickCount = clickCount;
+  event.inputSource = mInputSource;
+  event.ignoreRootScrollFrame = true;
+
+  return event;
+}
+
 MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
-  : InputData(MULTITOUCH_INPUT, aTouchEvent.time, aTouchEvent.timeStamp,
-              aTouchEvent.modifiers)
+  : InputData(MULTITOUCH_INPUT, aTouchEvent.mTime, aTouchEvent.mTimeStamp,
+              aTouchEvent.mModifiers)
   , mHandledByAPZ(aTouchEvent.mFlags.mHandledByAPZ)
 {
   MOZ_ASSERT(NS_IsMainThread(),
@@ -120,9 +205,8 @@ MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
     float force = domTouch->Force();
 
     SingleTouchData data(identifier,
-                         ScreenIntPoint::FromUnknownPoint(
-                           gfx::IntPoint(domTouch->mRefPoint.x,
-                                         domTouch->mRefPoint.y)),
+                         ViewAs<ScreenPixel>(domTouch->mRefPoint,
+                                             PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent),
                          ScreenSize(radiusX, radiusY),
                          rotationAngle,
                          force);
@@ -161,9 +245,9 @@ MultiTouchInput::ToWidgetTouchEvent(nsIWidget* aWidget) const
     return event;
   }
 
-  event.modifiers = this->modifiers;
-  event.time = this->mTime;
-  event.timeStamp = this->mTimeStamp;
+  event.mModifiers = this->modifiers;
+  event.mTime = this->mTime;
+  event.mTimeStamp = this->mTimeStamp;
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
 
   for (size_t i = 0; i < mTouches.Length(); i++) {
@@ -203,10 +287,10 @@ MultiTouchInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
   event.refPoint.x = firstTouch.mScreenPoint.x;
   event.refPoint.y = firstTouch.mScreenPoint.y;
 
-  event.time = mTime;
+  event.mTime = mTime;
   event.button = WidgetMouseEvent::eLeftButton;
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
-  event.modifiers = modifiers;
+  event.mModifiers = modifiers;
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
 
   if (mouseEventMessage != eMouseMove) {
@@ -234,8 +318,8 @@ MultiTouchInput::IndexOfTouch(int32_t aTouchIdentifier)
 // SingleTouchData. It also sends garbage for the identifier, radius, force
 // and rotation angle.
 MultiTouchInput::MultiTouchInput(const WidgetMouseEvent& aMouseEvent)
-  : InputData(MULTITOUCH_INPUT, aMouseEvent.time, aMouseEvent.timeStamp,
-              aMouseEvent.modifiers)
+  : InputData(MULTITOUCH_INPUT, aMouseEvent.mTime, aMouseEvent.mTimeStamp,
+              aMouseEvent.mModifiers)
   , mHandledByAPZ(aMouseEvent.mFlags.mHandledByAPZ)
 {
   MOZ_ASSERT(NS_IsMainThread(),
@@ -263,19 +347,18 @@ MultiTouchInput::MultiTouchInput(const WidgetMouseEvent& aMouseEvent)
   }
 
   mTouches.AppendElement(SingleTouchData(0,
-                                         ScreenIntPoint::FromUnknownPoint(
-                                           gfx::IntPoint(aMouseEvent.refPoint.x,
-                                                         aMouseEvent.refPoint.y)),
+                                         ViewAs<ScreenPixel>(aMouseEvent.refPoint,
+                                                             PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent),
                                          ScreenSize(1, 1),
                                          180.0f,
                                          1.0f));
 }
 
 bool
-MultiTouchInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+MultiTouchInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 {
   for (size_t i = 0; i < mTouches.Length(); i++) {
-    Maybe<ParentLayerIntPoint> point = UntransformTo<ParentLayerPixel>(aTransform, mTouches[i].mScreenPoint);
+    Maybe<ParentLayerIntPoint> point = UntransformBy(aTransform, mTouches[i].mScreenPoint);
     if (!point) { 
       return false;
     }
@@ -301,33 +384,34 @@ WidgetWheelEvent
 PanGestureInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
 {
   WidgetWheelEvent wheelEvent(true, eWheel, aWidget);
-  wheelEvent.modifiers = this->modifiers;
-  wheelEvent.time = mTime;
-  wheelEvent.timeStamp = mTimeStamp;
+  wheelEvent.mModifiers = this->modifiers;
+  wheelEvent.mTime = mTime;
+  wheelEvent.mTimeStamp = mTimeStamp;
   wheelEvent.refPoint =
     RoundedToInt(ViewAs<LayoutDevicePixel>(mPanStartPoint,
-      PixelCastJustification::LayoutDeviceToScreenForUntransformedEvent));
+      PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
   wheelEvent.buttons = 0;
-  wheelEvent.deltaMode = nsIDOMWheelEvent::DOM_DELTA_PIXEL;
-  wheelEvent.isMomentum = IsMomentum();
-  wheelEvent.lineOrPageDeltaX = mLineOrPageDeltaX;
-  wheelEvent.lineOrPageDeltaY = mLineOrPageDeltaY;
-  wheelEvent.deltaX = mPanDisplacement.x;
-  wheelEvent.deltaY = mPanDisplacement.y;
+  wheelEvent.mDeltaMode = nsIDOMWheelEvent::DOM_DELTA_PIXEL;
+  wheelEvent.mMayHaveMomentum = true; // pan inputs may have momentum
+  wheelEvent.mIsMomentum = IsMomentum();
+  wheelEvent.mLineOrPageDeltaX = mLineOrPageDeltaX;
+  wheelEvent.mLineOrPageDeltaY = mLineOrPageDeltaY;
+  wheelEvent.mDeltaX = mPanDisplacement.x;
+  wheelEvent.mDeltaY = mPanDisplacement.y;
   wheelEvent.mFlags.mHandledByAPZ = mHandledByAPZ;
   return wheelEvent;
 }
 
 bool
-PanGestureInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+PanGestureInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 { 
-  Maybe<ParentLayerPoint> panStartPoint = UntransformTo<ParentLayerPixel>(aTransform, mPanStartPoint);
+  Maybe<ParentLayerPoint> panStartPoint = UntransformBy(aTransform, mPanStartPoint);
   if (!panStartPoint) {
     return false;
   }
   mLocalPanStartPoint = *panStartPoint;
   
-  Maybe<ParentLayerPoint> panDisplacement = UntransformVector<ParentLayerPixel>(aTransform, mPanDisplacement, mPanStartPoint);
+  Maybe<ParentLayerPoint> panDisplacement = UntransformVector(aTransform, mPanDisplacement, mPanStartPoint);
   if (!panDisplacement) {
     return false;
   }
@@ -336,9 +420,9 @@ PanGestureInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
 }
 
 bool
-PinchGestureInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+PinchGestureInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 { 
-  Maybe<ParentLayerPoint> point = UntransformTo<ParentLayerPixel>(aTransform, mFocusPoint);
+  Maybe<ParentLayerPoint> point = UntransformBy(aTransform, mFocusPoint);
   if (!point) {
     return false;
   }
@@ -347,9 +431,9 @@ PinchGestureInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
 }
 
 bool
-TapGestureInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+TapGestureInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 {
-  Maybe<ParentLayerIntPoint> point = UntransformTo<ParentLayerPixel>(aTransform, mPoint);
+  Maybe<ParentLayerIntPoint> point = UntransformBy(aTransform, mPoint);
   if (!point) {
     return false;
   }
@@ -363,42 +447,79 @@ DeltaModeForDeltaType(ScrollWheelInput::ScrollDeltaType aDeltaType)
   switch (aDeltaType) {
     case ScrollWheelInput::SCROLLDELTA_LINE:
       return nsIDOMWheelEvent::DOM_DELTA_LINE;
+    case ScrollWheelInput::SCROLLDELTA_PAGE:
+      return nsIDOMWheelEvent::DOM_DELTA_PAGE;
     case ScrollWheelInput::SCROLLDELTA_PIXEL:
     default:
       return nsIDOMWheelEvent::DOM_DELTA_PIXEL;
   }
 }
 
+ScrollWheelInput::ScrollWheelInput(const WidgetWheelEvent& aWheelEvent)
+  : InputData(SCROLLWHEEL_INPUT,
+              aWheelEvent.mTime,
+              aWheelEvent.mTimeStamp,
+              aWheelEvent.mModifiers)
+  , mDeltaType(DeltaTypeForDeltaMode(aWheelEvent.mDeltaMode))
+  , mScrollMode(SCROLLMODE_INSTANT)
+  , mHandledByAPZ(aWheelEvent.mFlags.mHandledByAPZ)
+  , mDeltaX(aWheelEvent.mDeltaX)
+  , mDeltaY(aWheelEvent.mDeltaY)
+  , mLineOrPageDeltaX(aWheelEvent.mLineOrPageDeltaX)
+  , mLineOrPageDeltaY(aWheelEvent.mLineOrPageDeltaY)
+  , mScrollSeriesNumber(0)
+  , mUserDeltaMultiplierX(1.0)
+  , mUserDeltaMultiplierY(1.0)
+  , mMayHaveMomentum(aWheelEvent.mMayHaveMomentum)
+  , mIsMomentum(aWheelEvent.mIsMomentum)
+  , mAllowToOverrideSystemScrollSpeed(
+      aWheelEvent.mAllowToOverrideSystemScrollSpeed)
+{
+  mOrigin =
+    ScreenPoint(ViewAs<ScreenPixel>(aWheelEvent.refPoint,
+      PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
+}
+
 WidgetWheelEvent
 ScrollWheelInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
 {
   WidgetWheelEvent wheelEvent(true, eWheel, aWidget);
-  wheelEvent.modifiers = this->modifiers;
-  wheelEvent.time = mTime;
-  wheelEvent.timeStamp = mTimeStamp;
+  wheelEvent.mModifiers = this->modifiers;
+  wheelEvent.mTime = mTime;
+  wheelEvent.mTimeStamp = mTimeStamp;
   wheelEvent.refPoint =
     RoundedToInt(ViewAs<LayoutDevicePixel>(mOrigin,
-      PixelCastJustification::LayoutDeviceToScreenForUntransformedEvent));
+      PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
   wheelEvent.buttons = 0;
-  wheelEvent.deltaMode = DeltaModeForDeltaType(mDeltaType);
-  wheelEvent.isMomentum = mIsMomentum;
-  wheelEvent.deltaX = mDeltaX;
-  wheelEvent.deltaY = mDeltaY;
-  wheelEvent.lineOrPageDeltaX = mLineOrPageDeltaX;
-  wheelEvent.lineOrPageDeltaY = mLineOrPageDeltaY;
+  wheelEvent.mDeltaMode = DeltaModeForDeltaType(mDeltaType);
+  wheelEvent.mMayHaveMomentum = mMayHaveMomentum;
+  wheelEvent.mIsMomentum = mIsMomentum;
+  wheelEvent.mDeltaX = mDeltaX;
+  wheelEvent.mDeltaY = mDeltaY;
+  wheelEvent.mLineOrPageDeltaX = mLineOrPageDeltaX;
+  wheelEvent.mLineOrPageDeltaY = mLineOrPageDeltaY;
+  wheelEvent.mAllowToOverrideSystemScrollSpeed =
+    mAllowToOverrideSystemScrollSpeed;
   wheelEvent.mFlags.mHandledByAPZ = mHandledByAPZ;
   return wheelEvent;
 }
 
 bool
-ScrollWheelInput::TransformToLocal(const gfx::Matrix4x4& aTransform)
+ScrollWheelInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform)
 {
-  Maybe<ParentLayerPoint> point = UntransformTo<ParentLayerPixel>(aTransform, mOrigin);
+  Maybe<ParentLayerPoint> point = UntransformBy(aTransform, mOrigin);
   if (!point) {
     return false;
   }
   mLocalOrigin = *point;
   return true;
+}
+
+bool
+ScrollWheelInput::IsCustomizedByUserPrefs() const
+{
+  return mUserDeltaMultiplierX != 1.0 ||
+         mUserDeltaMultiplierY != 1.0;
 }
 
 } // namespace mozilla

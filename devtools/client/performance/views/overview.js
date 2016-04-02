@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* import-globals-from ../performance-controller.js */
+/* import-globals-from ../performance-view.js */
 "use strict";
 
 // No sense updating the overview more often than receiving data from the
@@ -177,7 +179,7 @@ var OverviewView = {
     yield this.graphs.render(recording.getAllData(), resolution);
 
     // Finished rendering all graphs in this overview.
-    this.emit(EVENTS.OVERVIEW_RENDERED, resolution);
+    this.emit(EVENTS.UI_OVERVIEW_RENDERED, resolution);
   }),
 
   /**
@@ -274,19 +276,19 @@ var OverviewView = {
       return;
     }
 
-    this.emit(EVENTS.OVERVIEW_RANGE_SELECTED, this.getTimeInterval());
+    this.emit(EVENTS.UI_OVERVIEW_RANGE_SELECTED, this.getTimeInterval());
   },
 
   _onGraphRendered: function (_, graphName) {
     switch (graphName) {
       case "timeline":
-        this.emit(EVENTS.MARKERS_GRAPH_RENDERED);
+        this.emit(EVENTS.UI_MARKERS_GRAPH_RENDERED);
         break;
       case "memory":
-        this.emit(EVENTS.MEMORY_GRAPH_RENDERED);
+        this.emit(EVENTS.UI_MEMORY_GRAPH_RENDERED);
         break;
       case "framerate":
-        this.emit(EVENTS.FRAMERATE_GRAPH_RENDERED);
+        this.emit(EVENTS.UI_FRAMERATE_GRAPH_RENDERED);
         break;
     }
   },

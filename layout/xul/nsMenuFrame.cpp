@@ -55,12 +55,7 @@ using namespace mozilla;
 #define NSCONTEXTMENUISMOUSEUP 1
 #endif
 
-static void
-AssertNotCalled(void* aPropertyValue)
-{
-  NS_ERROR("popup list should never be destroyed by the FramePropertyTable");
-}
-NS_DECLARE_FRAME_PROPERTY(PopupListProperty, AssertNotCalled)
+NS_DECLARE_FRAME_PROPERTY_FRAMELIST(PopupListProperty)
 
 static int32_t gEatMouseMove = false;
 
@@ -125,7 +120,7 @@ public:
     nsMenuFrame* frame = static_cast<nsMenuFrame*>(mFrame.GetFrame());
     NS_ENSURE_STATE(frame);
     if (mAttr == nsGkAtoms::checked) {
-      frame->UpdateMenuSpecialState(frame->PresContext());
+      frame->UpdateMenuSpecialState();
     } else if (mAttr == nsGkAtoms::acceltext) {
       // someone reset the accelText attribute,
       // so clear the bit that says *we* set it
@@ -135,7 +130,7 @@ public:
     else if (mAttr == nsGkAtoms::key) {
       frame->BuildAcceleratorText(true);
     } else if (mAttr == nsGkAtoms::type || mAttr == nsGkAtoms::name) {
-      frame->UpdateMenuType(frame->PresContext());
+      frame->UpdateMenuType();
     }
     return NS_OK;
   }
@@ -211,7 +206,7 @@ public:
     bool shouldFlush = false;
     nsMenuFrame* menu = do_QueryFrame(mWeakFrame.GetFrame());
     if (menu) {
-      menu->UpdateMenuType(menu->PresContext());
+      menu->UpdateMenuType();
       shouldFlush = true;
     }
     delete this;
@@ -275,8 +270,7 @@ nsMenuFrame::GetPopupList() const
   if (!HasPopup()) {
     return nullptr;
   }
-  nsFrameList* prop =
-    static_cast<nsFrameList*>(Properties().Get(PopupListProperty()));
+  nsFrameList* prop = Properties().Get(PopupListProperty());
   NS_ASSERTION(prop && prop->GetLength() == 1 &&
                prop->FirstChild()->GetType() == nsGkAtoms::menuPopupFrame,
                "popup list should have exactly one nsMenuPopupFrame");
@@ -287,8 +281,7 @@ void
 nsMenuFrame::DestroyPopupList()
 {
   NS_ASSERTION(HasPopup(), "huh?");
-  nsFrameList* prop =
-    static_cast<nsFrameList*>(Properties().Remove(PopupListProperty()));
+  nsFrameList* prop = Properties().Remove(PopupListProperty());
   NS_ASSERTION(prop && prop->IsEmpty(),
                "popup list must exist and be empty when destroying");
   RemoveStateBits(NS_STATE_MENU_HAS_POPUP_LIST);
@@ -315,8 +308,8 @@ void
 nsMenuFrame::SetInitialChildList(ChildListID     aListID,
                                  nsFrameList&    aChildList)
 {
-  NS_ASSERTION(!HasPopup(), "SetInitialChildList called twice?");
   if (aListID == kPrincipalList || aListID == kPopupList) {
+    NS_ASSERTION(!HasPopup(), "SetInitialChildList called twice?");
     SetPopupFrame(aChildList);
   }
   nsBoxFrame::SetInitialChildList(aListID, aChildList);
@@ -474,7 +467,11 @@ nsMenuFrame::HandleEvent(nsPresContext* aPresContext,
         if (IsMenu() && !onmenubar && IsOpen()) {
           // Submenus don't get closed up immediately.
         }
-        else if (this == menuParent->GetCurrentMenuItem()) {
+        else if (this == menuParent->GetCurrentMenuItem()
+#ifdef XP_WIN
+                 && GetParentMenuListType() == eNotMenuList
+#endif
+        ) {
           menuParent->ChangeMenuItem(nullptr, false, false);
         }
       }
@@ -913,7 +910,7 @@ nsMenuFrame::IsDisabled()
 }
 
 void
-nsMenuFrame::UpdateMenuType(nsPresContext* aPresContext)
+nsMenuFrame::UpdateMenuType()
 {
   static nsIContent::AttrValuesArray strings[] =
     {&nsGkAtoms::checkbox, &nsGkAtoms::radio, nullptr};
@@ -935,12 +932,12 @@ nsMenuFrame::UpdateMenuType(nsPresContext* aPresContext)
       mType = eMenuType_Normal;
       break;
   }
-  UpdateMenuSpecialState(aPresContext);
+  UpdateMenuSpecialState();
 }
 
 /* update checked-ness for type="checkbox" and type="radio" */
 void
-nsMenuFrame::UpdateMenuSpecialState(nsPresContext* aPresContext)
+nsMenuFrame::UpdateMenuSpecialState()
 {
   bool newChecked =
     mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::checked,
@@ -1239,7 +1236,7 @@ nsMenuFrame::CreateMenuCommandEvent(WidgetGUIEvent* aEvent, bool aFlipChecked)
   // Create a trusted event if the triggering event was trusted, or if
   // we're called from chrome code (since at least one of our caller
   // passes in a null event).
-  bool isTrusted = aEvent ? aEvent->mFlags.mIsTrusted :
+  bool isTrusted = aEvent ? aEvent->IsTrusted() :
                               nsContentUtils::IsCallerChrome();
 
   bool shift = false, control = false, alt = false, meta = false;
@@ -1349,7 +1346,7 @@ nsMenuFrame::SizeToPopup(nsBoxLayoutState& aState, nsSize& aSize)
     bool widthSet, heightSet;
     nsSize tmpSize(-1, 0);
     nsIFrame::AddCSSPrefSize(this, tmpSize, widthSet, heightSet);
-    if (!widthSet && GetFlex(aState) == 0) {
+    if (!widthSet && GetFlex() == 0) {
       nsMenuPopupFrame* popupFrame = GetPopup();
       if (!popupFrame)
         return false;
@@ -1365,7 +1362,7 @@ nsMenuFrame::SizeToPopup(nsBoxLayoutState& aState, nsSize& aSize)
       GetBorderAndPadding(borderPadding);
 
       // if there is a scroll frame, add the desired width of the scrollbar as well
-      nsIScrollableFrame* scrollFrame = do_QueryFrame(popupFrame->GetFirstPrincipalChild());
+      nsIScrollableFrame* scrollFrame = do_QueryFrame(popupFrame->PrincipalChildList().FirstChild());
       nscoord scrollbarWidth = 0;
       if (scrollFrame) {
         scrollbarWidth =
@@ -1448,7 +1445,7 @@ nsIScrollableFrame* nsMenuFrame::GetScrollTargetFrame()
   nsMenuPopupFrame* popupFrame = GetPopup();
   if (!popupFrame)
     return nullptr;
-  nsIFrame* childFrame = popupFrame->GetFirstPrincipalChild();
+  nsIFrame* childFrame = popupFrame->PrincipalChildList().FirstChild();
   if (childFrame)
     return popupFrame->GetScrollFrame(childFrame);
   return nullptr;

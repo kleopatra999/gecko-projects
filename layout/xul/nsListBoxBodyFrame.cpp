@@ -27,7 +27,8 @@
 #include "nsFontMetrics.h"
 #include "nsITimer.h"
 #include "nsAutoPtr.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsPIBoxObject.h"
 #include "nsLayoutUtils.h"
 #include "nsPIListBoxObject.h"
@@ -196,8 +197,8 @@ nsListBoxBodyFrame::Init(nsIContent*       aContent,
       scrollbarFrame->SetScrollbarMediatorContent(GetContent());
     }
   }
-  RefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm));
+  RefPtr<nsFontMetrics> fm =
+    nsLayoutUtils::GetFontMetricsForFrame(this, 1.0f);
   mRowHeight = fm->MaxHeight();
 }
 
@@ -727,9 +728,8 @@ nsListBoxBodyFrame::ComputeIntrinsicISize(nsBoxLayoutState& aBoxLayoutState)
             }
           }
 
-          RefPtr<nsFontMetrics> fm;
-          nsLayoutUtils::GetFontMetricsForStyleContext(styleContext,
-                                                       getter_AddRefs(fm));
+          RefPtr<nsFontMetrics> fm =
+            nsLayoutUtils::GetFontMetricsForStyleContext(styleContext);
 
           nscoord textWidth =
             nsLayoutUtils::AppUnitWidthOfStringBidi(value, this, *fm,
@@ -1179,8 +1179,7 @@ nsListBoxBodyFrame::GetFirstItemBox(int32_t aOffset, bool* aCreated)
     nsPresContext* presContext = PresContext();
     nsCSSFrameConstructor* fc = presContext->PresShell()->FrameConstructor();
     nsIFrame* topFrame = nullptr;
-    fc->CreateListBoxContent(presContext, this, nullptr, startContent,
-                             &topFrame, isAppend, false, nullptr);
+    fc->CreateListBoxContent(this, nullptr, startContent, &topFrame, isAppend);
     mTopFrame = topFrame;
     if (mTopFrame) {
       if (aCreated)
@@ -1232,8 +1231,8 @@ nsListBoxBodyFrame::GetNextItemBox(nsIFrame* aBox, int32_t aOffset,
       
         nsPresContext* presContext = PresContext();
         nsCSSFrameConstructor* fc = presContext->PresShell()->FrameConstructor();
-        fc->CreateListBoxContent(presContext, this, prevFrame, nextContent,
-                                 &result, isAppend, false, nullptr);
+        fc->CreateListBoxContent(this, prevFrame, nextContent,
+                                 &result, isAppend);
 
         if (result) {
           if (aCreated)
@@ -1339,8 +1338,8 @@ nsListBoxBodyFrame::ListBoxInsertFrames(nsIFrame* aPrevFrame,
 // 
 // Called by nsCSSFrameConstructor when a new listitem content is inserted.
 //
-void 
-nsListBoxBodyFrame::OnContentInserted(nsPresContext* aPresContext, nsIContent* aChildContent)
+void
+nsListBoxBodyFrame::OnContentInserted(nsIContent* aChildContent)
 {
   if (mRowCount >= 0)
     ++mRowCount;

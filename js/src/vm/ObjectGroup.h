@@ -421,7 +421,7 @@ class ObjectGroup : public gc::TenuredCell
     void finalize(FreeOp* fop);
     void fixupAfterMovingGC() {}
 
-    static inline ThingRootKind rootKind() { return THING_ROOT_OBJECT_GROUP; }
+    static const JS::TraceKind TraceKind = JS::TraceKind::ObjectGroup;
 
     static inline uint32_t offsetOfClasp() {
         return offsetof(ObjectGroup, clasp_);
@@ -510,10 +510,11 @@ class ObjectGroup : public gc::TenuredCell
     // Get a non-singleton group to use for objects created at the specified
     // allocation site.
     static ObjectGroup* allocationSiteGroup(JSContext* cx, JSScript* script, jsbytecode* pc,
-                                            JSProtoKey key);
+                                            JSProtoKey key, HandleObject proto = nullptr);
 
     // Get a non-singleton group to use for objects created in a JSNative call.
-    static ObjectGroup* callingAllocationSiteGroup(JSContext* cx, JSProtoKey key);
+    static ObjectGroup* callingAllocationSiteGroup(JSContext* cx, JSProtoKey key,
+                                                   HandleObject proto = nullptr);
 
     // Set the group or singleton-ness of an object created for an allocation site.
     static bool
@@ -538,25 +539,28 @@ class ObjectGroupCompartment
     friend class ObjectGroup;
 
     struct NewEntry;
-    typedef HashSet<NewEntry, NewEntry, SystemAllocPolicy> NewTable;
-    class NewTableRef;
+    using NewTable = js::GCHashSet<NewEntry, NewEntry, SystemAllocPolicy>;
 
     // Set of default 'new' or lazy groups in the compartment.
     NewTable* defaultNewTable;
     NewTable* lazyTable;
 
     struct ArrayObjectKey;
-    typedef HashMap<ArrayObjectKey,
-                    ReadBarrieredObjectGroup,
-                    ArrayObjectKey,
-                    SystemAllocPolicy> ArrayObjectTable;
+    using ArrayObjectTable = js::GCRekeyableHashMap<ArrayObjectKey,
+                                                    ReadBarrieredObjectGroup,
+                                                    ArrayObjectKey,
+                                                    SystemAllocPolicy>;
 
     struct PlainObjectKey;
     struct PlainObjectEntry;
-    typedef HashMap<PlainObjectKey,
-                    PlainObjectEntry,
-                    PlainObjectKey,
-                    SystemAllocPolicy> PlainObjectTable;
+    struct PlainObjectTableSweepPolicy {
+        static bool needsSweep(PlainObjectKey* key, PlainObjectEntry* entry);
+    };
+    using PlainObjectTable = js::GCHashMap<PlainObjectKey,
+                                           PlainObjectEntry,
+                                           PlainObjectKey,
+                                           SystemAllocPolicy,
+                                           PlainObjectTableSweepPolicy>;
 
     // Tables for managing groups common to the contents of large script
     // singleton objects and JSON objects. These are vanilla ArrayObjects and
@@ -571,10 +575,10 @@ class ObjectGroupCompartment
     PlainObjectTable* plainObjectTable;
 
     struct AllocationSiteKey;
-    typedef HashMap<AllocationSiteKey,
-                    ReadBarrieredObjectGroup,
-                    AllocationSiteKey,
-                    SystemAllocPolicy> AllocationSiteTable;
+    using AllocationSiteTable = js::GCHashMap<AllocationSiteKey,
+                                              ReadBarrieredObjectGroup,
+                                              AllocationSiteKey,
+                                              SystemAllocPolicy>;
 
     // Table for referencing types of objects keyed to an allocation site.
     AllocationSiteTable* allocationSiteTable;
@@ -621,11 +625,7 @@ class ObjectGroupCompartment
     void checkNewTableAfterMovingGC(NewTable* table);
 #endif
 
-    void sweepNewTable(NewTable* table);
     void fixupNewTableAfterMovingGC(NewTable* table);
-
-    static void newTablePostBarrier(ExclusiveContext* cx, NewTable* table,
-                                    const Class* clasp, TaggedProto proto, JSObject* associated);
 };
 
 PlainObject*

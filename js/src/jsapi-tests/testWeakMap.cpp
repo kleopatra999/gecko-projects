@@ -5,6 +5,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "jscompartment.h"
+
 #include "gc/Zone.h"
 
 #include "jsapi-tests/tests.h"
@@ -85,7 +87,7 @@ BEGIN_TEST(testWeakMap_keyDelegates)
         JSAutoCompartment ac(cx, delegate);
         delegateRoot = JS_NewPlainObject(cx);
         CHECK(delegateRoot);
-        JS::RootedValue delegateValue(cx, ObjectValue(*delegate));
+        JS::RootedValue delegateValue(cx, JS::ObjectValue(*delegate));
         CHECK(JS_DefineProperty(cx, delegateRoot, "delegate", delegateValue, 0));
     }
     delegate = nullptr;
@@ -97,7 +99,8 @@ BEGIN_TEST(testWeakMap_keyDelegates)
     CHECK(newCCW(map, delegateRoot));
     js::SliceBudget budget(js::WorkBudget(1000000));
     rt->gc.startDebugGC(GC_NORMAL, budget);
-    CHECK(!JS::IsIncrementalGCInProgress(rt));
+    while (JS::IsIncrementalGCInProgress(rt))
+        rt->gc.debugGCSlice(budget);
 #ifdef DEBUG
     CHECK(map->zone()->lastZoneGroupIndex() < delegateRoot->zone()->lastZoneGroupIndex());
 #endif
@@ -112,7 +115,8 @@ BEGIN_TEST(testWeakMap_keyDelegates)
     CHECK(newCCW(map, delegateRoot));
     budget = js::SliceBudget(js::WorkBudget(100000));
     rt->gc.startDebugGC(GC_NORMAL, budget);
-    CHECK(!JS::IsIncrementalGCInProgress(rt));
+    while (JS::IsIncrementalGCInProgress(rt))
+        rt->gc.debugGCSlice(budget);
     CHECK(checkSize(map, 1));
 
     /*
@@ -228,12 +232,14 @@ JSObject* newDelegate()
 
     /* Create the global object. */
     JS::CompartmentOptions options;
-    options.setVersion(JSVERSION_LATEST);
-    JS::RootedObject global(cx);
-    global = JS_NewGlobalObject(cx, Jsvalify(&delegateClass), nullptr, JS::FireOnNewGlobalHook,
-                                options);
-    JS_SetReservedSlot(global, 0, JS::Int32Value(42));
+    options.behaviors().setVersion(JSVERSION_LATEST);
 
+    JS::RootedObject global(cx, JS_NewGlobalObject(cx, Jsvalify(&delegateClass), nullptr,
+                                                   JS::FireOnNewGlobalHook, options));
+    if (!global)
+        return nullptr;
+
+    JS_SetReservedSlot(global, 0, JS::Int32Value(42));
     return global;
 }
 

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests if the stackframe breadcrumbs are keyboard accessible.
@@ -33,11 +35,13 @@ function test() {
   function checkNavigationWhileNotFocused() {
     checkState({ frame: 1, source: 1, line: 6 });
 
-    EventUtils.sendKey("DOWN", gDebugger);
-    checkState({ frame: 1, source: 1, line: 7 });
+    return Task.spawn(function*() {
+      EventUtils.sendKey("DOWN", gDebugger);
+      checkState({ frame: 1, source: 1, line: 7 });
 
-    EventUtils.sendKey("UP", gDebugger);
-    checkState({ frame: 1, source: 1, line: 6 });
+      EventUtils.sendKey("UP", gDebugger);
+      checkState({ frame: 1, source: 1, line: 6 });
+    });
   }
 
   function focusCurrentStackFrame() {
@@ -51,7 +55,6 @@ function test() {
       yield promise.all([
         waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FETCHED_SCOPES),
         waitForSourceAndCaret(gPanel, "-01.js", 5),
-        waitForEditorLocationSet(gPanel),
         EventUtils.sendKey("UP", gDebugger)
       ]);
       checkState({ frame: 0, source: 0, line: 5 });
@@ -63,7 +66,6 @@ function test() {
       yield promise.all([
         waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FETCHED_SCOPES),
         waitForSourceAndCaret(gPanel, "-02.js", 6),
-        waitForEditorLocationSet(gPanel),
         EventUtils.sendKey("END", gDebugger)
       ]);
       checkState({ frame: 1, source: 1, line: 6 });
@@ -75,7 +77,6 @@ function test() {
       yield promise.all([
         waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FETCHED_SCOPES),
         waitForSourceAndCaret(gPanel, "-01.js", 5),
-        waitForEditorLocationSet(gPanel),
         EventUtils.sendKey("HOME", gDebugger)
       ]);
       checkState({ frame: 0, source: 0, line: 5 });

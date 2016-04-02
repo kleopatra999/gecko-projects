@@ -9,10 +9,12 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/Monitor.h"
+#include "mozilla/UniquePtr.h"
 #include "nsTArray.h"
 #include "MediaCache.h"
 #include "nsDeque.h"
 #include "nsThreadUtils.h"
+#include <deque>
 
 struct PRFileDesc;
 
@@ -96,7 +98,7 @@ public:
     explicit BlockChange(const uint8_t* aData)
       : mSourceBlockIndex(-1)
     {
-      mData = new uint8_t[BLOCK_SIZE];
+      mData = MakeUnique<uint8_t[]>(BLOCK_SIZE);
       memcpy(mData.get(), aData, BLOCK_SIZE);
     }
 
@@ -105,7 +107,7 @@ public:
     explicit BlockChange(int32_t aSourceBlockIndex)
       : mSourceBlockIndex(aSourceBlockIndex) {}
 
-    nsAutoArrayPtr<uint8_t> mData;
+    UniquePtr<uint8_t[]> mData;
     const int32_t mSourceBlockIndex;
 
     bool IsMove() const {
@@ -120,38 +122,6 @@ public:
     // Private destructor, to discourage deletion outside of Release():
     ~BlockChange()
     {
-    }
-  };
-
-  class Int32Queue : private nsDeque {
-  public:
-    int32_t PopFront() {
-      int32_t front = ObjectAt(0);
-      nsDeque::PopFront();
-      return front;
-    }
-
-    void PushBack(int32_t aValue) {
-      nsDeque::Push(reinterpret_cast<void*>(aValue));
-    }
-
-    bool Contains(int32_t aValue) {
-      for (int32_t i = 0; i < GetSize(); ++i) {
-        if (ObjectAt(i) == aValue) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    bool IsEmpty() {
-      return nsDeque::GetSize() == 0;
-    }
-
-  private:
-    int32_t ObjectAt(int32_t aIndex) {
-      void* v = nsDeque::ObjectAt(aIndex);
-      return reinterpret_cast<uintptr_t>(v);
     }
   };
 
@@ -201,8 +171,7 @@ private:
   // main thread).
   nsCOMPtr<nsIThread> mThread;
   // Queue of pending block indexes that need to be written or moved.
-  //nsAutoTArray<int32_t, 8> mChangeIndexList;
-  Int32Queue mChangeIndexList;
+  std::deque<int32_t> mChangeIndexList;
   // True if we've dispatched an event to commit all pending block changes
   // to file on mThread.
   bool mIsWriteScheduled;

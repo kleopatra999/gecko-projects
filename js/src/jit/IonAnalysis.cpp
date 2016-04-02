@@ -27,6 +27,390 @@ using namespace js::jit;
 
 using mozilla::DebugOnly;
 
+typedef Vector<MPhi*, 16, SystemAllocPolicy> MPhiVector;
+
+static bool
+FlagPhiInputsAsHavingRemovedUses(MBasicBlock* block, MBasicBlock* succ, MPhiVector& worklist)
+{
+    // When removing an edge between 2 blocks, we might remove the ability of
+    // later phases to figure out that the uses of a Phi should be considered as
+    // a use of all its inputs. Thus we need to mark the Phi inputs as having
+    // removed uses iff the phi has any uses.
+    //
+    //
+    //        +--------------------+         +---------------------+
+    //        |12 MFoo 6           |         |32 MBar 5            |
+    //        |                    |         |                     |
+    //        |   ...              |         |   ...               |
+    //        |                    |         |                     |
+    //        |25 MGoto Block 4    |         |43 MGoto Block 4     |
+    //        +--------------------+         +---------------------+
+    //                   |                              |
+    //             |     |                              |
+    //             |     |                              |
+    //             |     +-----X------------------------+
+    //             |         Edge       |
+    //             |        Removed     |
+    //             |                    |
+    //             |       +------------v-----------+
+    //             |       |50 MPhi 12 32           |
+    //             |       |                        |
+    //             |       |   ...                  |
+    //             |       |                        |
+    //             |       |70 MReturn 50           |
+    //             |       +------------------------+
+    //             |
+    //   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    //             |
+    //             v
+    //
+    //    ^   +--------------------+         +---------------------+
+    //   /!\  |12 MConst opt-out   |         |32 MBar 5            |
+    //  '---' |                    |         |                     |
+    //        |   ...              |         |   ...               |
+    //        |78 MBail            |         |                     |
+    //        |80 MUnreachable     |         |43 MGoto Block 4     |
+    //        +--------------------+         +---------------------+
+    //                                                  |
+    //                                                  |
+    //                                                  |
+    //                                  +---------------+
+    //                                  |
+    //                                  |
+    //                                  |
+    //                     +------------v-----------+
+    //                     |50 MPhi 32              |
+    //                     |                        |
+    //                     |   ...                  |
+    //                     |                        |
+    //                     |70 MReturn 50           |
+    //                     +------------------------+
+    //
+    //
+    // If the inputs of the Phi are not flagged as having removed uses, then
+    // later compilation phase might optimize them out. The problem is that a
+    // bailout will use this value and give it back to baseline, which will then
+    // use the OptimizedOut magic value in a computation.
+
+    // Conservative upper limit for the number of Phi instructions which are
+    // visited while looking for uses.
+    const size_t conservativeUsesLimit = 128;
+
+    MOZ_ASSERT(worklist.empty());
+    size_t predIndex = succ->getPredecessorIndex(block);
+    MPhiIterator end = succ->phisEnd();
+    MPhiIterator it = succ->phisBegin();
+    for (; it != end; it++) {
+        MPhi* phi = *it;
+
+        // We are looking to mark the Phi inputs which are used across the edge
+        // between the |block| and its successor |succ|.
+        MDefinition* def = phi->getOperand(predIndex);
+        if (def->isUseRemoved())
+            continue;
+
+        phi->setInWorklist();
+        if (!worklist.append(phi))
+            return false;
+
+        // Fill the work list with all the Phi nodes uses until we reach either:
+        //  - A resume point which uses the Phi as an observable operand.
+        //  - An explicit use of the Phi instruction.
+        //  - An implicit use of the Phi instruction.
+        bool isUsed = false;
+        for (size_t idx = 0; !isUsed && idx < worklist.length(); idx++) {
+            phi = worklist[idx];
+            if (phi->isUseRemoved() || phi->isImplicitlyUsed()) {
+                // The phi is implicitly used.
+                isUsed = true;
+                break;
+            }
+
+            MUseIterator usesEnd(phi->usesEnd());
+            for (MUseIterator use(phi->usesBegin()); use != usesEnd; use++) {
+                MNode* consumer = (*use)->consumer();
+                if (consumer->isResumePoint()) {
+                    MResumePoint* rp = consumer->toResumePoint();
+                    if (rp->isObservableOperand(*use)) {
+                        // The phi is observable via a resume point operand.
+                        isUsed = true;
+                        break;
+                    }
+                    continue;
+                }
+
+                MDefinition* cdef = consumer->toDefinition();
+                if (!cdef->isPhi()) {
+                    // The phi is explicitly used.
+                    isUsed = true;
+                    break;
+                }
+
+                phi = cdef->toPhi();
+                if (phi->isInWorklist())
+                    continue;
+
+                phi->setInWorklist();
+                if (!worklist.append(phi))
+                    return false;
+            }
+
+            // Use a conservative upper bound to avoid iterating too many times
+            // on very large graphs.
+            if (idx >= conservativeUsesLimit) {
+                isUsed = true;
+                break;
+            }
+        }
+
+        if (isUsed)
+            def->setUseRemoved();
+
+        // Remove all the InWorklist flags.
+        while (!worklist.empty()) {
+            phi = worklist.popCopy();
+            phi->setNotInWorklist();
+        }
+    }
+
+    return true;
+}
+
+static bool
+FlagAllOperandsAsHavingRemovedUses(MBasicBlock* block)
+{
+    // Flag all instructions operands as having removed uses.
+    MInstructionIterator end = block->end();
+    for (MInstructionIterator it = block->begin(); it != end; it++) {
+        MInstruction* ins = *it;
+        for (size_t i = 0, e = ins->numOperands(); i < e; i++)
+            ins->getOperand(i)->setUseRemovedUnchecked();
+
+        // Flag observable resume point operands as having removed uses.
+        if (MResumePoint* rp = ins->resumePoint()) {
+            // Note: no need to iterate over the caller's of the resume point as
+            // this is the same as the entry resume point.
+            for (size_t i = 0, e = rp->numOperands(); i < e; i++) {
+                if (!rp->isObservableOperand(i))
+                    continue;
+                rp->getOperand(i)->setUseRemovedUnchecked();
+            }
+        }
+    }
+
+    // Flag observable operands of the entry resume point as having removed uses.
+    MResumePoint* rp = block->entryResumePoint();
+    while (rp) {
+        for (size_t i = 0, e = rp->numOperands(); i < e; i++) {
+            if (!rp->isObservableOperand(i))
+                continue;
+            rp->getOperand(i)->setUseRemovedUnchecked();
+        }
+        rp = rp->caller();
+    }
+
+    // Flag Phi inputs of the successors has having removed uses.
+    MPhiVector worklist;
+    for (size_t i = 0, e = block->numSuccessors(); i < e; i++) {
+        if (!FlagPhiInputsAsHavingRemovedUses(block, block->getSuccessor(i), worklist))
+            return false;
+    }
+
+    return true;
+}
+
+static void
+RemoveFromSuccessors(MBasicBlock* block)
+{
+    // Remove this block from its successors.
+    size_t numSucc = block->numSuccessors();
+    while (numSucc--) {
+        MBasicBlock* succ = block->getSuccessor(numSucc);
+        if (succ->isDead())
+            continue;
+        JitSpew(JitSpew_Prune, "Remove block edge %d -> %d.", block->id(), succ->id());
+        succ->removePredecessor(block);
+    }
+}
+
+static void
+ConvertToBailingBlock(TempAllocator& alloc, MBasicBlock* block)
+{
+    // Add a bailout instruction.
+    MBail* bail = MBail::New(alloc, Bailout_FirstExecution);
+    MInstruction* bailPoint = block->safeInsertTop();
+    block->insertBefore(block->safeInsertTop(), bail);
+
+    // Discard all remaining instructions.
+    MInstructionIterator clearStart = block->begin(bailPoint);
+    block->discardAllInstructionsStartingAt(clearStart);
+    if (block->outerResumePoint())
+        block->clearOuterResumePoint();
+
+    // And replace the last instruction by the unreachable control instruction.
+    block->end(MUnreachable::New(alloc));
+}
+
+bool
+jit::PruneUnusedBranches(MIRGenerator* mir, MIRGraph& graph)
+{
+    MOZ_ASSERT(!mir->compilingAsmJS(), "AsmJS compilation have no code coverage support.");
+
+    // We do a reverse-post-order traversal, marking basic blocks when the block
+    // have to be converted into bailing blocks, and flagging block as
+    // unreachable if all predecessors are flagged as bailing or unreachable.
+    bool someUnreachable = false;
+    for (ReversePostorderIterator block(graph.rpoBegin()); block != graph.rpoEnd(); block++) {
+        JitSpew(JitSpew_Prune, "Investigate Block %d:", block->id());
+
+        // Do not touch entry basic blocks.
+        if (*block == graph.osrBlock() || *block == graph.entryBlock())
+            continue;
+
+        // Compute if all the predecessors of this block are either bailling out
+        // or are already flagged as unreachable.
+        bool isUnreachable = true;
+        bool isLoopHeader = block->isLoopHeader();
+        size_t numPred = block->numPredecessors();
+        size_t i = 0;
+        for (; i < numPred; i++) {
+            MBasicBlock* pred = block->getPredecessor(i);
+
+            // The backedge is visited after the loop header, but if the loop
+            // header is unreachable, then we can assume that the backedge would
+            // be unreachable too.
+            if (isLoopHeader && pred == block->backedge())
+                continue;
+
+            // Break if any of the predecessor can continue in this block.
+            if (!pred->isMarked() && !pred->unreachable()) {
+                isUnreachable = false;
+                break;
+            }
+        }
+
+        // Compute if the block should bailout, based on the trivial heuristic
+        // which is that if the block never got visited before, then it is
+        // likely to not be visited after.
+        bool shouldBailout =
+            block->getHitState() == MBasicBlock::HitState::Count &&
+            block->getHitCount() == 0;
+
+        // Check if the predecessors got accessed a large number of times in
+        // comparisons of the current block, in order to know if our attempt at
+        // removing this block is not premature.
+        if (shouldBailout) {
+            size_t p = numPred;
+            size_t predCount = 0;
+            bool isLoopExit = false;
+            while (p--) {
+                MBasicBlock* pred = block->getPredecessor(p);
+                if (pred->getHitState() == MBasicBlock::HitState::Count)
+                    predCount += pred->getHitCount();
+                isLoopExit |= pred->isLoopHeader() && pred->backedge() != *block;
+            }
+
+            // This assumes that instructions are numbered in sequence, which is
+            // the case after IonBuilder creation of basic blocks.
+            size_t numInst = block->rbegin()->id() - block->begin()->id();
+
+            // This sum is not homogeneous but gives good results on benchmarks
+            // like Kraken and Octane. The current block has not been executed
+            // yet, and ...
+            //
+            //   1. If the number of times the predecessor got executed is
+            //      larger, then we are less likely to hit this block.
+            //
+            //   2. If the block is large, then this is likely a corner case,
+            //      and thus we are less likely to hit this block.
+            if (predCount + numInst < 75)
+                shouldBailout = false;
+
+            // If this is the exit block of a loop, then keep this basic
+            // block. This heuristic is useful as a bailout is often much more
+            // costly than a simple exit sequence.
+            if (isLoopExit)
+                shouldBailout = false;
+        }
+
+        // Continue to the next basic block if the current basic block can
+        // remain unchanged.
+        if (!isUnreachable && !shouldBailout)
+            continue;
+
+        JitSpewIndent indent(JitSpew_Prune);
+        someUnreachable = true;
+        if (isUnreachable) {
+            JitSpew(JitSpew_Prune, "Mark block %d as unreachable.", block->id());
+            block->setUnreachable();
+            // If the block is unreachable, then there is no need to convert it
+            // to a bailing block.
+        } else if (shouldBailout) {
+            JitSpew(JitSpew_Prune, "Mark block %d as bailing block.", block->id());
+            block->markUnchecked();
+        }
+
+        // When removing a loop header, we should ensure that its backedge is
+        // removed first, otherwise this triggers an assertion in
+        // removePredecessorsWithoutPhiOperands.
+        if (block->isLoopHeader()) {
+            JitSpew(JitSpew_Prune, "Mark block %d as bailing block. (loop backedge)", block->backedge()->id());
+            block->backedge()->markUnchecked();
+        }
+    }
+
+    // Returns early if nothing changed.
+    if (!someUnreachable)
+        return true;
+
+    JitSpew(JitSpew_Prune, "Convert basic block to bailing blocks, and remove unreachable blocks:");
+    JitSpewIndent indent(JitSpew_Prune);
+
+    // As we are going to remove edges and basic block, we have to mark
+    // instructions which would be needed by baseline if we were to bailout.
+    for (PostorderIterator it(graph.poBegin()); it != graph.poEnd();) {
+        MBasicBlock* block = *it++;
+        if (!block->isMarked() && !block->unreachable())
+            continue;
+
+        FlagAllOperandsAsHavingRemovedUses(block);
+    }
+
+    // Remove the blocks in post-order such that consumers are visited before
+    // the predecessors, the only exception being the Phi nodes of loop headers.
+    for (PostorderIterator it(graph.poBegin()); it != graph.poEnd();) {
+        MBasicBlock* block = *it++;
+        if (!block->isMarked() && !block->unreachable())
+            continue;
+
+        JitSpew(JitSpew_Prune, "Remove / Replace block %d.", block->id());
+        JitSpewIndent indent(JitSpew_Prune);
+
+        // As we are going to replace/remove the last instruction, we first have
+        // to remove this block from the predecessor list of its successors.
+        RemoveFromSuccessors(block);
+
+        // Convert the current basic block to a bailing block which ends with an
+        // Unreachable control instruction.
+        if (block->isMarked()) {
+            JitSpew(JitSpew_Prune, "Convert Block %d to a bailing block.", block->id());
+            if (!graph.alloc().ensureBallast())
+                return false;
+            ConvertToBailingBlock(graph.alloc(), block);
+            block->unmark();
+        }
+
+        // Remove all instructions.
+        if (block->unreachable()) {
+            JitSpew(JitSpew_Prune, "Remove Block %d.", block->id());
+            JitSpewIndent indent(JitSpew_Prune);
+            graph.removeBlock(block);
+        }
+    }
+
+    return true;
+}
+
 static bool
 SplitCriticalEdgesForBlock(MIRGraph& graph, MBasicBlock* block)
 {
@@ -37,27 +421,11 @@ SplitCriticalEdgesForBlock(MIRGraph& graph, MBasicBlock* block)
         if (target->numPredecessors() < 2)
             continue;
 
-        // Create a new block inheriting from the predecessor.
-        MBasicBlock* split = MBasicBlock::NewSplitEdge(graph, block->info(), block);
+        // Create a simple new block which contains a goto and which split the
+        // edge between block and target.
+        MBasicBlock* split = MBasicBlock::NewSplitEdge(graph, block->info(), block, i, target);
         if (!split)
             return false;
-        split->setLoopDepth(block->loopDepth());
-        graph.insertBlockAfter(block, split);
-        split->end(MGoto::New(graph.alloc(), target));
-
-        // The entry resume point won't properly reflect state at the start of
-        // the split edge, so remove it.  Split edges start out empty, but might
-        // have fallible code moved into them later.  Rather than immediately
-        // figure out a valid resume point and pc we can use for the split edge,
-        // we wait until lowering (see LIRGenerator::visitBlock), where this
-        // will be easier.
-        if (MResumePoint* rp = split->entryResumePoint()) {
-            rp->releaseUses();
-            split->clearEntryResumePoint();
-        }
-
-        block->replaceSuccessor(i, split);
-        target->replacePredecessor(block, split);
     }
     return true;
 }
@@ -78,7 +446,7 @@ jit::SplitCriticalEdges(MIRGraph& graph)
 
 // Return whether a block simply computes the specified constant value.
 static bool
-BlockComputesConstant(MBasicBlock* block, MDefinition* value)
+BlockComputesConstant(MBasicBlock* block, MDefinition* value, bool* constBool)
 {
     // Look for values with no uses. This is used to eliminate constant
     // computing blocks in condition statements, and the phi which used to
@@ -94,7 +462,7 @@ BlockComputesConstant(MBasicBlock* block, MDefinition* value)
         if (*iter != value || !iter->isGoto())
             return false;
     }
-    return true;
+    return value->toConstant()->valueToBoolean(constBool);
 }
 
 // Find phis that are redudant:
@@ -361,10 +729,9 @@ MaybeFoldConditionBlock(MIRGraph& graph, MBasicBlock* initialBlock)
     // directly to successors of testBlock, rather than to testBlock itself.
 
     MBasicBlock* trueTarget = trueBranch;
-    if (BlockComputesConstant(trueBranch, trueResult)) {
-        trueTarget = trueResult->constantToBoolean()
-                     ? finalTest->ifTrue()
-                     : finalTest->ifFalse();
+    bool constBool;
+    if (BlockComputesConstant(trueBranch, trueResult, &constBool)) {
+        trueTarget = constBool ? finalTest->ifTrue() : finalTest->ifFalse();
         phiBlock->removePredecessor(trueBranch);
         graph.removeBlock(trueBranch);
     } else if (initialTest->input() == trueResult) {
@@ -375,10 +742,8 @@ MaybeFoldConditionBlock(MIRGraph& graph, MBasicBlock* initialBlock)
     }
 
     MBasicBlock* falseTarget = falseBranch;
-    if (BlockComputesConstant(falseBranch, falseResult)) {
-        falseTarget = falseResult->constantToBoolean()
-                      ? finalTest->ifTrue()
-                      : finalTest->ifFalse();
+    if (BlockComputesConstant(falseBranch, falseResult, &constBool)) {
+        falseTarget = constBool ? finalTest->ifTrue() : finalTest->ifFalse();
         phiBlock->removePredecessor(falseBranch);
         graph.removeBlock(falseBranch);
     } else if (initialTest->input() == falseResult) {
@@ -496,7 +861,7 @@ jit::EliminateDeadResumePointOperands(MIRGenerator* mir, MIRGraph& graph)
             // If the instruction's behavior has been constant folded into a
             // separate instruction, we can't determine precisely where the
             // instruction becomes dead and can't eliminate its uses.
-            if (ins->isImplicitlyUsed())
+            if (ins->isImplicitlyUsed() || ins->isUseRemoved())
                 continue;
 
             // Check if this instruction's result is only used within the
@@ -544,6 +909,9 @@ jit::EliminateDeadResumePointOperands(MIRGenerator* mir, MIRGraph& graph)
                     continue;
                 }
 
+                if (!graph.alloc().ensureBallast())
+                    return false;
+
                 // Store an optimized out magic value in place of all dead
                 // resume point operands. Making any such substitution can in
                 // general alter the interpreter's behavior, even though the
@@ -566,7 +934,9 @@ jit::EliminateDeadResumePointOperands(MIRGenerator* mir, MIRGraph& graph)
 bool
 js::jit::DeadIfUnused(const MDefinition* def)
 {
-    return !def->isEffectful() && !def->isGuard() && !def->isGuardRangeBailouts() &&
+    return !def->isEffectful() &&
+           (!def->isGuard() || def->block() == def->block()->graph().osrBlock()) &&
+           !def->isGuardRangeBailouts() &&
            !def->isControlInstruction() &&
            (!def->isInstruction() || !def->toInstruction()->resumePoint());
 }
@@ -609,7 +979,7 @@ IsPhiObservable(MPhi* phi, Observability observe)
 {
     // If the phi has uses which are not reflected in SSA, then behavior in the
     // interpreter may be affected by removing the phi.
-    if (phi->isImplicitlyUsed())
+    if (phi->isImplicitlyUsed() || phi->isUseRemoved())
         return true;
 
     // Check for uses of this phi node outside of other phi nodes.
@@ -809,7 +1179,7 @@ class TypeAnalyzer
     bool propagateSpecialization(MPhi* phi);
     bool specializePhis();
     void replaceRedundantPhi(MPhi* phi);
-    void adjustPhiInputs(MPhi* phi);
+    bool adjustPhiInputs(MPhi* phi);
     bool adjustInputs(MDefinition* def);
     bool insertConversions();
 
@@ -888,7 +1258,9 @@ GuessPhiType(MPhi* phi, bool* hasInputsWithEmptyTypes)
                 // If we only saw definitions that can be converted into Float32 before and
                 // encounter a Float32 value, promote previous values to Float32
                 type = MIRType_Float32;
-            } else if (IsNumberType(type) && IsNumberType(in->type())) {
+            } else if (IsTypeRepresentableAsDouble(type) &&
+                       IsTypeRepresentableAsDouble(in->type()))
+            {
                 // Specialize phis with int32 and double operands as double.
                 type = MIRType_Double;
                 convertibleToFloat32 &= in->canProduceFloat32();
@@ -948,7 +1320,9 @@ TypeAnalyzer::propagateSpecialization(MPhi* phi)
             }
 
             // Specialize phis with int32 and double operands as double.
-            if (IsNumberType(use->type()) && IsNumberType(phi->type())) {
+            if (IsTypeRepresentableAsDouble(use->type()) &&
+                IsTypeRepresentableAsDouble(phi->type()))
+            {
                 if (!respecialize(use, MIRType_Double))
                     return false;
                 continue;
@@ -1024,7 +1398,7 @@ TypeAnalyzer::specializePhis()
     return true;
 }
 
-void
+bool
 TypeAnalyzer::adjustPhiInputs(MPhi* phi)
 {
     MIRType phiType = phi->type();
@@ -1039,6 +1413,9 @@ TypeAnalyzer::adjustPhiInputs(MPhi* phi)
             MDefinition* in = phi->getOperand(i);
             if (in->type() == phiType)
                 continue;
+
+            if (!alloc().ensureBallast())
+                return false;
 
             if (in->isBox() && in->toBox()->input()->type() == phiType) {
                 phi->replaceOperand(i, in->toBox()->input());
@@ -1083,7 +1460,7 @@ TypeAnalyzer::adjustPhiInputs(MPhi* phi)
             }
         }
 
-        return;
+        return true;
     }
 
     // Box every typed input.
@@ -1092,15 +1469,23 @@ TypeAnalyzer::adjustPhiInputs(MPhi* phi)
         if (in->type() == MIRType_Value)
             continue;
 
-        if (in->isUnbox() && phi->typeIncludes(in->toUnbox()->input())) {
-            // The input is being explicitly unboxed, so sneak past and grab
-            // the original box.
-            phi->replaceOperand(i, in->toUnbox()->input());
-        } else {
-            MDefinition* box = AlwaysBoxAt(alloc(), in->block()->lastIns(), in);
-            phi->replaceOperand(i, box);
+        // The input is being explicitly unboxed, so sneak past and grab
+        // the original box.
+        if (in->isUnbox() && phi->typeIncludes(in->toUnbox()->input()))
+            in = in->toUnbox()->input();
+
+        if (in->type() != MIRType_Value) {
+            if (!alloc().ensureBallast())
+                return false;
+
+            MBasicBlock* pred = phi->block()->getPredecessor(i);
+            in = AlwaysBoxAt(alloc(), pred->lastIns(), in);
         }
+
+        phi->replaceOperand(i, in);
     }
+
+    return true;
 }
 
 bool
@@ -1168,13 +1553,17 @@ TypeAnalyzer::insertConversions()
                 replaceRedundantPhi(phi);
                 block->discardPhi(phi);
             } else {
-                adjustPhiInputs(phi);
+                if (!adjustPhiInputs(phi))
+                    return false;
             }
         }
 
         // AdjustInputs can add/remove/mutate instructions before and after the
         // current instruction. Only increment the iterator after it is finished.
         for (MInstructionIterator iter(block->begin()); iter != block->end(); iter++) {
+            if (!alloc().ensureBallast())
+                return false;
+
             if (!adjustInputs(*iter))
                 return false;
         }
@@ -1461,10 +1850,6 @@ jit::MakeMRegExpHoistable(MIRGraph& graph)
                 MDefinition* use = i->consumer()->toDefinition();
                 if (use->isRegExpReplace())
                     continue;
-                if (use->isRegExpExec())
-                    continue;
-                if (use->isRegExpTest())
-                    continue;
 
                 hoistable = false;
                 break;
@@ -1507,7 +1892,8 @@ jit::RenumberBlocks(MIRGraph& graph)
 // A utility for code which deletes blocks. Renumber the remaining blocks,
 // recompute dominators, and optionally recompute AliasAnalysis dependencies.
 bool
-jit::AccountForCFGChanges(MIRGenerator* mir, MIRGraph& graph, bool updateAliasAnalysis)
+jit::AccountForCFGChanges(MIRGenerator* mir, MIRGraph& graph, bool updateAliasAnalysis,
+                          bool underValueNumberer)
 {
     // Renumber the blocks and clear out the old dominator info.
     size_t id = 0;
@@ -1526,7 +1912,7 @@ jit::AccountForCFGChanges(MIRGenerator* mir, MIRGraph& graph, bool updateAliasAn
              return false;
     }
 
-    AssertExtendedGraphCoherency(graph);
+    AssertExtendedGraphCoherency(graph, underValueNumberer);
     return true;
 }
 
@@ -1541,6 +1927,17 @@ jit::RemoveUnmarkedBlocks(MIRGenerator* mir, MIRGraph& graph, uint32_t numMarked
         // since we may have removed edges even if we didn't remove any blocks.
         graph.unmarkBlocks();
     } else {
+        // As we are going to remove edges and basic blocks, we have to mark
+        // instructions which would be needed by baseline if we were to
+        // bailout.
+        for (PostorderIterator it(graph.poBegin()); it != graph.poEnd();) {
+            MBasicBlock* block = *it++;
+            if (!block->isMarked())
+                continue;
+
+            FlagAllOperandsAsHavingRemovedUses(block);
+        }
+
         // Find unmarked blocks and remove them.
         for (ReversePostorderIterator iter(graph.rpoBegin()); iter != graph.rpoEnd();) {
             MBasicBlock* block = *iter++;
@@ -1969,6 +2366,8 @@ jit::AssertBasicGraphCoherency(MIRGraph& graph)
         MOZ_ASSERT(control->resumePoint() == nullptr);
         for (uint32_t i = 0, end = control->numOperands(); i < end; i++)
             CheckOperand(control, control->getUseFor(i), &usesBalance);
+        for (size_t i = 0; i < control->numSuccessors(); i++)
+            MOZ_ASSERT(control->getSuccessor(i));
     }
 
     // In case issues, see the _DEBUG_CHECK_OPERANDS_USES_BALANCE macro above.
@@ -2059,7 +2458,7 @@ void
 jit::AssertGraphCoherency(MIRGraph& graph)
 {
 #ifdef DEBUG
-    if (!js_JitOptions.checkGraphConsistency)
+    if (!JitOptions.checkGraphConsistency)
         return;
     AssertBasicGraphCoherency(graph);
     AssertReversePostorder(graph);
@@ -2087,6 +2486,7 @@ IsResumableMIRType(MIRType type)
       case MIRType_Value:
       case MIRType_Float32x4:
       case MIRType_Int32x4:
+      case MIRType_Bool32x4:
         return true;
 
       case MIRType_MagicHole:
@@ -2100,6 +2500,7 @@ IsResumableMIRType(MIRType type)
       case MIRType_ObjectGroup:
       case MIRType_Doublex2: // NYI, see also RSimdBox::recover
       case MIRType_SinCosDouble:
+      case MIRType_Int64:
         return false;
     }
     MOZ_CRASH("Unknown MIRType.");
@@ -2139,14 +2540,14 @@ AssertResumePointDominatedByOperands(MResumePoint* resume)
 #endif // DEBUG
 
 void
-jit::AssertExtendedGraphCoherency(MIRGraph& graph)
+jit::AssertExtendedGraphCoherency(MIRGraph& graph, bool underValueNumberer)
 {
     // Checks the basic GraphCoherency but also other conditions that
     // do not hold immediately (such as the fact that critical edges
     // are split)
 
 #ifdef DEBUG
-    if (!js_JitOptions.checkGraphConsistency)
+    if (!JitOptions.checkGraphConsistency)
         return;
 
     AssertGraphCoherency(graph);
@@ -2163,8 +2564,15 @@ jit::AssertExtendedGraphCoherency(MIRGraph& graph)
                 MOZ_ASSERT(block->getSuccessor(i)->numPredecessors() == 1);
 
         if (block->isLoopHeader()) {
-            MOZ_ASSERT(block->numPredecessors() == 2);
-            MBasicBlock* backedge = block->getPredecessor(1);
+            if (underValueNumberer && block->numPredecessors() == 3) {
+                // Fixup block.
+                MOZ_ASSERT(block->getPredecessor(1)->numPredecessors() == 0);
+                MOZ_ASSERT(graph.osrBlock(),
+                           "Fixup blocks should only exists if we have an osr block.");
+            } else {
+                MOZ_ASSERT(block->numPredecessors() == 2);
+            }
+            MBasicBlock* backedge = block->backedge();
             MOZ_ASSERT(backedge->id() >= block->id());
             MOZ_ASSERT(backedge->numSuccessors() == 1);
             MOZ_ASSERT(backedge->getSuccessor(0) == *block);
@@ -2301,11 +2709,10 @@ jit::ExtractLinearSum(MDefinition* ins)
     if (ins->type() != MIRType_Int32)
         return SimpleLinearSum(ins, 0);
 
-    if (ins->isConstantValue()) {
-        const Value& v = ins->constantValue();
-        MOZ_ASSERT(v.isInt32());
-        return SimpleLinearSum(nullptr, v.toInt32());
-    } else if (ins->isAdd() || ins->isSub()) {
+    if (ins->isConstant())
+        return SimpleLinearSum(nullptr, ins->toConstant()->toInt32());
+
+    if (ins->isAdd() || ins->isSub()) {
         MDefinition* lhs = ins->getOperand(0);
         MDefinition* rhs = ins->getOperand(1);
         if (lhs->type() == MIRType_Int32 && rhs->type() == MIRType_Int32) {
@@ -2321,7 +2728,8 @@ jit::ExtractLinearSum(MDefinition* ins)
                 if (!SafeAdd(lsum.constant, rsum.constant, &constant))
                     return SimpleLinearSum(ins, 0);
                 return SimpleLinearSum(lsum.term ? lsum.term : rsum.term, constant);
-            } else if (lsum.term) {
+            }
+            if (lsum.term) {
                 int32_t constant;
                 if (!SafeSub(lsum.constant, rsum.constant, &constant))
                     return SimpleLinearSum(ins, 0);
@@ -2407,6 +2815,9 @@ TryEliminateBoundsCheck(BoundsCheckMap& checks, size_t blockIndex, MBoundsCheck*
     dominated->replaceAllUsesWith(dominated->index());
 
     if (!dominated->isMovable())
+        return true;
+
+    if (!dominated->fallible())
         return true;
 
     MBoundsCheck* dominating = FindDominatingBoundsCheck(checks, dominated, blockIndex);
@@ -2783,7 +3194,7 @@ NeedsKeepAlive(MInstruction* slotsOrElements, MInstruction* use)
     MOZ_CRASH("Unreachable");
 }
 
-void
+bool
 jit::AddKeepAliveInstructions(MIRGraph& graph)
 {
     for (MBasicBlockIterator i(graph.begin()); i != graph.end(); i++) {
@@ -2845,11 +3256,15 @@ jit::AddKeepAliveInstructions(MIRGraph& graph)
                 if (!NeedsKeepAlive(ins, use))
                     continue;
 
+                if (!graph.alloc().ensureBallast())
+                    return false;
                 MKeepAliveObject* keepAlive = MKeepAliveObject::New(graph.alloc(), ownerObject);
                 use->block()->insertAfter(use, keepAlive);
             }
         }
     }
+
+    return true;
 }
 
 bool
@@ -2918,8 +3333,8 @@ LinearSum::add(MDefinition* term, int32_t scale)
     if (scale == 0)
         return true;
 
-    if (term->isConstantValue()) {
-        int32_t constant = term->constantValue().toInt32();
+    if (MConstant* termConst = term->maybeConstantValue()) {
+        int32_t constant = termConst->toInt32();
         if (!SafeMul(constant, scale, &constant))
             return false;
         return add(constant);
@@ -2991,7 +3406,7 @@ jit::ConvertLinearSum(TempAllocator& alloc, MBasicBlock* block, const LinearSum&
 
     for (size_t i = 0; i < sum.numTerms(); i++) {
         LinearTerm term = sum.term(i);
-        MOZ_ASSERT(!term.term->isConstantValue());
+        MOZ_ASSERT(!term.term->isConstant());
         if (term.scale == 1) {
             if (def) {
                 def = MAdd::New(alloc, def, term.term);
@@ -3299,7 +3714,7 @@ jit::AnalyzeNewScriptDefiniteProperties(JSContext* cx, JSFunction* fun,
                      script->needsArgsObj(),
                      inlineScriptTree);
 
-    const OptimizationInfo* optimizationInfo = js_IonOptimizations.get(Optimization_Normal);
+    const OptimizationInfo* optimizationInfo = IonOptimizations.get(OptimizationLevel::Normal);
 
     CompilerConstraintList* constraints = NewCompilerConstraintList(temp);
     if (!constraints) {
@@ -3314,8 +3729,12 @@ jit::AnalyzeNewScriptDefiniteProperties(JSContext* cx, JSFunction* fun,
                        &inspector, &info, optimizationInfo, /* baselineFrame = */ nullptr);
 
     if (!builder.build()) {
-        if (cx->isThrowingOverRecursed() || builder.abortReason() == AbortReason_Alloc)
+        if (cx->isThrowingOverRecursed() ||
+            cx->isThrowingOutOfMemory() ||
+            builder.abortReason() == AbortReason_Alloc)
+        {
             return false;
+        }
         MOZ_ASSERT(!cx->isExceptionPending());
         return true;
     }
@@ -3520,7 +3939,7 @@ jit::AnalyzeArgumentsUsage(JSContext* cx, JSScript* scriptArg)
                      /* needsArgsObj = */ true,
                      inlineScriptTree);
 
-    const OptimizationInfo* optimizationInfo = js_IonOptimizations.get(Optimization_Normal);
+    const OptimizationInfo* optimizationInfo = IonOptimizations.get(OptimizationLevel::Normal);
 
     CompilerConstraintList* constraints = NewCompilerConstraintList(temp);
     if (!constraints) {

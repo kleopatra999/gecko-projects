@@ -25,7 +25,8 @@ class gfxPangoFontGroup : public gfxFontGroup {
 public:
     gfxPangoFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
                       const gfxFontStyle *aStyle,
-                      gfxUserFontSet *aUserFontSet);
+                      gfxUserFontSet *aUserFontSet,
+                      gfxFloat aDevToCssSize);
     virtual ~gfxPangoFontGroup();
 
     virtual gfxFontGroup *Copy(const gfxFontStyle *aStyle);
@@ -72,7 +73,7 @@ private:
     };
     // There is only one of entry in this array unless characters from scripts
     // of other languages are measured.
-    nsAutoTArray<FontSetByLangEntry,1> mFontSets;
+    AutoTArray<FontSetByLangEntry,1> mFontSets;
 
     gfxFloat mSizeAdjustFactor;
     PangoLanguage *mPangoLanguage;

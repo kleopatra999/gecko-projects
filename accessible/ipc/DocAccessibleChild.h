@@ -98,6 +98,11 @@ public:
 
   virtual bool RecvAttributes(const uint64_t& aID,
                               nsTArray<Attribute> *aAttributes) override;
+  virtual bool RecvScrollTo(const uint64_t& aID, const uint32_t& aScrollType)
+    override;
+  virtual bool RecvScrollToPoint(const uint64_t& aID,
+                                 const uint32_t& aScrollType,
+                                 const int32_t& aX, const int32_t& aY) override;
 
   virtual bool RecvCaretLineNumber(const uint64_t& aID, int32_t* aLineNumber)
     override;
@@ -487,6 +492,7 @@ public:
                            int32_t* aY,
                            int32_t* aWidth,
                            int32_t* aHeight) override;
+  virtual bool RecvDOMNodeID(const uint64_t& aID, nsString* aDOMNodeID) override;
 private:
 
   Accessible* IdToAccessible(const uint64_t& aID) const;

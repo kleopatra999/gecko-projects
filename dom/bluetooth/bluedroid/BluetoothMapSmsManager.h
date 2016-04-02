@@ -13,6 +13,7 @@
 #include "BluetoothProfileManagerBase.h"
 #include "BluetoothSocketObserver.h"
 #include "mozilla/ipc/SocketBase.h"
+#include "mozilla/UniquePtr.h"
 
 class nsIInputStream;
 
@@ -85,7 +86,10 @@ public:
   // By defualt SMS/MMS is default supported
   static const int SDP_SMS_MMS_INSTANCE_ID = 0;
 
+  static void InitMapSmsInterface(BluetoothProfileResultHandler* aRes);
+  static void DeinitMapSmsInterface(BluetoothProfileResultHandler* aRes);
   static BluetoothMapSmsManager* Get();
+
   bool Listen();
 
   /**
@@ -193,7 +197,9 @@ protected:
 
 private:
   BluetoothMapSmsManager();
-  bool Init();
+
+  nsresult Init();
+  void Uninit();
   void HandleShutdown();
 
   void ReplyToConnect();
@@ -205,13 +211,12 @@ private:
    * packet. If the operation requires multiple response packets to complete
    * after the Final bit is set in the request.
    */
-  bool ReplyToGetWithHeaderBody(uint8_t* aResponse, unsigned int aIndex);
+  bool ReplyToGetWithHeaderBody(UniquePtr<uint8_t[]> aResponse, unsigned int aIndex);
   void ReplyToSetPath();
   void ReplyToPut();
   void SendReply(uint8_t aResponse);
 
   void HandleNotificationRegistration(const ObexHeaderSet& aHeader);
-  void HandleEventReport(const ObexHeaderSet& aHeader);
   void HandleSetMessageStatus(const ObexHeaderSet& aHeader);
   void HandleSmsMmsFolderListing(const ObexHeaderSet& aHeader);
   void HandleSmsMmsMsgListing(const ObexHeaderSet& aHeader);
@@ -222,6 +227,7 @@ private:
     InfallibleTArray<BluetoothNamedValue>& aValues,
     const Map::AppParametersTagId aTagId);
   void SendMasObexData(uint8_t* aData, uint8_t aOpcode, int aSize);
+  void SendMasObexData(UniquePtr<uint8_t[]> aData, uint8_t aOpcode, int aSize);
   void SendMnsObexData(uint8_t* aData, uint8_t aOpcode, int aSize);
   bool StatusResponse(bool aStatus);
 
@@ -279,7 +285,7 @@ private:
   RefPtr<BluetoothSocket> mMnsSocket;
 
   int mBodySegmentLength;
-  nsAutoArrayPtr<uint8_t> mBodySegment;
+  UniquePtr<uint8_t[]> mBodySegment;
 
   /**
    * The bMessage/message-listing data stream for current processing response

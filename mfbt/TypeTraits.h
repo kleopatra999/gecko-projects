@@ -24,6 +24,18 @@ namespace mozilla {
 /* Forward declarations. */
 
 template<typename> struct RemoveCV;
+template<typename> struct AddRvalueReference;
+
+/* 20.2.4 Function template declval [declval] */
+
+/**
+ * DeclVal simplifies the definition of expressions which occur as unevaluated
+ * operands. It converts T to a reference type, making it possible to use in
+ * decltype expressions even if T does not have a default constructor, e.g.:
+ * decltype(DeclVal<TWithNoDefaultConstructor>().foo())
+ */
+template<typename T>
+typename AddRvalueReference<T>::Type DeclVal();
 
 /* 20.9.3 Helper classes [meta.help] */
 
@@ -343,6 +355,41 @@ struct IsArithmetic
   : IntegralConstant<bool, IsIntegral<T>::value || IsFloatingPoint<T>::value>
 {};
 
+namespace detail {
+
+template<typename T>
+struct IsMemberPointerHelper : FalseType {};
+
+template<typename T, typename U>
+struct IsMemberPointerHelper<T U::*> : TrueType {};
+
+} // namespace detail
+
+/**
+ * IsMemberPointer determines whether a type is pointer to non-static member
+ * object or a pointer to non-static member function.
+ *
+ * mozilla::IsMemberPointer<int(cls::*)>::value is true
+ * mozilla::IsMemberPointer<int*>::value is false
+ */
+template<typename T>
+struct IsMemberPointer
+  : detail::IsMemberPointerHelper<typename RemoveCV<T>::Type>
+{};
+
+/**
+ * IsScalar determines whether a type is a scalar type.
+ *
+ * mozilla::IsScalar<int>::value is true
+ * mozilla::IsScalar<int*>::value is true
+ * mozilla::IsScalar<cls>::value is false
+ */
+template<typename T>
+struct IsScalar
+  : IntegralConstant<bool, IsArithmetic<T>::value || IsEnum<T>::value ||
+                     IsPointer<T>::value || IsMemberPointer<T>::value>
+{};
+
 /* 20.9.4.3 Type properties [meta.unary.prop] */
 
 /**
@@ -636,17 +683,18 @@ template<typename From, typename To>
 struct ConvertibleTester
 {
 private:
-  static From create();
+  template<typename To1>
+  static char test_helper(To1);
 
   template<typename From1, typename To1>
-  static char test(To to);
+  static decltype(test_helper<To1>(DeclVal<From1>())) test(int);
 
   template<typename From1, typename To1>
   static int test(...);
 
 public:
   static const bool value =
-    sizeof(test<From, To>(create())) == sizeof(char);
+    sizeof(test<From, To>(0)) == sizeof(char);
 };
 
 } // namespace detail
@@ -863,17 +911,6 @@ template<typename T>
 struct AddRvalueReference
   : detail::AddRvalueReferenceHelper<T>
 {};
-
-/* 20.2.4 Function template declval [declval] */
-
-/**
- * DeclVal simplifies the definition of expressions which occur as unevaluated
- * operands. It converts T to a reference type, making it possible to use in
- * decltype expressions even if T does not have a default constructor, e.g.:
- * decltype(DeclVal<TWithNoDefaultConstructor>().foo())
- */
-template<typename T>
-typename AddRvalueReference<T>::Type DeclVal();
 
 /* 20.9.7.3 Sign modifications [meta.trans.sign] */
 

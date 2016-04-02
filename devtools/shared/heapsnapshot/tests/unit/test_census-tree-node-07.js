@@ -46,9 +46,9 @@ function run_test() {
   const EXPECTED = {
     name: null,
     bytes: 0,
-    totalBytes: 0,
+    totalBytes: 220,
     count: 0,
-    totalCount: 0,
+    totalCount: 22,
     children: [
       {
         name: "js::Shape",
@@ -73,14 +73,17 @@ function run_test() {
                 children: undefined,
                 id: 14,
                 parent: 13,
+                reportLeafIndex: undefined,
               }
             ],
             id: 13,
             parent: 12,
+            reportLeafIndex: undefined,
           }
         ],
         id: 12,
         parent: 11,
+        reportLeafIndex: 9,
       },
       {
         name: "JSAtom",
@@ -105,14 +108,17 @@ function run_test() {
                 children: undefined,
                 id: 17,
                 parent: 16,
+                reportLeafIndex: undefined,
               }
             ],
             id: 16,
             parent: 15,
+            reportLeafIndex: undefined,
           }
         ],
         id: 15,
         parent: 11,
+        reportLeafIndex: 7,
       },
       {
         name: "Array",
@@ -137,14 +143,17 @@ function run_test() {
                 children: undefined,
                 id: 20,
                 parent: 19,
+                reportLeafIndex: undefined,
               }
             ],
             id: 19,
             parent: 18,
+            reportLeafIndex: undefined,
           }
         ],
         id: 18,
         parent: 11,
+        reportLeafIndex: 2,
       },
       {
         name: "js::jit::JitScript",
@@ -167,52 +176,24 @@ function run_test() {
                 count: 0,
                 totalCount: 22,
                 children: undefined,
-                id: 26,
-                parent: 25,
-              }
-            ],
-            id: 25,
-            parent: 24,
-          }
-        ],
-        id: 24,
-        parent: 11,
-      },
-      {
-        name: "other",
-        bytes: 0,
-        totalBytes: 0,
-        count: 0,
-        totalCount: 0,
-        children: [
-          {
-            name: "objects",
-            bytes: 0,
-            totalBytes: 50,
-            count: 0,
-            totalCount: 5,
-            children: [
-              {
-                name: null,
-                bytes: 0,
-                totalBytes: 220,
-                count: 0,
-                totalCount: 22,
-                children: undefined,
                 id: 23,
                 parent: 22,
+                reportLeafIndex: undefined,
               }
             ],
             id: 22,
             parent: 21,
+            reportLeafIndex: undefined,
           }
         ],
         id: 21,
         parent: 11,
+        reportLeafIndex: 5,
       },
     ],
     id: 11,
     parent: undefined,
+    reportLeafIndex: undefined,
   };
 
   compareCensusViewData(BREAKDOWN, REPORT, EXPECTED, { invert: true });

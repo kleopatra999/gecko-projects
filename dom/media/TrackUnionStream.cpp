@@ -42,15 +42,12 @@ namespace mozilla {
 #undef STREAM_LOG
 #endif
 
-PRLogModuleInfo* gTrackUnionStreamLog;
+LazyLogModule gTrackUnionStreamLog("TrackUnionStream");
 #define STREAM_LOG(type, msg) MOZ_LOG(gTrackUnionStreamLog, type, msg)
 
 TrackUnionStream::TrackUnionStream(DOMMediaStream* aWrapper) :
   ProcessedMediaStream(aWrapper), mNextAvailableTrackID(1)
 {
-  if (!gTrackUnionStreamLog) {
-    gTrackUnionStreamLog = PR_NewLogModule("TrackUnionStream");
-  }
 }
 
   void TrackUnionStream::RemoveInput(MediaInputPort* aPort)
@@ -70,8 +67,8 @@ TrackUnionStream::TrackUnionStream(DOMMediaStream* aWrapper) :
     if (IsFinishedOnGraphThread()) {
       return;
     }
-    nsAutoTArray<bool,8> mappedTracksFinished;
-    nsAutoTArray<bool,8> mappedTracksWithMatchingInputTracks;
+    AutoTArray<bool,8> mappedTracksFinished;
+    AutoTArray<bool,8> mappedTracksWithMatchingInputTracks;
     for (uint32_t i = 0; i < mTrackMap.Length(); ++i) {
       mappedTracksFinished.AppendElement(true);
       mappedTracksWithMatchingInputTracks.AppendElement(false);

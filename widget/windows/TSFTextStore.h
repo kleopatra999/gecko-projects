@@ -14,6 +14,7 @@
 #include "WinUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextRange.h"
 #include "mozilla/WindowsVersion.h"
 
@@ -296,12 +297,14 @@ protected:
 
   void     NotifyTSFOfTextChange(const TS_TEXTCHANGE& aTextChange);
   void     NotifyTSFOfSelectionChange();
-  bool     NotifyTSFOfLayoutChange(bool aFlush);
+  bool     NotifyTSFOfLayoutChange();
+  void     NotifyTSFOfLayoutChangeAgain();
 
   HRESULT  HandleRequestAttrs(DWORD aFlags,
                               ULONG aFilterCount,
                               const TS_ATTRID* aFilterAttrs);
-  void     SetInputScope(const nsString& aHTMLInputType);
+  void     SetInputScope(const nsString& aHTMLInputType,
+                         const nsString& aHTMLInputInputmode);
 
   // Creates native caret over our caret.  This method only works on desktop
   // application.  Otherwise, this does nothing.
@@ -311,6 +314,8 @@ protected:
 
   // Holds the pointer to our current win32 widget
   RefPtr<nsWindowBase>       mWidget;
+  // mDispatcher is a helper class to dispatch composition events.
+  RefPtr<TextEventDispatcher> mDispatcher;
   // Document manager for the currently focused editor
   RefPtr<ITfDocumentMgr>     mDocumentMgr;
   // Edit cookie associated with the current editing context
@@ -517,7 +522,7 @@ protected:
     // For compositionstart and selectionset
     LONG mSelectionStart;
     LONG mSelectionLength;
-    // For compositionupdate and compositionend
+    // For compositionstart, compositionupdate and compositionend
     nsString mData;
     // For compositionupdate
     RefPtr<TextRangeArray> mRanges;
@@ -828,11 +833,14 @@ protected:
   // mSink->OnSelectionChange() after mLock becomes 0.
   bool                         mPendingOnSelectionChange;
   // If GetTextExt() or GetACPFromPoint() is called and the layout hasn't been
-  // calculated yet, these methods return TS_E_NOLAYOUT.  Then, RequestLock()
-  // will call mSink->OnLayoutChange() and
-  // ITfContextOwnerServices::OnLayoutChange() after the layout is fixed and
-  // the document is unlocked.
-  bool                         mPendingOnLayoutChange;
+  // calculated yet, these methods return TS_E_NOLAYOUT.  At that time,
+  // mHasReturnedNoLayoutError is set to true.
+  bool                         mHasReturnedNoLayoutError;
+  // Before calling ITextStoreACPSink::OnLayoutChange() and
+  // ITfContextOwnerServices::OnLayoutChange(), mWaitingQueryLayout is set to
+  // true.  This is set to  false when GetTextExt() or GetACPFromPoint() is
+  // called.
+  bool                         mWaitingQueryLayout;
   // During the documet is locked, we shouldn't destroy the instance.
   // If this is true, the instance will be destroyed after unlocked.
   bool                         mPendingDestroy;
@@ -848,6 +856,12 @@ protected:
   // For preventing it to be called, we should put off notifying TSF of
   // anything until layout information becomes available.
   bool                         mDeferNotifyingTSF;
+  // While the document is locked, committing composition always fails since
+  // TSF needs another document lock for modifying the composition, selection
+  // and etc.  So, committing composition should be performed after the
+  // document is unlocked.
+  bool                         mDeferCommittingComposition;
+  bool                         mDeferCancellingComposition;
   // Immediately after a call of Destroy(), mDestroyed becomes true.  If this
   // is true, the instance shouldn't grant any requests from the TIP anymore.
   bool                         mDestroyed;

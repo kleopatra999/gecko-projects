@@ -41,7 +41,7 @@
 
 #include "builtin/MapObject.h"
 #include "js/Date.h"
-#include "js/TraceableHashTable.h"
+#include "js/GCHashTable.h"
 #include "vm/SavedFrame.h"
 #include "vm/SharedArrayObject.h"
 #include "vm/TypedArrayObject.h"
@@ -247,7 +247,6 @@ struct JSStructuredCloneReader {
     bool readTypedArray(uint32_t arrayType, uint32_t nelems, MutableHandleValue vp,
                         bool v1Read = false);
     bool readDataView(uint32_t byteLength, MutableHandleValue vp);
-    bool readSharedTypedArray(uint32_t arrayType, uint32_t nelems, MutableHandleValue vp);
     bool readArrayBuffer(uint32_t nbytes, MutableHandleValue vp);
     bool readV1ArrayBuffer(uint32_t arrayType, uint32_t nelems, MutableHandleValue vp);
     JSObject* readSavedFrame(uint32_t principalsTag);
@@ -279,7 +278,8 @@ struct JSStructuredCloneWriter {
         : out(cx), objs(out.context()),
           counts(out.context()), entries(out.context()),
           memory(out.context(), CloneMemory(out.context())), callbacks(cb),
-          closure(cbClosure), transferable(out.context(), tVal), transferableObjects(out.context())
+          closure(cbClosure), transferable(out.context(), tVal),
+          transferableObjects(out.context(), GCHashSet<JSObject*>(cx))
     {}
 
     ~JSStructuredCloneWriter();
@@ -307,7 +307,6 @@ struct JSStructuredCloneWriter {
     bool writeTypedArray(HandleObject obj);
     bool writeDataView(HandleObject obj);
     bool writeSharedArrayBuffer(HandleObject obj);
-    bool writeSharedTypedArray(HandleObject obj);
     bool startObject(HandleObject obj, bool* backref);
     bool startWrite(HandleValue v);
     bool traverseObject(HandleObject obj);
@@ -342,7 +341,7 @@ struct JSStructuredCloneWriter {
     // The "memory" list described in the HTML5 internal structured cloning algorithm.
     // memory is a superset of objs; items are never removed from Memory
     // until a serialization operation is finished
-    using CloneMemory = TraceableHashMap<JSObject*, uint32_t>;
+    using CloneMemory = GCHashMap<JSObject*, uint32_t, MovableCellHasher<JSObject*>>;
     Rooted<CloneMemory> memory;
 
     // The user defined callbacks that will be used for cloning.
@@ -351,9 +350,9 @@ struct JSStructuredCloneWriter {
     // Any value passed to JS_WriteStructuredClone.
     void* closure;
 
-    // List of transferable objects
+    // Set of transferable objects
     RootedValue transferable;
-    AutoObjectVector transferableObjects;
+    Rooted<GCHashSet<JSObject*>> transferableObjects;
 
     friend bool JS_WriteString(JSStructuredCloneWriter* w, HandleString str);
     friend bool JS_WriteTypedArray(JSStructuredCloneWriter* w, HandleValue v);
@@ -409,10 +408,11 @@ DiscardTransferables(uint64_t* buffer, size_t nbytes,
                      const JSStructuredCloneCallbacks* cb, void* cbClosure)
 {
     MOZ_ASSERT(nbytes % sizeof(uint64_t) == 0);
-    if (nbytes < sizeof(uint64_t))
+    uint64_t* end = buffer + nbytes / sizeof(uint64_t);
+    uint64_t* point = buffer;
+    if (point == end)
         return; // Empty buffer
 
-    uint64_t* point = buffer;
     uint32_t tag, data;
     SCInput::getPair(point++, &tag, &data);
     if (tag != SCTAG_TRANSFER_MAP_HEADER)
@@ -424,14 +424,24 @@ DiscardTransferables(uint64_t* buffer, size_t nbytes,
     // freeTransfer should not GC
     JS::AutoSuppressGCAnalysis nogc;
 
+    if (point == end)
+        return;
+
     uint64_t numTransferables = LittleEndian::readUint64(point++);
     while (numTransferables--) {
+        if (point == end)
+            return;
+
         uint32_t ownership;
         SCInput::getPair(point++, &tag, &ownership);
         MOZ_ASSERT(tag >= SCTAG_TRANSFER_MAP_PENDING_ENTRY);
+        if (point == end)
+            return;
 
         void* content;
         SCInput::getPtr(point++, &content);
+        if (point == end)
+            return;
 
         uint64_t extraData = LittleEndian::readUint64(point++);
 
@@ -756,10 +766,14 @@ JSStructuredCloneWriter::~JSStructuredCloneWriter()
 bool
 JSStructuredCloneWriter::parseTransferable()
 {
-    MOZ_ASSERT(transferableObjects.empty(), "parseTransferable called with stale data");
+    // NOTE: The transferables set is tested for non-emptiness at various
+    //       junctures in structured cloning, so this set must be initialized
+    //       by this method in all non-error cases.
+    MOZ_ASSERT(!transferableObjects.initialized(),
+               "parseTransferable called with stale data");
 
     if (transferable.isNull() || transferable.isUndefined())
-        return true;
+        return transferableObjects.init(0);
 
     if (!transferable.isObject())
         return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
@@ -773,26 +787,36 @@ JSStructuredCloneWriter::parseTransferable()
         return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
 
     uint32_t length;
-    if (!JS_GetArrayLength(cx, array, &length)) {
+    if (!JS_GetArrayLength(cx, array, &length))
         return false;
-    }
+
+    // Initialize the set for the provided array's length.
+    if (!transferableObjects.init(length))
+        return false;
+
+    if (length == 0)
+        return true;
 
     RootedValue v(context());
+    RootedObject tObj(context());
 
     for (uint32_t i = 0; i < length; ++i) {
+        if (!CheckForInterrupt(cx))
+            return false;
+
         if (!JS_GetElement(cx, array, i, &v))
             return false;
 
         if (!v.isObject())
             return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
-        RootedObject tObj(context(), &v.toObject());
+        tObj = &v.toObject();
 
         // No duplicates allowed
-        if (std::find(transferableObjects.begin(), transferableObjects.end(), tObj) != transferableObjects.end()) {
+        auto p = transferableObjects.lookupForAdd(tObj);
+        if (p)
             return reportErrorTransferable(JS_SCERR_DUP_TRANSFERABLE);
-        }
 
-        if (!transferableObjects.append(tObj))
+        if (!transferableObjects.add(p, tObj))
             return false;
     }
 
@@ -915,26 +939,6 @@ JSStructuredCloneWriter::writeSharedArrayBuffer(HandleObject obj)
 {
     JS_ReportErrorNumber(context(), GetErrorMessage, nullptr, JSMSG_SC_SHMEM_MUST_TRANSFER);
     return false;
-}
-
-bool
-JSStructuredCloneWriter::writeSharedTypedArray(HandleObject obj)
-{
-    Rooted<SharedTypedArrayObject*> tarr(context(), &CheckedUnwrap(obj)->as<SharedTypedArrayObject>());
-    JSAutoCompartment ac(context(), tarr);
-
-    if (!out.writePair(SCTAG_SHARED_TYPED_ARRAY_OBJECT, tarr->length()))
-        return false;
-    uint64_t type = tarr->type();
-    if (!out.write(type))
-        return false;
-
-    // Write out the SharedArrayBuffer tag and contents.
-    RootedValue val(context(), SharedTypedArrayObject::bufferValue(tarr));
-    if (!startWrite(val))
-        return false;
-
-    return out.write(tarr->byteOffset());
 }
 
 bool
@@ -1191,8 +1195,6 @@ JSStructuredCloneWriter::startWrite(HandleValue v)
             return writeDataView(obj);
         } else if (JS_IsArrayBufferObject(obj) && JS_ArrayBufferHasData(obj)) {
             return writeArrayBuffer(obj);
-        } else if (JS_IsSharedTypedArrayObject(obj)) {
-            return writeSharedTypedArray(obj);
         } else if (JS_IsSharedArrayBufferObject(obj)) {
             return writeSharedArrayBuffer(obj);
         } else if (cls == ESClass_Object) {
@@ -1240,17 +1242,18 @@ JSStructuredCloneWriter::writeTransferMap()
     if (!out.writePair(SCTAG_TRANSFER_MAP_HEADER, (uint32_t)SCTAG_TM_UNREAD))
         return false;
 
-    if (!out.write(transferableObjects.length()))
+    if (!out.write(transferableObjects.count()))
         return false;
 
-    for (JS::AutoObjectVector::Range tr = transferableObjects.all(); !tr.empty(); tr.popFront()) {
-        JSObject* obj = tr.front();
+    RootedObject obj(context());
+    for (auto tr = transferableObjects.all(); !tr.empty(); tr.popFront()) {
+        obj = tr.front();
 
         if (!memory.put(obj, memory.count()))
             return false;
 
-        // Emit a placeholder pointer. We will steal the data and neuter the
-        // transferable later, in the case of ArrayBufferObject.
+        // Emit a placeholder pointer.  We defer stealing the data until later
+        // (and, if necessary, detaching this object if it's an ArrayBuffer).
         if (!out.writePair(SCTAG_TRANSFER_MAP_PENDING_ENTRY, JS::SCTAG_TMO_UNFILLED))
             return false;
         if (!out.writePtr(nullptr)) // Pointer to ArrayBuffer contents or to SharedArrayRawBuffer.
@@ -1274,11 +1277,12 @@ JSStructuredCloneWriter::transferOwnership()
     uint64_t* point = out.rawBuffer();
     MOZ_ASSERT(uint32_t(LittleEndian::readUint64(point) >> 32) == SCTAG_TRANSFER_MAP_HEADER);
     point++;
-    MOZ_ASSERT(LittleEndian::readUint64(point) == transferableObjects.length());
+    MOZ_ASSERT(LittleEndian::readUint64(point) == transferableObjects.count());
     point++;
 
-    for (JS::AutoObjectVector::Range tr = transferableObjects.all(); !tr.empty(); tr.popFront()) {
-        RootedObject obj(context(), tr.front());
+    RootedObject obj(context());
+    for (auto tr = transferableObjects.all(); !tr.empty(); tr.popFront()) {
+        obj = tr.front();
 
         uint32_t tag;
         JS::TransferableOwnership ownership;
@@ -1406,7 +1410,8 @@ JSStructuredCloneWriter::write(HandleValue v)
                 }
             }
         } else {
-            out.writePair(SCTAG_END_OF_KEYS, 0);
+            if (!out.writePair(SCTAG_END_OF_KEYS, 0))
+                return false;
             objs.popBack();
             counts.popBack();
         }
@@ -1595,74 +1600,6 @@ JSStructuredCloneReader::readDataView(uint32_t byteLength, MutableHandleValue vp
 }
 
 bool
-JSStructuredCloneReader::readSharedTypedArray(uint32_t arrayType, uint32_t nelems, MutableHandleValue vp)
-{
-    if (arrayType > Scalar::Uint8Clamped) {
-        JS_ReportErrorNumber(context(), GetErrorMessage, nullptr,
-                             JSMSG_SC_BAD_SERIALIZED_DATA, "unhandled typed array element type");
-        return false;
-    }
-
-    // Push a placeholder onto the allObjs list to stand in for the typed array.
-    uint32_t placeholderIndex = allObjs.length();
-    Value dummy = UndefinedValue();
-    if (!allObjs.append(dummy))
-        return false;
-
-    // Read the ArrayBuffer object and its contents (but no properties).
-    RootedValue v(context());
-    uint32_t byteOffset;
-    if (!startRead(&v))
-        return false;
-    uint64_t n;
-    if (!in.read(&n))
-        return false;
-    byteOffset = n;
-    RootedObject buffer(context(), &v.toObject());
-    RootedObject obj(context());
-
-    switch (arrayType) {
-      case Scalar::Int8:
-        obj = JS_NewSharedInt8ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Uint8:
-        obj = JS_NewSharedUint8ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Int16:
-        obj = JS_NewSharedInt16ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Uint16:
-        obj = JS_NewSharedUint16ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Int32:
-        obj = JS_NewSharedInt32ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Uint32:
-        obj = JS_NewSharedUint32ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Float32:
-        obj = JS_NewSharedFloat32ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Float64:
-        obj = JS_NewSharedFloat64ArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      case Scalar::Uint8Clamped:
-        obj = JS_NewSharedUint8ClampedArrayWithBuffer(context(), buffer, byteOffset, nelems);
-        break;
-      default:
-        MOZ_CRASH("Can't happen: arrayType range checked above");
-    }
-
-    if (!obj)
-        return false;
-    vp.setObject(*obj);
-
-    allObjs[placeholderIndex].set(vp);
-
-    return true;
-}
-
-bool
 JSStructuredCloneReader::readArrayBuffer(uint32_t nbytes, MutableHandleValue vp)
 {
     JSObject* obj = ArrayBufferObject::create(context(), nbytes);
@@ -1806,8 +1743,8 @@ JSStructuredCloneReader::startRead(MutableHandleValue vp)
         if (!atom)
             return false;
 
-        RegExpObject* reobj = RegExpObject::createNoStatics(context(), atom, flags, nullptr,
-                                                            context()->tempLifoAlloc());
+        RegExpObject* reobj = RegExpObject::create(context(), atom, flags, nullptr,
+                                                   context()->tempLifoAlloc());
         if (!reobj)
             return false;
         vp.setObject(*reobj);
@@ -1860,14 +1797,6 @@ JSStructuredCloneReader::startRead(MutableHandleValue vp)
       case SCTAG_DATA_VIEW_OBJECT: {
         // readDataView adds the array to allObjs.
         return readDataView(data, vp);
-      }
-
-      case SCTAG_SHARED_TYPED_ARRAY_OBJECT: {
-        // readSharedTypedArray adds the array to allObjs.
-        uint64_t arrayType;
-        if (!in.read(&arrayType))
-            return false;
-        return readSharedTypedArray(arrayType, data, vp);
       }
 
       case SCTAG_MAP_OBJECT: {
@@ -1972,6 +1901,16 @@ JSStructuredCloneReader::readTransferMap()
                 obj = JS_NewMappedArrayBufferWithContents(cx, nbytes, content);
         } else if (tag == SCTAG_TRANSFER_MAP_SHARED_BUFFER) {
             MOZ_ASSERT(data == JS::SCTAG_TMO_SHARED_BUFFER);
+            // There's no guarantee that the receiving agent has enabled
+            // shared memory even if the transmitting agent has done so.
+            // Ideally we'd check at the transmission point, but that's
+            // tricky, and it will be a very rare problem in any case.
+            // Just fail at the receiving end if we can't handle it.
+            if (!context()->compartment()->creationOptions().getSharedMemoryAndAtomicsEnabled()) {
+                JS_ReportErrorNumber(context(), GetErrorMessage, nullptr,
+                                     JSMSG_SC_NOT_TRANSFERABLE);
+                return false;
+            }
             obj = SharedArrayBufferObject::New(context(), (SharedArrayRawBuffer*)content);
         } else {
             if (!callbacks || !callbacks->readTransfer) {

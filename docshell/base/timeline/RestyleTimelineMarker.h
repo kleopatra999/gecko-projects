@@ -15,8 +15,8 @@ namespace mozilla {
 class RestyleTimelineMarker : public TimelineMarker
 {
 public:
-  explicit RestyleTimelineMarker(nsRestyleHint aRestyleHint,
-                                 MarkerTracingType aTracingType)
+  RestyleTimelineMarker(nsRestyleHint aRestyleHint,
+                        MarkerTracingType aTracingType)
     : TimelineMarker("Styles", aTracingType)
   {
     if (aRestyleHint) {
@@ -34,7 +34,7 @@ public:
   }
 
 private:
-  nsAutoString mRestyleHint;
+  nsString mRestyleHint;
 };
 
 } // namespace mozilla

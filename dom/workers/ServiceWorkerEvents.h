@@ -16,8 +16,6 @@
 #include "mozilla/dom/workers/bindings/ServiceWorker.h"
 
 #ifndef MOZ_SIMPLEPUSH
-#include "mozilla/dom/PushEventBinding.h"
-#include "mozilla/dom/PushMessageDataBinding.h"
 #include "mozilla/dom/File.h"
 #endif
 
@@ -33,6 +31,8 @@ class MessagePort;
 class MessagePortList;
 class Request;
 class ResponseOrPromise;
+
+struct PushEventInit;
 } // namespace dom
 } // namespace mozilla
 
@@ -51,9 +51,9 @@ public:
 
 class ExtendableEvent : public Event
 {
+protected:
   nsTArray<RefPtr<Promise>> mPromises;
 
-protected:
   explicit ExtendableEvent(mozilla::dom::EventTarget* aOwner);
   ~ExtendableEvent() {}
 
@@ -90,7 +90,7 @@ public:
   }
 
   void
-  WaitUntil(Promise& aPromise, ErrorResult& aRv);
+  WaitUntil(JSContext* aCx, Promise& aPromise, ErrorResult& aRv);
 
   already_AddRefed<Promise>
   GetPromise();
@@ -107,6 +107,7 @@ class FetchEvent final : public ExtendableEvent
   RefPtr<Request> mRequest;
   nsCString mScriptSpec;
   nsCString mPreventDefaultScriptSpec;
+  nsString mClientId;
   uint32_t mPreventDefaultLineNumber;
   uint32_t mPreventDefaultColumnNumber;
   bool mIsReload;
@@ -144,9 +145,16 @@ public:
   }
 
   Request*
-  GetRequest_() const
+  Request_() const
   {
+    MOZ_ASSERT(mRequest);
     return mRequest;
+  }
+
+  void
+  GetClientId(nsAString& aClientId) const
+  {
+    aClientId = mClientId;
   }
 
   bool
@@ -180,10 +188,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(PushMessageData)
 
-  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
-  {
-    return mozilla::dom::PushMessageDataBinding_workers::Wrap(aCx, this, aGivenProto);
-  }
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsISupports* GetParentObject() const {
     return mOwner;
@@ -220,10 +225,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PushEvent, ExtendableEvent)
   NS_FORWARD_TO_EVENT
 
-  virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
-  {
-    return mozilla::dom::PushEventBinding_workers::Wrap(aCx, this, aGivenProto);
-  }
+  virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<PushEvent>
   Constructor(mozilla::dom::EventTarget* aOwner,

@@ -12,13 +12,12 @@
 #include "gfxUserFontSet.h"
 #include "nsCSSRules.h"
 #include "nsICSSLoaderObserver.h"
-#include "nsPIDOMWindow.h"
 
 struct gfxFontFaceSrc;
 class gfxUserFontEntry;
 class nsFontFaceLoader;
 class nsIPrincipal;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 namespace css {
@@ -65,8 +64,15 @@ public:
     virtual nsresult CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
                                    nsIPrincipal** aPrincipal,
                                    bool* aBypassCache) override;
+
+    virtual bool IsFontLoadAllowed(nsIURI* aFontLocation,
+                                   nsIPrincipal* aPrincipal) override;
+
     virtual nsresult StartLoad(gfxUserFontEntry* aUserFontEntry,
                                const gfxFontFaceSrc* aFontFaceSrc) override;
+
+    void RecordFontLoadDone(uint32_t aFontSize,
+                            mozilla::TimeStamp aDoneTime) override;
 
   protected:
     virtual bool GetPrivateBrowsing() override;
@@ -86,7 +92,8 @@ public:
                                    uint8_t aStyle,
                                    const nsTArray<gfxFontFeature>& aFeatureSettings,
                                    uint32_t aLanguageOverride,
-                                   gfxSparseBitSet* aUnicodeRanges) override;
+                                   gfxSparseBitSet* aUnicodeRanges,
+                                   uint8_t aFontDisplay) override;
 
   private:
     RefPtr<FontFaceSet> mFontFaceSet;
@@ -96,7 +103,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(FontFaceSet, DOMEventTargetHelper)
   NS_DECL_NSIDOMEVENTLISTENER
 
-  FontFaceSet(nsPIDOMWindow* aWindow, nsIDocument* aDocument);
+  FontFaceSet(nsPIDOMWindowInner* aWindow, nsIDocument* aDocument);
 
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
@@ -141,7 +148,7 @@ public:
   static bool PrefEnabled();
 
   // nsICSSLoaderObserver
-  NS_IMETHOD StyleSheetLoaded(mozilla::CSSStyleSheet* aSheet,
+  NS_IMETHOD StyleSheetLoaded(mozilla::StyleSheetHandle aSheet,
                               bool aWasAlternate,
                               nsresult aStatus) override;
 
@@ -253,6 +260,7 @@ private:
   nsresult CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
                          nsIPrincipal** aPrincipal,
                          bool* aBypassCache);
+  bool IsFontLoadAllowed(nsIURI* aFontLocation, nsIPrincipal* aPrincipal);
   bool GetPrivateBrowsing();
   nsresult SyncLoadFontData(gfxUserFontEntry* aFontToLoad,
                             const gfxFontFaceSrc* aFontFaceSrc,
@@ -292,6 +300,8 @@ private:
                              const nsAString& aText,
                              nsTArray<FontFace*>& aFontFaces,
                              mozilla::ErrorResult& aRv);
+
+  TimeStamp GetNavigationStartTimeStamp();
 
   RefPtr<UserFontSet> mUserFontSet;
 

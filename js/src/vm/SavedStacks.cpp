@@ -23,10 +23,13 @@
 #include "jsscript.h"
 
 #include "gc/Marking.h"
+#include "gc/Policy.h"
 #include "gc/Rooting.h"
+#include "js/CharacterEncoding.h"
 #include "js/Vector.h"
 #include "vm/Debugger.h"
 #include "vm/SavedFrame.h"
+#include "vm/SPSProfiler.h"
 #include "vm/StringBuffer.h"
 #include "vm/Time.h"
 #include "vm/WrapperObject.h"
@@ -63,13 +66,13 @@ LiveSavedFrameCache::getFramePtr(FrameIter& iter)
     return Nothing();
 }
 
-/* static */ void
-LiveSavedFrameCache::trace(LiveSavedFrameCache* cache, JSTracer* trc)
+void
+LiveSavedFrameCache::trace(JSTracer* trc)
 {
-    if (!cache->initialized())
+    if (!initialized())
         return;
 
-    for (auto* entry = cache->frames->begin(); entry < cache->frames->end(); entry++) {
+    for (auto* entry = frames->begin(); entry < frames->end(); entry++) {
         TraceEdge(trc,
                   &entry->savedFrame,
                   "LiveSavedFrameCache::frames SavedFrame");
@@ -156,6 +159,10 @@ struct SavedFrame::Lookup {
         MOZ_ASSERT(source);
         MOZ_ASSERT_IF(framePtr.isSome(), pc);
         MOZ_ASSERT_IF(framePtr.isSome(), activation);
+
+#ifdef JS_MORE_DETERMINISTIC
+        column = 0;
+#endif
     }
 
     explicit Lookup(SavedFrame& savedFrame)
@@ -422,6 +429,9 @@ SavedFrame::initLine(uint32_t line)
 void
 SavedFrame::initColumn(uint32_t column)
 {
+#ifdef JS_MORE_DETERMINISTIC
+    column = 0;
+#endif
     initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column));
 }
 
@@ -486,7 +496,8 @@ SavedFrame::create(JSContext* cx)
         return nullptr;
     assertSameCompartment(cx, proto);
 
-    RootedObject frameObj(cx, NewObjectWithGivenProto(cx, &SavedFrame::class_, proto));
+    RootedObject frameObj(cx, NewObjectWithGivenProto(cx, &SavedFrame::class_, proto,
+                                                      TenuredObject));
     if (!frameObj)
         return nullptr;
 
@@ -647,8 +658,13 @@ public:
                                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        // Note that obj might be null here, since we're doing this
-        // before UnwrapSavedFrame.
+
+        MOZ_RELEASE_ASSERT(cx->compartment());
+        if (obj)
+            MOZ_RELEASE_ASSERT(obj->compartment());
+
+        // Note that obj might be null here, since we're doing this before
+        // UnwrapSavedFrame.
         if (obj && cx->compartment() != obj->compartment())
         {
             JSSubsumesOp subsumes = cx->runtime()->securityCallbacks->subsumes;
@@ -678,7 +694,7 @@ UnwrapSavedFrame(JSContext* cx, HandleObject obj, SavedFrameSelfHosted selfHoste
     if (!savedFrameObj)
         return nullptr;
 
-    MOZ_ASSERT(js::SavedFrame::isSavedFrameAndNotProto(*savedFrameObj));
+    MOZ_RELEASE_ASSERT(js::SavedFrame::isSavedFrameAndNotProto(*savedFrameObj));
     js::RootedSavedFrame frame(cx, &savedFrameObj->as<js::SavedFrame>());
     return GetFirstSubsumedFrame(cx, frame, selfHosted, skippedAsync);
 }
@@ -687,6 +703,10 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameSource(JSContext* cx, HandleObject savedFrame, MutableHandleString sourcep,
                     SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -702,7 +722,11 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameLine(JSContext* cx, HandleObject savedFrame, uint32_t* linep,
                   SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
     MOZ_ASSERT(linep);
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -718,7 +742,11 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameColumn(JSContext* cx, HandleObject savedFrame, uint32_t* columnp,
                     SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
     MOZ_ASSERT(columnp);
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -734,6 +762,10 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameFunctionDisplayName(JSContext* cx, HandleObject savedFrame, MutableHandleString namep,
                                  SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -747,11 +779,21 @@ GetSavedFrameFunctionDisplayName(JSContext* cx, HandleObject savedFrame, Mutable
 
 JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameAsyncCause(JSContext* cx, HandleObject savedFrame, MutableHandleString asyncCausep,
-                        SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
+                        SavedFrameSelfHosted unused_ /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
-    js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
+    // This function is always called with self-hosted frames excluded by
+    // GetValueIfNotCached in dom/bindings/Exceptions.cpp. However, we want
+    // to include them because our Promise implementation causes us to have
+    // the async cause on a self-hosted frame. So we just ignore the
+    // parameter and always include self-hosted frames.
+    js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, SavedFrameSelfHosted::Include,
+                                                    skippedAsync));
     if (!frame) {
         asyncCausep.set(nullptr);
         return SavedFrameResult::AccessDenied;
@@ -766,6 +808,10 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameAsyncParent(JSContext* cx, HandleObject savedFrame, MutableHandleObject asyncParentp,
                          SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -795,6 +841,10 @@ JS_PUBLIC_API(SavedFrameResult)
 GetSavedFrameParent(JSContext* cx, HandleObject savedFrame, MutableHandleObject parentp,
                     SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     AutoMaybeEnterFrameCompartment ac(cx, savedFrame);
     bool skippedAsync;
     js::RootedSavedFrame frame(cx, UnwrapSavedFrame(cx, savedFrame, selfHosted, skippedAsync));
@@ -823,6 +873,10 @@ GetSavedFrameParent(JSContext* cx, HandleObject savedFrame, MutableHandleObject 
 JS_PUBLIC_API(bool)
 BuildStackString(JSContext* cx, HandleObject stack, MutableHandleString stringp, size_t indent)
 {
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    MOZ_RELEASE_ASSERT(cx->compartment());
+
     js::StringBuffer sb(cx);
 
     // Enter a new block to constrain the scope of possibly entering the stack's
@@ -989,20 +1043,15 @@ SavedFrame::toStringMethod(JSContext* cx, unsigned argc, Value* vp)
 bool
 SavedStacks::init()
 {
-    uint64_t seed[2];
-    random_generateSeed(seed, mozilla::ArrayLength(seed));
-    bernoulli.setRandomState(seed[0], seed[1]);
-
-    if (!pcLocationMap.init())
-        return false;
-
-    return frames.init();
+    return frames.init() &&
+           pcLocationMap.init();
 }
 
 bool
 SavedStacks::saveCurrentStack(JSContext* cx, MutableHandleSavedFrame frame, unsigned maxFrameCount)
 {
     MOZ_ASSERT(initialized());
+    MOZ_RELEASE_ASSERT(cx->compartment());
     assertSameCompartment(cx, this);
 
     if (creatingSavedFrame ||
@@ -1013,6 +1062,7 @@ SavedStacks::saveCurrentStack(JSContext* cx, MutableHandleSavedFrame frame, unsi
         return true;
     }
 
+    AutoSPSEntry psuedoFrame(cx->runtime(), "js::SavedStacks::saveCurrentStack");
     FrameIter iter(cx, FrameIter::ALL_CONTEXTS, FrameIter::GO_THROUGH_SAVED);
     return insertFrames(cx, iter, frame, maxFrameCount);
 }
@@ -1022,57 +1072,28 @@ SavedStacks::copyAsyncStack(JSContext* cx, HandleObject asyncStack, HandleString
                             MutableHandleSavedFrame adoptedStack, unsigned maxFrameCount)
 {
     MOZ_ASSERT(initialized());
+    MOZ_RELEASE_ASSERT(cx->compartment());
     assertSameCompartment(cx, this);
 
     RootedObject asyncStackObj(cx, CheckedUnwrap(asyncStack));
-    MOZ_ASSERT(asyncStackObj);
-    MOZ_ASSERT(js::SavedFrame::isSavedFrameAndNotProto(*asyncStackObj));
+    MOZ_RELEASE_ASSERT(asyncStackObj);
+    MOZ_RELEASE_ASSERT(js::SavedFrame::isSavedFrameAndNotProto(*asyncStackObj));
     RootedSavedFrame frame(cx, &asyncStackObj->as<js::SavedFrame>());
 
     return adoptAsyncStack(cx, frame, asyncCause, adoptedStack, maxFrameCount);
 }
 
 void
-SavedStacks::sweep(JSRuntime* rt)
+SavedStacks::sweep()
 {
-    if (frames.initialized()) {
-        for (SavedFrame::Set::Enum e(frames); !e.empty(); e.popFront()) {
-            JSObject* obj = e.front().unbarrieredGet();
-            JSObject* temp = obj;
-
-            if (IsAboutToBeFinalizedUnbarriered(&obj)) {
-                e.removeFront();
-            } else {
-                SavedFrame* frame = &obj->as<SavedFrame>();
-
-                SavedFrame* parent = frame->getParent();
-                bool parentMoved = parent && IsForwarded(parent);
-                if (parentMoved)
-                    parent = Forwarded(parent);
-
-                if (obj != temp || parentMoved) {
-                    MOZ_ASSERT(!IsForwarded(frame));
-                    SavedFrame::Lookup newLocation(*frame);
-                    newLocation.parent = parent;
-                    e.rekeyFront(newLocation, ReadBarriered<SavedFrame*>(frame));
-                }
-            }
-        }
-    }
-
-    sweepPCLocationMap();
+    frames.sweep();
+    pcLocationMap.sweep();
 }
 
 void
 SavedStacks::trace(JSTracer* trc)
 {
-    if (pcLocationMap.initialized()) {
-        // Mark each of the source strings in our pc to location cache.
-        for (PCLocationMap::Enum e(pcLocationMap); !e.empty(); e.popFront()) {
-            LocationValue& loc = e.front().value();
-            TraceEdge(trc, &loc.source, "SavedStacks::PCLocationMap's memoized script source name");
-        }
-    }
+    pcLocationMap.trace(trc);
 }
 
 uint32_t
@@ -1091,7 +1112,8 @@ SavedStacks::clear()
 size_t
 SavedStacks::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf)
 {
-    return frames.sizeOfExcludingThis(mallocSizeOf);
+    return frames.sizeOfExcludingThis(mallocSizeOf) +
+           pcLocationMap.sizeOfExcludingThis(mallocSizeOf);
 }
 
 bool
@@ -1143,12 +1165,28 @@ SavedStacks::insertFrames(JSContext* cx, FrameIter& iter, MutableHandleSavedFram
                 // youngest frame of the async stack as the parent of the oldest
                 // frame of this activation. We still need to iterate over other
                 // frames in this activation before reaching the oldest frame.
-                asyncCause = activation.asyncCause();
+                AutoCompartment ac(cx, iter.compartment());
+                const char* cause = activation.asyncCause();
+                UTF8Chars utf8Chars(cause, strlen(cause));
+                size_t twoByteCharsLen = 0;
+                char16_t* twoByteChars = UTF8CharsToNewTwoByteCharsZ(cx, utf8Chars,
+                                                                     &twoByteCharsLen).get();
+                if (!twoByteChars)
+                    return false;
+
+                // We expect that there will be a relatively small set of
+                // asyncCause reasons ("setTimeout", "promise", etc.), so we
+                // atomize the cause here in hopes of being able to benefit
+                // from reuse.
+                asyncCause = JS_AtomizeUCStringN(cx, twoByteChars, twoByteCharsLen);
+                js_free(twoByteChars);
+                if (!asyncCause)
+                    return false;
                 asyncActivation = &activation;
             }
         }
 
-        AutoLocationValueRooter location(cx);
+        Rooted<LocationValue> location(cx);
         {
             AutoCompartment ac(cx, iter.compartment());
             if (!cx->compartment()->savedStacks().getLocation(cx, iter, &location))
@@ -1160,10 +1198,10 @@ SavedStacks::insertFrames(JSContext* cx, FrameIter& iter, MutableHandleSavedFram
         if (maxFrameCount == 0)
             parentIsInCache = iter.hasCachedSavedFrame();
 
-        auto displayAtom = iter.isNonEvalFunctionFrame() ? iter.functionDisplayAtom() : nullptr;
-        if (!stackChain->emplaceBack(location->source,
-                                     location->line,
-                                     location->column,
+        auto displayAtom = iter.isFunctionFrame() ? iter.functionDisplayAtom() : nullptr;
+        if (!stackChain->emplaceBack(location.source(),
+                                     location.line(),
+                                     location.column(),
                                      displayAtom,
                                      nullptr,
                                      nullptr,
@@ -1332,26 +1370,9 @@ SavedStacks::createFrameFromLookup(JSContext* cx, SavedFrame::HandleLookup looku
     return frame;
 }
 
-/*
- * Remove entries from the table whose JSScript is being collected.
- */
-void
-SavedStacks::sweepPCLocationMap()
-{
-    for (PCLocationMap::Enum e(pcLocationMap); !e.empty(); e.popFront()) {
-        PCKey key = e.front().key();
-        JSScript* script = key.script.get();
-        if (IsAboutToBeFinalizedUnbarriered(&script)) {
-            e.removeFront();
-        } else if (script != key.script.get()) {
-            key.script = script;
-            e.rekeyFront(key);
-        }
-    }
-}
-
 bool
-SavedStacks::getLocation(JSContext* cx, const FrameIter& iter, MutableHandleLocationValue locationp)
+SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+                         MutableHandle<LocationValue> locationp)
 {
     // We should only ever be caching location values for scripts in this
     // compartment. Otherwise, we would get dead cross-compartment scripts in
@@ -1365,20 +1386,21 @@ SavedStacks::getLocation(JSContext* cx, const FrameIter& iter, MutableHandleLoca
     // that doesn't employ memoization, and update |locationp|'s slots directly.
 
     if (!iter.hasScript()) {
-        if (const char16_t* displayURL = iter.scriptDisplayURL()) {
-            locationp->source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
+        if (const char16_t* displayURL = iter.displayURL()) {
+            locationp.setSource(AtomizeChars(cx, displayURL, js_strlen(displayURL)));
         } else {
-            const char* filename = iter.scriptFilename() ? iter.scriptFilename() : "";
-            locationp->source = Atomize(cx, filename, strlen(filename));
+            const char* filename = iter.filename() ? iter.filename() : "";
+            locationp.setSource(Atomize(cx, filename, strlen(filename)));
         }
-        if (!locationp->source)
+        if (!locationp.source())
             return false;
 
-        locationp->line = iter.computeLine(&locationp->column);
+        uint32_t column = 0;
+        locationp.setLine(iter.computeLine(&column));
         // XXX: Make the column 1-based as in other browsers, instead of 0-based
         // which is how SpiderMonkey stores it internally. This will be
         // unnecessary once bug 1144340 is fixed.
-        locationp->column++;
+        locationp.setColumn(column + 1);
         return true;
     }
 
@@ -1390,7 +1412,7 @@ SavedStacks::getLocation(JSContext* cx, const FrameIter& iter, MutableHandleLoca
 
     if (!p) {
         RootedAtom source(cx);
-        if (const char16_t* displayURL = iter.scriptDisplayURL()) {
+        if (const char16_t* displayURL = iter.displayURL()) {
             source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
         } else {
             const char* filename = script->filename() ? script->filename() : "";
@@ -1425,11 +1447,11 @@ SavedStacks::chooseSamplingProbability(JSCompartment* compartment)
     if (!dbgs || dbgs->empty())
         return;
 
-    mozilla::DebugOnly<Debugger**> begin = dbgs->begin();
+    mozilla::DebugOnly<ReadBarriered<Debugger*>*> begin = dbgs->begin();
     mozilla::DebugOnly<bool> foundAnyDebuggers = false;
 
     double probability = 0;
-    for (Debugger** dbgp = dbgs->begin(); dbgp < dbgs->end(); dbgp++) {
+    for (auto dbgp = dbgs->begin(); dbgp < dbgs->end(); dbgp++) {
         // The set of debuggers had better not change while we're iterating,
         // such that the vector gets reallocated.
         MOZ_ASSERT(dbgs->begin() == begin);
@@ -1442,11 +1464,18 @@ SavedStacks::chooseSamplingProbability(JSCompartment* compartment)
     }
     MOZ_ASSERT(foundAnyDebuggers);
 
+    if (!bernoulliSeeded) {
+        mozilla::Array<uint64_t, 2> seed;
+        GenerateXorShift128PlusSeed(seed);
+        bernoulli.setRandomState(seed[0], seed[1]);
+        bernoulliSeeded = true;
+    }
+
     bernoulli.setProbability(probability);
 }
 
 JSObject*
-SavedStacksMetadataCallback(JSContext* cx, JSObject* target)
+SavedStacksMetadataCallback(JSContext* cx, HandleObject target)
 {
     RootedObject obj(cx, target);
 

@@ -17,13 +17,14 @@ const PAGE_SIZE_MAX_JUMPS = 30;
 const SEARCH_ACTION_MAX_DELAY = 300; // ms
 const ITEM_FLASH_DURATION = 300 // ms
 
-Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://devtools/client/shared/widgets/ViewHelpers.jsm");
 Cu.import("resource://devtools/shared/event-emitter.js");
 Cu.import("resource://gre/modules/Task.jsm");
 const { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
+const Services = require("Services");
+const { getSourceNames } = require("devtools/client/shared/source-utils");
 const promise = require("promise");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
@@ -155,7 +156,7 @@ VariablesView.prototype = {
     }
 
     this._store.length = 0;
-    this._itemsByElement.clear();
+    this._itemsByElement = new WeakMap();
     this._prevHierarchy = this._currHierarchy;
     this._currHierarchy = new Map(); // Don't clear, this is just simple swapping.
 
@@ -1278,11 +1279,13 @@ Scope.prototype = {
    *        The name of the new Property.
    * @param object aDescriptor
    *        The variable's descriptor.
+   * @param object aOptions
+   *        Options of the form accepted by addItem.
    * @return Variable
    *         The newly created child Variable.
    */
-  _createChild: function(aName, aDescriptor) {
-    return new Variable(this, aName, aDescriptor);
+  _createChild: function(aName, aDescriptor, aOptions) {
+    return new Variable(this, aName, aDescriptor, aOptions);
   },
 
   /**
@@ -1303,18 +1306,27 @@ Scope.prototype = {
    *             - { value: { type: "object", class: "Object" } }
    *             - { get: { type: "object", class: "Function" },
    *                 set: { type: "undefined" } }
-   * @param boolean aRelaxed [optional]
-   *        Pass true if name duplicates should be allowed.
-   *        You probably shouldn't do it. Use this with caution.
+   * @param object aOptions
+   *        Specifies some options affecting the new variable.
+   *        Recognized properties are
+   *        * boolean relaxed  true if name duplicates should be allowed.
+   *                           You probably shouldn't do it. Use this
+   *                           with caution.
+   *        * boolean internalItem  true if the item is internally generated.
+   *                           This is used for special variables
+   *                           like <return> or <exception> and distinguishes
+   *                           them from ordinary properties that happen
+   *                           to have the same name
    * @return Variable
    *         The newly created Variable instance, null if it already exists.
    */
-  addItem: function(aName = "", aDescriptor = {}, aRelaxed = false) {
-    if (this._store.has(aName) && !aRelaxed) {
+  addItem: function(aName = "", aDescriptor = {}, aOptions = {}) {
+    let {relaxed} = aOptions;
+    if (this._store.has(aName) && !relaxed) {
       return this._store.get(aName);
     }
 
-    let child = this._createChild(aName, aDescriptor);
+    let child = this._createChild(aName, aDescriptor, aOptions);
     this._store.set(aName, child);
     this._variablesView._itemsByElement.set(child._target, child);
     this._variablesView._currHierarchy.set(child.absoluteName, child);
@@ -2146,14 +2158,17 @@ XPCOMUtils.defineLazyGetter(Scope, "ellipsis", () =>
  *        The variable's name.
  * @param object aDescriptor
  *        The variable's descriptor.
+ * @param object aOptions
+ *        Options of the form accepted by Scope.addItem
  */
-function Variable(aScope, aName, aDescriptor) {
+function Variable(aScope, aName, aDescriptor, aOptions) {
   this._setTooltips = this._setTooltips.bind(this);
   this._activateNameInput = this._activateNameInput.bind(this);
   this._activateValueInput = this._activateValueInput.bind(this);
   this.openNodeInInspector = this.openNodeInInspector.bind(this);
   this.highlightDomNode = this.highlightDomNode.bind(this);
   this.unhighlightDomNode = this.unhighlightDomNode.bind(this);
+  this._internalItem = aOptions.internalItem;
 
   // Treat safe getter descriptors as descriptors with a value.
   if ("getterValue" in aDescriptor) {
@@ -2193,11 +2208,13 @@ Variable.prototype = Heritage.extend(Scope.prototype, {
    *        The name of the new Property.
    * @param object aDescriptor
    *        The property's descriptor.
+   * @param object aOptions
+   *        Options of the form accepted by Scope.addItem
    * @return Property
    *         The newly created child Property.
    */
-  _createChild: function(aName, aDescriptor) {
-    return new Property(this, aName, aDescriptor);
+  _createChild: function(aName, aDescriptor, aOptions) {
+    return new Property(this, aName, aDescriptor, aOptions);
   },
 
   /**
@@ -2521,8 +2538,7 @@ Variable.prototype = Heritage.extend(Scope.prototype, {
 
     if (this._initialDescriptor.enumerable ||
         this._nameString == "this" ||
-        this._nameString == "<return>" ||
-        this._nameString == "<exception>") {
+        this._internalItem) {
       this.ownerView._enum.appendChild(this._target);
       this.ownerView._enumItems.push(this);
     } else {
@@ -2869,11 +2885,11 @@ Variable.prototype = Heritage.extend(Scope.prototype, {
     if (name == "this") {
       target.setAttribute("self", "");
     }
-    else if (name == "<exception>") {
+    else if (this._internalItem && name == "<exception>") {
       target.setAttribute("exception", "");
       target.setAttribute("pseudo-item", "");
     }
-    else if (name == "<return>") {
+    else if (this._internalItem && name == "<return>") {
       target.setAttribute("return", "");
       target.setAttribute("pseudo-item", "");
     }
@@ -3008,7 +3024,7 @@ Variable.prototype = Heritage.extend(Scope.prototype, {
       configurable: true,
       enumerable: true,
       writable: true
-    }, true);
+    }, {relaxed: true});
 
     // Force showing the separator.
     item._separatorLabel.hidden = false;
@@ -3051,9 +3067,11 @@ Variable.prototype = Heritage.extend(Scope.prototype, {
  *        The property's name.
  * @param object aDescriptor
  *        The property's descriptor.
+ * @param object aOptions
+ *        Options of the form accepted by Scope.addItem
  */
-function Property(aVar, aName, aDescriptor) {
-  Variable.call(this, aVar, aName, aDescriptor);
+function Property(aVar, aName, aDescriptor, aOptions) {
+  Variable.call(this, aVar, aName, aDescriptor, aOptions);
 }
 
 Property.prototype = Heritage.extend(Variable.prototype, {
@@ -3452,11 +3470,11 @@ VariablesView.stringifiers.byType = {
   object: function(aGrip, aOptions) {
     let {preview} = aGrip;
     let stringifier;
-    if (preview && preview.kind) {
-      stringifier = VariablesView.stringifiers.byObjectKind[preview.kind];
-    }
-    if (!stringifier && aGrip.class) {
+    if (aGrip.class) {
       stringifier = VariablesView.stringifiers.byObjectClass[aGrip.class];
+    }
+    if (!stringifier && preview && preview.kind) {
+      stringifier = VariablesView.stringifiers.byObjectKind[preview.kind];
     }
     if (stringifier) {
       return stringifier(aGrip, aOptions);
@@ -3468,6 +3486,19 @@ VariablesView.stringifiers.byType = {
     const name = aGrip.name || "";
     return "Symbol(" + name + ")";
   },
+
+  mapEntry: function(aGrip, {concise}) {
+    let { preview: { key, value }} = aGrip;
+
+    let keyString = VariablesView.getString(key, {
+      concise: true,
+      noStringQuotes: true,
+    });
+    let valueString = VariablesView.getString(value, { concise: true });
+
+    return keyString + " \u2192 " + valueString;
+  },
+
 }; // VariablesView.stringifiers.byType
 
 VariablesView.stringifiers.byObjectClass = {
@@ -3502,18 +3533,13 @@ VariablesView.stringifiers.byObjectClass = {
     return "Date " + new Date(preview.timestamp).toISOString();
   },
 
-  String: function({displayString}) {
-    if (displayString === undefined) {
-      return null;
-    }
-    return VariablesView.getString(displayString);
-  },
-
-  Number: function({preview}) {
+  Number: function(aGrip) {
+    let {preview} = aGrip;
     if (preview === undefined) {
       return null;
     }
-    return VariablesView.getString(preview.value);
+    return aGrip.class + " { " + VariablesView.getString(preview.wrappedValue) +
+      " }";
   },
 }; // VariablesView.stringifiers.byObjectClass
 
@@ -3597,8 +3623,7 @@ VariablesView.stringifiers.byObjectKind = {
     let result = aGrip.class;
     let url = aGrip.preview.url;
     if (!VariablesView.isFalsy({ value: url })) {
-      result += " \u2192 " + WebConsoleUtils.abbreviateSourceURL(url,
-                             { onlyCropQuery: !concise });
+      result += ` \u2192 ${getSourceNames(url)[concise ? "short" : "long"]}`;
     }
     return result;
   },
@@ -3735,9 +3760,7 @@ VariablesView.stringifiers.byObjectKind = {
       case Ci.nsIDOMNode.DOCUMENT_NODE: {
         let result = aGrip.class;
         if (preview.location) {
-          let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
-                                                            { onlyCropQuery: !concise });
-          result += " \u2192 " + location;
+          result += ` \u2192 ${getSourceNames(preview.location)[concise ? "short" : "long"]}`;
         }
 
         return result;

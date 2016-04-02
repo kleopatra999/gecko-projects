@@ -25,25 +25,17 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // Create as a file
-  MultipartBlobImpl(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
-                    const nsAString& aName,
-                    const nsAString& aContentType)
-    : BlobImplBase(aName, aContentType, UINT64_MAX),
-      mBlobImpls(aBlobImpls),
-      mIsFromNsIFile(false)
-  {
-    SetLengthAndModifiedDate();
-  }
+  static already_AddRefed<MultipartBlobImpl>
+  Create(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
+         const nsAString& aName,
+         const nsAString& aContentType,
+         ErrorResult& aRv);
 
   // Create as a blob
-  MultipartBlobImpl(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
-                    const nsAString& aContentType)
-    : BlobImplBase(aContentType, UINT64_MAX),
-      mBlobImpls(aBlobImpls),
-      mIsFromNsIFile(false)
-  {
-    SetLengthAndModifiedDate();
-  }
+  static already_AddRefed<MultipartBlobImpl>
+  Create(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
+         const nsAString& aContentType,
+         ErrorResult& aRv);
 
   // Create as a file to be later initialized
   explicit MultipartBlobImpl(const nsAString& aName)
@@ -59,7 +51,7 @@ public:
   {
   }
 
-  void InitializeBlob();
+  void InitializeBlob(ErrorResult& aRv);
 
   void InitializeBlob(
        JSContext* aCx,
@@ -72,12 +64,12 @@ public:
                             const ChromeFilePropertyBag& aBag,
                             ErrorResult& aRv);
 
-  void InitializeChromeFile(nsPIDOMWindow* aWindow,
+  void InitializeChromeFile(nsPIDOMWindowInner* aWindow,
                             const nsAString& aData,
                             const ChromeFilePropertyBag& aBag,
                             ErrorResult& aRv);
 
-  void InitializeChromeFile(nsPIDOMWindow* aWindow,
+  void InitializeChromeFile(nsPIDOMWindowInner* aWindow,
                             nsIFile* aData,
                             const ChromeFilePropertyBag& aBag,
                             bool aIsFromNsIFile,
@@ -120,9 +112,26 @@ public:
   virtual bool MayBeClonedToOtherThreads() const override;
 
 protected:
+  MultipartBlobImpl(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
+                    const nsAString& aName,
+                    const nsAString& aContentType)
+    : BlobImplBase(aName, aContentType, UINT64_MAX),
+      mBlobImpls(aBlobImpls),
+      mIsFromNsIFile(false)
+  {
+  }
+
+  MultipartBlobImpl(const nsTArray<RefPtr<BlobImpl>>& aBlobImpls,
+                    const nsAString& aContentType)
+    : BlobImplBase(aContentType, UINT64_MAX),
+      mBlobImpls(aBlobImpls),
+      mIsFromNsIFile(false)
+  {
+  }
+
   virtual ~MultipartBlobImpl() {}
 
-  void SetLengthAndModifiedDate();
+  void SetLengthAndModifiedDate(ErrorResult& aRv);
 
   nsTArray<RefPtr<BlobImpl>> mBlobImpls;
   bool mIsFromNsIFile;

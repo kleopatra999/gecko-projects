@@ -29,7 +29,7 @@
 #include "mozilla/TouchEvents.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/layers/APZThreadUtils.h"
-#include "mozilla/layers/CompositorParent.h"
+#include "mozilla/layers/CompositorBridgeParent.h"
 #include "nsAppShell.h"
 #include "nsDebug.h"
 #include "nsThreadUtils.h"
@@ -88,7 +88,7 @@ void
 GeckoTouchDispatcher::SetCompositorVsyncScheduler(mozilla::layers::CompositorVsyncScheduler *aObserver)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  // We assume on b2g that there is only 1 CompositorParent
+  // We assume on b2g that there is only 1 CompositorBridgeParent
   MOZ_ASSERT(mCompositorVsyncScheduler == nullptr);
   mCompositorVsyncScheduler = aObserver;
 }
@@ -105,7 +105,7 @@ void
 GeckoTouchDispatcher::NotifyTouch(MultiTouchInput& aTouch, TimeStamp aEventTime)
 {
   if (mCompositorVsyncScheduler) {
-    mCompositorVsyncScheduler->SetNeedsComposite(true);
+    mCompositorVsyncScheduler->SetNeedsComposite();
   }
 
   if (aTouch.mType == MultiTouchInput::MULTITOUCH_MOVE) {

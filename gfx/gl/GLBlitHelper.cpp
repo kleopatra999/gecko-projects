@@ -12,6 +12,7 @@
 #include "ImageContainer.h"
 #include "HeapCopyOfStackArray.h"
 #include "mozilla/gfx/Matrix.h"
+#include "mozilla/UniquePtr.h"
 
 #ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
@@ -90,6 +91,7 @@ bool
 GLBlitHelper::InitTexQuadProgram(BlitType target)
 {
     const char kTexBlit_VertShaderSource[] = "\
+        #version 100                                  \n\
         #ifdef GL_ES                                  \n\
         precision mediump float;                      \n\
         #endif                                        \n\
@@ -108,10 +110,13 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
     ";
 
     const char kTex2DBlit_FragShaderSource[] = "\
+        #version 100                                        \n\
+        #ifdef GL_ES                                        \n\
         #ifdef GL_FRAGMENT_PRECISION_HIGH                   \n\
             precision highp float;                          \n\
         #else                                               \n\
-            prevision mediump float;                        \n\
+            precision mediump float;                        \n\
+        #endif                                              \n\
         #endif                                              \n\
         uniform sampler2D uTexUnit;                         \n\
                                                             \n\
@@ -124,6 +129,7 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
     ";
 
     const char kTex2DRectBlit_FragShaderSource[] = "\
+        #version 100                                                  \n\
         #ifdef GL_FRAGMENT_PRECISION_HIGH                             \n\
             precision highp float;                                    \n\
         #else                                                         \n\
@@ -143,6 +149,7 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
     ";
 #ifdef ANDROID /* MOZ_WIDGET_ANDROID || MOZ_WIDGET_GONK */
     const char kTexExternalBlit_FragShaderSource[] = "\
+        #version 100                                                    \n\
         #extension GL_OES_EGL_image_external : require                  \n\
         #ifdef GL_FRAGMENT_PRECISION_HIGH                               \n\
             precision highp float;                                      \n\
@@ -171,6 +178,7 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
     [B] [1.16438, 2.01723, 0.00000] [Cr - 0.50196]
     */
     const char kTexYUVPlanarBlit_FragShaderSource[] = "\
+        #version 100                                                        \n\
         #ifdef GL_ES                                                        \n\
         precision mediump float;                                            \n\
         #endif                                                              \n\
@@ -182,9 +190,9 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
         uniform vec2 uCbCrTexScale;                                         \n\
         void main()                                                         \n\
         {                                                                   \n\
-            float y = texture2D(uYTexture, vTexCoord * uYTexScale).a;       \n\
-            float cb = texture2D(uCbTexture, vTexCoord * uCbCrTexScale).a;  \n\
-            float cr = texture2D(uCrTexture, vTexCoord * uCbCrTexScale).a;  \n\
+            float y = texture2D(uYTexture, vTexCoord * uYTexScale).r;       \n\
+            float cb = texture2D(uCbTexture, vTexCoord * uCbCrTexScale).r;  \n\
+            float cr = texture2D(uCrTexture, vTexCoord * uCbCrTexScale).r;  \n\
             y = (y - 0.06275) * 1.16438;                                    \n\
             cb = cb - 0.50196;                                              \n\
             cr = cr - 0.50196;                                              \n\
@@ -197,6 +205,7 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
 
 #ifdef XP_MACOSX
     const char kTexNV12PlanarBlit_FragShaderSource[] = "\
+        #version 100                                                             \n\
         #extension GL_ARB_texture_rectangle : require                            \n\
         #ifdef GL_ES                                                             \n\
         precision mediump float                                                  \n\
@@ -330,8 +339,8 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
                     break;
                 }
 
-                nsAutoArrayPtr<char> buffer(new char[length]);
-                mGL->fGetShaderInfoLog(mTexBlit_VertShader, length, nullptr, buffer);
+                auto buffer = MakeUnique<char[]>(length);
+                mGL->fGetShaderInfoLog(mTexBlit_VertShader, length, nullptr, buffer.get());
 
                 printf_stderr("Shader info log (%d bytes): %s\n", length, buffer.get());
                 break;
@@ -349,8 +358,8 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
                     break;
                 }
 
-                nsAutoArrayPtr<char> buffer(new char[length]);
-                mGL->fGetShaderInfoLog(fragShader, length, nullptr, buffer);
+                auto buffer = MakeUnique<char[]>(length);
+                mGL->fGetShaderInfoLog(fragShader, length, nullptr, buffer.get());
 
                 printf_stderr("Shader info log (%d bytes): %s\n", length, buffer.get());
                 break;
@@ -369,8 +378,8 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
                     break;
                 }
 
-                nsAutoArrayPtr<char> buffer(new char[length]);
-                mGL->fGetProgramInfoLog(program, length, nullptr, buffer);
+                auto buffer = MakeUnique<char[]>(length);
+                mGL->fGetProgramInfoLog(program, length, nullptr, buffer.get());
 
                 printf_stderr("Program info log (%d bytes): %s\n", length, buffer.get());
             }
@@ -380,18 +389,16 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
         // Cache and set attribute and uniform
         mGL->fUseProgram(program);
         switch (target) {
+#ifdef ANDROID
+            case ConvertSurfaceTexture:
+            case ConvertGralloc:
+#endif
             case BlitTex2D:
             case BlitTexRect:
-            case ConvertEGLImage:
-            case ConvertSurfaceTexture:
-            case ConvertGralloc: {
-#ifdef ANDROID
+            case ConvertEGLImage: {
                 GLint texUnitLoc = mGL->fGetUniformLocation(program, "uTexUnit");
                 MOZ_ASSERT(texUnitLoc != -1, "uniform uTexUnit not found");
                 mGL->fUniform1i(texUnitLoc, 0);
-#else
-                MOZ_ASSERT_UNREACHABLE("gralloc not support on non-android");
-#endif
                 break;
             }
             case ConvertPlanarYCbCr: {
@@ -431,6 +438,8 @@ GLBlitHelper::InitTexQuadProgram(BlitType target)
 #endif
                 break;
             }
+            default:
+                return false;
         }
         MOZ_ASSERT(mGL->fGetAttribLocation(program, "aPosition") == 0);
         mYFlipLoc = mGL->fGetUniformLocation(program, "uYflip");
@@ -595,9 +604,23 @@ GLBlitHelper::BindAndUploadYUVTexture(Channel which,
     MOZ_ASSERT(which < Channel_Max, "Invalid channel!");
     GLuint* srcTexArr[3] = {&mSrcTexY, &mSrcTexCb, &mSrcTexCr};
     GLuint& tex = *srcTexArr[which];
+
+    // RED textures aren't valid in GLES2, and ALPHA textures are not valid in desktop GL Core Profiles.
+    // So use R8 textures on GL3.0+ and GLES3.0+, but LUMINANCE/LUMINANCE/UNSIGNED_BYTE otherwise.
+    GLenum format;
+    GLenum internalFormat;
+    if (mGL->IsAtLeast(gl::ContextProfile::OpenGLCore, 300) ||
+        mGL->IsAtLeast(gl::ContextProfile::OpenGLES, 300)) {
+        format = LOCAL_GL_RED;
+        internalFormat = LOCAL_GL_R8;
+    } else {
+        format = LOCAL_GL_LUMINANCE;
+        internalFormat = LOCAL_GL_LUMINANCE;
+    }
+
     if (!tex) {
         MOZ_ASSERT(needsAllocation);
-        tex = CreateTexture(mGL, LOCAL_GL_ALPHA, LOCAL_GL_ALPHA, LOCAL_GL_UNSIGNED_BYTE,
+        tex = CreateTexture(mGL, internalFormat, format, LOCAL_GL_UNSIGNED_BYTE,
                             gfx::IntSize(width, height), false);
     }
     mGL->fActiveTexture(LOCAL_GL_TEXTURE0 + which);
@@ -610,17 +633,17 @@ GLBlitHelper::BindAndUploadYUVTexture(Channel which,
                             0,
                             width,
                             height,
-                            LOCAL_GL_ALPHA,
+                            format,
                             LOCAL_GL_UNSIGNED_BYTE,
                             data);
     } else {
         mGL->fTexImage2D(LOCAL_GL_TEXTURE_2D,
                          0,
-                         LOCAL_GL_ALPHA,
+                         internalFormat,
                          width,
                          height,
                          0,
-                         LOCAL_GL_ALPHA,
+                         format,
                          LOCAL_GL_UNSIGNED_BYTE,
                          data);
     }
@@ -683,7 +706,7 @@ GLBlitHelper::BlitGrallocImage(layers::GrallocImage* grallocImage)
 bool
 GLBlitHelper::BlitSurfaceTextureImage(layers::SurfaceTextureImage* stImage)
 {
-    AndroidSurfaceTexture* surfaceTexture = stImage->GetData()->mSurfTex;
+    AndroidSurfaceTexture* surfaceTexture = stImage->GetSurfaceTexture();
 
     ScopedBindTextureUnit boundTU(mGL, LOCAL_GL_TEXTURE0);
 
@@ -712,8 +735,8 @@ GLBlitHelper::BlitSurfaceTextureImage(layers::SurfaceTextureImage* stImage)
 bool
 GLBlitHelper::BlitEGLImageImage(layers::EGLImageImage* image)
 {
-    EGLImage eglImage = image->GetData()->mImage;
-    EGLSync eglSync = image->GetData()->mSync;
+    EGLImage eglImage = image->GetImage();
+    EGLSync eglSync = image->GetSync();
 
     if (eglSync) {
         EGLint status = sEGLLibrary.fClientWaitSync(EGL_DISPLAY(), eglSync, 0, LOCAL_EGL_FOREVER);
@@ -840,13 +863,12 @@ GLBlitHelper::BlitImageToFramebuffer(layers::Image* srcImage,
 #ifdef MOZ_WIDGET_ANDROID
     case ImageFormat::SURFACE_TEXTURE:
         type = ConvertSurfaceTexture;
-        srcOrigin = static_cast<layers::SurfaceTextureImage*>(srcImage)->GetData()
-                                                                       ->mOriginPos;
+        srcOrigin = srcImage->AsSurfaceTextureImage()->GetOriginPos();
         break;
 
     case ImageFormat::EGLIMAGE:
         type = ConvertEGLImage;
-        srcOrigin = static_cast<layers::EGLImageImage*>(srcImage)->GetData()->mOriginPos;
+        srcOrigin = srcImage->AsEGLImageImage()->GetOriginPos();
         break;
 #endif
 #ifdef XP_MACOSX
@@ -892,7 +914,7 @@ GLBlitHelper::BlitImageToFramebuffer(layers::Image* srcImage,
 
 #ifdef XP_MACOSX
     case ConvertMacIOSurfaceImage:
-        return BlitMacIOSurfaceImage(static_cast<layers::MacIOSurfaceImage*>(srcImage));
+        return BlitMacIOSurfaceImage(srcImage->AsMacIOSurfaceImage());
 #endif
 
     default:
@@ -934,6 +956,18 @@ GLBlitHelper::BlitTextureToFramebuffer(GLuint srcTex, GLuint destFB,
         return;
     }
 
+    DrawBlitTextureToFramebuffer(srcTex, destFB, srcSize, destSize, srcTarget,
+                                 internalFBs);
+}
+
+
+void
+GLBlitHelper::DrawBlitTextureToFramebuffer(GLuint srcTex, GLuint destFB,
+                                           const gfx::IntSize& srcSize,
+                                           const gfx::IntSize& destSize,
+                                           GLenum srcTarget,
+                                           bool internalFBs)
+{
     BlitType type;
     switch (srcTarget) {
     case LOCAL_GL_TEXTURE_2D:
@@ -943,7 +977,7 @@ GLBlitHelper::BlitTextureToFramebuffer(GLuint srcTex, GLuint destFB,
         type = BlitTexRect;
         break;
     default:
-        MOZ_CRASH("Fatal Error: Bad `srcTarget`.");
+        MOZ_CRASH("GFX: Fatal Error: Bad `srcTarget`.");
         break;
     }
 

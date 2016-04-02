@@ -11,6 +11,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/UserCustomizations.jsm");
+Cu.importGlobalProperties(["FileReader"]);
 
 var promise = require("promise");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
@@ -231,7 +232,7 @@ WebappsActor.prototype = {
   actorPrefix: "webapps",
 
   // For now, launch and close requests are only supported on B2G products
-  // like devices, mulet/simulators, graphene and b2gdroid.
+  // like devices, mulet/simulators, and graphene.
   // We set that attribute on the prototype in order to allow test
   // to enable this feature.
   supportsLaunch: require("devtools/shared/system").constants.MOZ_B2G,
@@ -275,6 +276,8 @@ WebappsActor.prototype = {
     aApp.localId = (aId in reg.webapps) ? reg.webapps[aId].localId
                                         : reg._nextLocalId();
     aApp.sideloaded = true;
+    aApp.enabled = true;
+    aApp.blockedStatus = Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
 
     reg.webapps[aId] = aApp;
     reg.updatePermissionsForApp(aId);
@@ -849,8 +852,7 @@ WebappsActor.prototype = {
       }
 
       // Convert the blog to a base64 encoded data URI
-      let reader = Cc["@mozilla.org/files/filereader;1"]
-                     .createInstance(Ci.nsIDOMFileReader);
+      let reader = new FileReader();
       reader.onload = function () {
         deferred.resolve({
           url: reader.result

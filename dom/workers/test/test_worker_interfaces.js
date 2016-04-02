@@ -54,15 +54,6 @@ var ecmaGlobals =
     "RegExp",
     "Set",
     {name: "SharedArrayBuffer", nightly: true},
-    {name: "SharedInt8Array", nightly: true},
-    {name: "SharedUint8Array", nightly: true},
-    {name: "SharedUint8ClampedArray", nightly: true},
-    {name: "SharedInt16Array", nightly: true},
-    {name: "SharedUint16Array", nightly: true},
-    {name: "SharedInt32Array", nightly: true},
-    {name: "SharedUint32Array", nightly: true},
-    {name: "SharedFloat32Array", nightly: true},
-    {name: "SharedFloat64Array", nightly: true},
     {name: "SIMD", nightly: true},
     {name: "Atomics", nightly: true},
     "StopIteration",
@@ -94,6 +85,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CacheStorage",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "CustomEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "DedicatedWorkerGlobalScope",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "DataStore", b2g: true },
@@ -115,6 +108,8 @@ var interfaceNamesInGlobalScope =
     "EventTarget",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "File",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "FileReader",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "FileReaderSync",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -146,6 +141,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageBitmap",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "ImageBitmapRenderingContext",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MessageChannel",
@@ -168,15 +165,15 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Promise",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "PushManager", b2g: false, android: false, release: false},
+    { name: "PushManager", b2g: false, nightlyAndroid: true, android: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "PushSubscription", b2g: false, android: false, release: false},
+    { name: "PushSubscription", b2g: false, nightlyAndroid: true, android: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Request",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Response",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "ServiceWorkerRegistration", b2g: false, release: false },
+    { name: "ServiceWorkerRegistration", b2g: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TextDecoder",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -241,8 +238,9 @@ function createInterfaceMap(permissionMap, version, userAgent, isB2G) {
       } else {
         ok(!("pref" in entry), "Bogus pref annotation for " + entry.name);
         if ((entry.nightly === !isNightly) ||
+            (entry.nightlyAndroid === !(isAndroid && isNightly) && isAndroid) ||
             (entry.desktop === !isDesktop) ||
-            (entry.android === !isAndroid) ||
+            (entry.android === !isAndroid && !entry.nightlyAndroid) ||
             (entry.b2g === !isB2G) ||
             (entry.release === !isRelease) ||
             (entry.permission && !permissionMap[entry.permission]) ||

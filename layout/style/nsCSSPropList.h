@@ -537,7 +537,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
     "",
     VARIANT_KEYWORD, // used by list parsing
-    kBackgroundAttachmentKTable,
+    kImageLayerAttachmentKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
@@ -550,7 +550,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
     "",
     VARIANT_KEYWORD, // used by list parsing
-    kBackgroundOriginKTable,
+    kImageLayerOriginKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
@@ -605,7 +605,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
     "",
     VARIANT_KEYWORD, // used by list parsing
-    kBackgroundOriginKTable,
+    kImageLayerOriginKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
@@ -620,7 +620,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_STORES_CALC,
     "",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_BACKGROUND(
@@ -633,7 +633,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
     "",
     VARIANT_KEYWORD, // used by list parsing
-    kBackgroundRepeatKTable,
+    kImageLayerRepeatKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
@@ -648,7 +648,7 @@ CSS_PROP_BACKGROUND(
         CSS_PROPERTY_STORES_CALC,
     "",
     0,
-    kBackgroundSizeKTable,
+    kImageLayerSizeKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
@@ -1482,7 +1482,8 @@ CSS_PROP_DISPLAY(
     contain,
     Contain,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_VALUE_PARSER_FUNCTION,
+        CSS_PROPERTY_VALUE_PARSER_FUNCTION |
+        CSS_PROPERTY_FIXPOS_CB,
     "layout.css.contain.enabled",
     // Does not affect parsing, but is needed for tab completion in devtools:
     VARIANT_HK | VARIANT_NONE,
@@ -1588,8 +1589,8 @@ CSS_PROP_POSITION(
     AlignContent,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    kAutoCompletionAlignJustifyContent,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_POSITION(
@@ -1598,8 +1599,8 @@ CSS_PROP_POSITION(
     AlignItems,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    kAutoCompletionAlignItems,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_POSITION(
@@ -1608,8 +1609,8 @@ CSS_PROP_POSITION(
     AlignSelf,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    kAutoCompletionAlignJustifySelf,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_SHORTHAND(
@@ -1643,6 +1644,22 @@ CSS_PROP_POSITION(
     kFlexDirectionKTable,
     offsetof(nsStylePosition, mFlexDirection),
     eStyleAnimType_EnumU8)
+/* We treat -webkit-box-orient as a writing-mode-aware logical alias
+ * for "flex-direction": */
+CSS_PROP_LOGICAL(
+    -webkit-box-orient,
+    webkit_box_orient,
+    WebkitBoxOrient,
+    CSS_PROPERTY_PARSE_VALUE |
+      CSS_PROPERTY_LOGICAL |
+      CSS_PROPERTY_LOGICAL_SINGLE_CUSTOM_VALMAPPING,
+    "layout.css.prefixes.webkit",
+    VARIANT_HK,
+    kBoxOrientKTable,
+    WebkitBoxOrient,
+    Position,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
 CSS_PROP_SHORTHAND(
     flex-flow,
     flex_flow,
@@ -1703,8 +1720,8 @@ CSS_PROP_POSITION(
     JustifyContent,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    kAutoCompletionAlignJustifyContent,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_POSITION(
@@ -1713,8 +1730,9 @@ CSS_PROP_POSITION(
     JustifyItems,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    // for auto-completion we use same values as justify-self:
+    kAutoCompletionAlignJustifySelf,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_POSITION(
@@ -1723,8 +1741,8 @@ CSS_PROP_POSITION(
     JustifySelf,
     CSS_PROPERTY_PARSE_FUNCTION,
     "",
-    0,
-    nullptr,
+    VARIANT_HK,
+    kAutoCompletionAlignJustifySelf,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_DISPLAY(
@@ -1993,7 +2011,8 @@ CSS_PROP_POSITION(
     grid-auto-flow,
     grid_auto_flow,
     GridAutoFlow,
-    CSS_PROPERTY_PARSE_FUNCTION,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     kGridAutoFlowKTable,
@@ -2004,7 +2023,8 @@ CSS_PROP_POSITION(
     grid_auto_columns,
     GridAutoColumns,
     CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_STORES_CALC,
+        CSS_PROPERTY_STORES_CALC |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     kGridTrackBreadthKTable,
@@ -2015,7 +2035,8 @@ CSS_PROP_POSITION(
     grid_auto_rows,
     GridAutoRows,
     CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_STORES_CALC,
+        CSS_PROPERTY_STORES_CALC |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     kGridTrackBreadthKTable,
@@ -2025,7 +2046,8 @@ CSS_PROP_POSITION(
     grid-template-areas,
     grid_template_areas,
     GridTemplateAreas,
-    CSS_PROPERTY_PARSE_FUNCTION,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     nullptr,
@@ -2037,7 +2059,8 @@ CSS_PROP_POSITION(
     GridTemplateColumns,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     kGridTrackBreadthKTable,
@@ -2049,18 +2072,13 @@ CSS_PROP_POSITION(
     GridTemplateRows,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.grid.enabled",
     0,
     kGridTrackBreadthKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
-CSS_PROP_SHORTHAND(
-    grid-template,
-    grid_template,
-    GridTemplate,
-    CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
 CSS_PROP_SHORTHAND(
     grid,
     grid,
@@ -2123,6 +2141,36 @@ CSS_PROP_SHORTHAND(
     grid-area,
     grid_area,
     GridArea,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "layout.css.grid.enabled")
+CSS_PROP_POSITION(
+    grid-column-gap,
+    grid_column_gap,
+    GridColumnGap,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_NONNEGATIVE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.grid.enabled",
+    VARIANT_HL | VARIANT_CALC,
+    nullptr,
+    offsetof(nsStylePosition, mGridColumnGap),
+    eStyleAnimType_nscoord)
+CSS_PROP_POSITION(
+    grid-row-gap,
+    grid_row_gap,
+    GridRowGap,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_NONNEGATIVE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.grid.enabled",
+    VARIANT_HL | VARIANT_CALC,
+    nullptr,
+    offsetof(nsStylePosition, mGridRowGap),
+    eStyleAnimType_nscoord)
+CSS_PROP_SHORTHAND(
+    grid-gap,
+    grid_gap,
+    GridGap,
     CSS_PROPERTY_PARSE_FUNCTION,
     "layout.css.grid.enabled")
 CSS_PROP_POSITION(
@@ -2224,7 +2272,7 @@ CSS_PROP_TEXT(
         CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
         CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
     "",
-    VARIANT_HLPN | VARIANT_KEYWORD | VARIANT_NORMAL | VARIANT_SYSFONT,
+    VARIANT_HLPN | VARIANT_KEYWORD | VARIANT_NORMAL | VARIANT_SYSFONT | VARIANT_CALC,
     kLineHeightKTable,
     offsetof(nsStyleText, mLineHeight),
     eStyleAnimType_Coord)
@@ -2602,7 +2650,7 @@ CSS_PROP_POSITION(
         CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
     "layout.css.object-fit-and-position.enabled",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     offsetof(nsStylePosition, mObjectPosition),
     eStyleAnimType_Custom)
 CSS_PROP_LOGICAL(
@@ -3000,7 +3048,8 @@ CSS_PROP_DISPLAY(
     Position,
     CSS_PROPERTY_PARSE_VALUE |
         // For position: sticky/fixed
-        CSS_PROPERTY_CREATES_STACKING_CONTEXT,
+        CSS_PROPERTY_CREATES_STACKING_CONTEXT |
+        CSS_PROPERTY_ABSPOS_CB,
     "",
     VARIANT_HK,
     kPositionKTable,
@@ -3048,7 +3097,7 @@ CSS_PROP_TEXT(
     ruby_align,
     RubyAlign,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.ruby.enabled",
+    "",
     VARIANT_HK,
     kRubyAlignKTable,
     offsetof(nsStyleText, mRubyAlign),
@@ -3058,7 +3107,7 @@ CSS_PROP_TEXT(
     ruby_position,
     RubyPosition,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.ruby.enabled",
+    "",
     VARIANT_HK,
     kRubyPositionKTable,
     offsetof(nsStyleText, mRubyPosition),
@@ -3083,7 +3132,7 @@ CSS_PROP_DISPLAY(
         CSS_PROPERTY_STORES_CALC,
     "layout.css.scroll-snap.enabled",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_DISPLAY(
@@ -3095,7 +3144,7 @@ CSS_PROP_DISPLAY(
         CSS_PROPERTY_STORES_CALC,
     "layout.css.scroll-snap.enabled",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_DISPLAY(
@@ -3236,6 +3285,62 @@ CSS_PROP_TEXTRESET(
     kTextDecorationStyleKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
+CSS_PROP_SHORTHAND(
+    text-emphasis,
+    text_emphasis,
+    TextEmphasis,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.text-emphasis.enabled")
+CSS_PROP_TEXT(
+    text-emphasis-color,
+    text_emphasis_color,
+    TextEmphasisColor,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.text-emphasis.enabled",
+    VARIANT_HC,
+    nullptr,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Custom)
+CSS_PROP_TEXT(
+    text-emphasis-position,
+    text_emphasis_position,
+    TextEmphasisPosition,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_PARSER_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.text-emphasis.enabled",
+    0,
+    kTextEmphasisPositionKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_TEXT(
+    text-emphasis-style,
+    text_emphasis_style,
+    TextEmphasisStyle,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_PARSER_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "layout.css.text-emphasis.enabled",
+    0,
+    nullptr,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_TEXT(
+    -webkit-text-fill-color,
+    _webkit_text_fill_color,
+    WebkitTextFillColor,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
+        CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
+    "layout.css.prefixes.webkit",
+    VARIANT_HC,
+    nullptr,
+    offsetof(nsStyleText, mWebkitTextFillColor),
+    eStyleAnimType_Custom)
 CSS_PROP_TEXT(
     text-indent,
     text_indent,
@@ -3316,7 +3421,8 @@ CSS_PROP_DISPLAY(
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH |
         CSS_PROPERTY_CREATES_STACKING_CONTEXT |
-        CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR,
+        CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR |
+        CSS_PROPERTY_FIXPOS_CB,
     "",
     0,
     nullptr,
@@ -3341,7 +3447,7 @@ CSS_PROP_DISPLAY(
         CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
     "",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
@@ -3353,7 +3459,7 @@ CSS_PROP_DISPLAY(
         CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
     "",
     0,
-    kBackgroundPositionKTable,
+    kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_DISPLAY(
@@ -3361,7 +3467,8 @@ CSS_PROP_DISPLAY(
     perspective,
     Perspective,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_CREATES_STACKING_CONTEXT,
+        CSS_PROPERTY_CREATES_STACKING_CONTEXT |
+        CSS_PROPERTY_FIXPOS_CB,
     "",
     VARIANT_NONE | VARIANT_INHERIT | VARIANT_LENGTH | VARIANT_POSITIVE_DIMENSION,
     nullptr,
@@ -3372,7 +3479,8 @@ CSS_PROP_DISPLAY(
     transform_style,
     TransformStyle,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_CREATES_STACKING_CONTEXT,
+        CSS_PROPERTY_CREATES_STACKING_CONTEXT |
+        CSS_PROPERTY_FIXPOS_CB,
     "",
     VARIANT_HK,
     kTransformStyleKTable,
@@ -3582,7 +3690,7 @@ CSS_PROP_POSITION(
     kWidthKTable,
     offsetof(nsStylePosition, mWidth),
     eStyleAnimType_Coord)
-CSS_PROP_USERINTERFACE(
+CSS_PROP_UIRESET(
     -moz-window-dragging,
     _moz_window_dragging,
     CSS_PROP_DOMPROP_PREFIXED(WindowDragging),
@@ -3868,8 +3976,7 @@ CSS_PROP_SVG(
     fill,
     fill,
     Fill,
-    CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
+    CSS_PROPERTY_PARSE_FUNCTION,
     "",
     0,
     kContextPatternKTable,
@@ -3900,7 +4007,8 @@ CSS_PROP_SVGRESET(
     filter,
     Filter,
     CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_CREATES_STACKING_CONTEXT,
+        CSS_PROPERTY_CREATES_STACKING_CONTEXT |
+        CSS_PROPERTY_FIXPOS_CB,
     "",
     0,
     nullptr,
@@ -3982,17 +4090,119 @@ CSS_PROP_SVG(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
+CSS_PROP_SHORTHAND(
+    mask,
+    mask,
+    Mask,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "")
+CSS_PROP_SVGRESET(
+    mask-clip,
+    mask_clip,
+    MaskClip,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "",
+    VARIANT_KEYWORD, // used by list parsing
+    kImageLayerOriginKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-composite,
+    mask_composite,
+    MaskComposite,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "",
+    VARIANT_KEYWORD, // used by list parsing
+    kImageLayerCompositeKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-image,
+    mask_image,
+    MaskImage,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_CREATES_STACKING_CONTEXT |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS |
+        CSS_PROPERTY_START_IMAGE_LOADS,
+    "",
+    VARIANT_IMAGE, // used by list parsing
+    nullptr,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-mode,
+    mask_mode,
+    MaskMode,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "",
+    VARIANT_KEYWORD, // used by list parsing
+    kImageLayerModeKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-origin,
+    mask_origin,
+    MaskOrigin,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "",
+    VARIANT_KEYWORD, // used by list parsing
+    kImageLayerOriginKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-repeat,
+    mask_repeat,
+    MaskRepeat,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "",
+    VARIANT_KEYWORD, // used by list parsing
+    kImageLayerRepeatKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SVGRESET(
+    mask-position,
+    mask_position,
+    MaskPosition,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS |
+        CSS_PROPERTY_STORES_CALC,
+    "",
+    0,
+    kImageLayerPositionKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Custom)
+CSS_PROP_SVGRESET(
+    mask-size,
+    mask_size,
+    MaskSize,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS |
+        CSS_PROPERTY_VALUE_NONNEGATIVE |
+        CSS_PROPERTY_STORES_CALC,
+    "",
+    0,
+    kImageLayerSizeKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Custom)
+#else
 CSS_PROP_SVGRESET(
     mask,
     mask,
     Mask,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_CREATES_STACKING_CONTEXT,
+      CSS_PROPERTY_CREATES_STACKING_CONTEXT,
     "",
     VARIANT_HUO,
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#endif
 CSS_PROP_SVGRESET(
     mask-type,
     mask_type,
@@ -4037,8 +4247,7 @@ CSS_PROP_SVG(
     stroke,
     stroke,
     Stroke,
-    CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
+    CSS_PROPERTY_PARSE_FUNCTION,
     "",
     0,
     kContextPatternKTable,

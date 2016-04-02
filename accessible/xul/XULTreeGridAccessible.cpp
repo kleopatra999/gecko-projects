@@ -249,6 +249,7 @@ XULTreeGridRowAccessible::
   mAccessibleCache(kDefaultTreeCacheLength)
 {
   mGenericTypes |= eTableRow;
+  mStateFlags |= eNoKidsFromDOM;
 }
 
 XULTreeGridRowAccessible::~XULTreeGridRowAccessible()
@@ -277,8 +278,7 @@ void
 XULTreeGridRowAccessible::Shutdown()
 {
   if (!mDoc->IsDefunct()) {
-    mAccessibleCache.Enumerate(UnbindCacheEntryFromDocument<XULTreeGridCellAccessible>,
-                               nullptr);
+    UnbindCacheEntriesFromDocument(mAccessibleCache);
   }
 
   XULTreeItemAccessibleBase::Shutdown();
@@ -410,13 +410,6 @@ XULTreeGridRowAccessible::RowInvalidated(int32_t aStartColIdx,
 
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// XULTreeGridRowAccessible: Accessible protected implementation
-
-void
-XULTreeGridRowAccessible::CacheChildren()
-{
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // XULTreeGridCellAccessible

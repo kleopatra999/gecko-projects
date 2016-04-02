@@ -13,7 +13,7 @@
 #include "nsQueryObject.h"
 
 #undef LOG
-PRLogModuleInfo *gMediaChildLog;
+mozilla::LazyLogModule gMediaChildLog("MediaChild");
 #define LOG(args) MOZ_LOG(gMediaChildLog, mozilla::LogLevel::Debug, args)
 
 namespace mozilla {
@@ -46,7 +46,7 @@ SanitizeOriginKeys(const uint64_t& aSinceWhen, bool aOnlyPrivateBrowsing)
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
     // Avoid opening MediaManager in this case, since this is called by
     // sanitize.js when cookies are cleared, which can happen on startup.
-    ScopedDeletePtr<Parent<NonE10s>> tmpParent(new Parent<NonE10s>(true));
+    auto tmpParent = MakeUnique<Parent<NonE10s>>(true);
     tmpParent->RecvSanitizeOriginKeys(aSinceWhen, aOnlyPrivateBrowsing);
   } else {
     Child::Get()->SendSanitizeOriginKeys(aSinceWhen, aOnlyPrivateBrowsing);
@@ -68,9 +68,6 @@ Child* Child::Get()
 Child::Child()
   : mActorDestroyed(false)
 {
-  if (!gMediaChildLog) {
-    gMediaChildLog = PR_NewLogModule("MediaChild");
-  }
   LOG(("media::Child: %p", this));
   MOZ_COUNT_CTOR(Child);
 }

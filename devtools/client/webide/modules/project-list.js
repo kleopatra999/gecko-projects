@@ -158,11 +158,7 @@ ProjectList.prototype = {
 
     let tabs = AppManager.tabStore.tabs;
 
-    if (tabs.length > 0) {
-      tabsHeaderNode.removeAttribute("hidden");
-    } else {
-      tabsHeaderNode.setAttribute("hidden", "true");
-    }
+    tabsHeaderNode.removeAttribute("hidden");
 
     for (let i = 0; i < tabs.length; i++) {
       let tab = tabs[i];
@@ -319,7 +315,7 @@ ProjectList.prototype = {
     }
 
     AppProjects.load().then(() => {
-      let projects = AppProjects.store.object.projects;
+      let projects = AppProjects.projects;
       for (let i = 0; i < projects.length; i++) {
         let project = projects[i];
         let panelItemNode = doc.createElement(this._panelNodeEl);

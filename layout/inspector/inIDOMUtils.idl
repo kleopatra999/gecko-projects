@@ -17,7 +17,7 @@ interface nsIDOMFontFaceList;
 interface nsIDOMRange;
 interface nsIDOMCSSStyleSheet;
 
-[scriptable, uuid(d67c0463-592e-4d7c-b67e-923ee3f6c643)]
+[scriptable, uuid(362e98c3-82c2-4ad8-8dcb-00e8e4eab497)]
 interface inIDOMUtils : nsISupports
 {
   // CSS utilities
@@ -158,9 +158,30 @@ interface inIDOMUtils : nsISupports
 
   // content state utilities
   unsigned long long getContentState(in nsIDOMElement aElement);
-  void setContentState(in nsIDOMElement aElement, in unsigned long long aState);
+  /**
+   * Setting and removing content state on an element. Both these functions
+   * calling EventStateManager::SetContentState internally, the difference is
+   * that for the remove case we simply pass in nullptr for the element.
+   * Use them accordingly.
+   *
+   * @return Returns true if the state was set successfully. See more details
+   * in EventStateManager.h SetContentState.
+   */
+  bool setContentState(in nsIDOMElement aElement, in unsigned long long aState);
+  bool removeContentState(in nsIDOMElement aElement, in unsigned long long aState);
 
   nsIDOMFontFaceList getUsedFontFaces(in nsIDOMRange aRange);
+
+  /**
+   * Get the names of all the supported pseudo-elements.
+   * Pseudo-elements which are only accepted in UA style sheets are
+   * not included.
+   *
+   * @param {unsigned long} aCount the number of items returned
+   * @param {wstring[]} aNames the names
+   */
+  void getCSSPseudoElementNames([optional] out unsigned long aCount,
+                                [retval, array, size_is(aCount)] out wstring aNames);
 
   // pseudo-class style locking methods. aPseudoClass must be a valid pseudo-class
   // selector string, e.g. ":hover". ":-moz-any-link" and non-event-state

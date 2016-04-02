@@ -175,6 +175,7 @@
          './src/jsep/JsepSessionImpl.h',
          './src/jsep/JsepTrack.cpp',
          './src/jsep/JsepTrack.h',
+         './src/jsep/JsepTrackEncoding.h',
          './src/jsep/JsepTransport.h'
       ],
 
@@ -292,7 +293,6 @@
           ],
           'defines' : [
             'MOZILLA_INTERNAL_API',
-            'MOZILLA_XPCOMRT_API',
             'MOZILLA_EXTERNAL_LINKAGE',
             'NO_CHROMIUM_LOGGING',
             'USE_FAKE_MEDIA_STREAMS',
@@ -329,6 +329,7 @@
           'defines': [
             'OS_WIN',
             'SIP_OS_WINDOWS',
+            'WEBRTC_WIN',
             'WIN32',
             'GIPS_VER=3480',
             'SIPCC_BUILD',

@@ -80,12 +80,16 @@ class ToolLauncher(object):
         for e in extra_env:
             env[e] = extra_env[e]
 
-        # For VC12, make sure we can find the right bitness of pgort120.dll
-        if 'VS120COMNTOOLS' in env and not buildconfig.substs['HAVE_64BIT_BUILD']:
-            vc12dir = os.path.abspath(os.path.join(env['VS120COMNTOOLS'],
-                                                   '../../VC/bin'))
-            if os.path.exists(vc12dir):
-                env['PATH'] = vc12dir + ';' + env['PATH']
+        # For VC12+, make sure we can find the right bitness of pgort1x0.dll
+        if not buildconfig.substs['HAVE_64BIT_BUILD']:
+            for e in ('VS140COMNTOOLS', 'VS120COMNTOOLS'):
+                if e not in env:
+                    continue
+
+                vcdir = os.path.abspath(os.path.join(env[e], '../../VC/bin'))
+                if os.path.exists(vcdir):
+                    env['PATH'] = '%s;%s' % (vcdir, env['PATH'])
+                    break
 
         # Work around a bug in Python 2.7.2 and lower where unicode types in
         # environment variables aren't handled by subprocess.
@@ -120,11 +124,11 @@ class LibSignFile(File):
             errors.fatal('Error while signing %s' % self.path)
 
 
-def precompile_cache(formatter, source_path, gre_path, app_path):
+def precompile_cache(registry, source_path, gre_path, app_path):
     '''
     Create startup cache for the given application directory, using the
     given GRE path.
-    - formatter is a Formatter instance where to add the startup cache.
+    - registry is a FileRegistry-like instance where to add the startup cache.
     - source_path is the base path of the package.
     - gre_path is the GRE path, relative to source_path.
     - app_path is the application path, relative to source_path.
@@ -166,8 +170,8 @@ def precompile_cache(formatter, source_path, gre_path, app_path):
         for f in jar:
             if resource in f.filename:
                 path = f.filename[f.filename.index(resource) + len(resource):]
-                if formatter.contains(path):
-                    formatter.add(f.filename, GeneratedFile(f.read()))
+                if registry.contains(path):
+                    registry.add(f.filename, GeneratedFile(f.read()))
         jar.close()
     finally:
         if os.path.exists(cache):
@@ -265,6 +269,9 @@ def main():
                         help='Enable jar optimizations')
     parser.add_argument('--unify', default='',
                         help='Base directory of another build to unify with')
+    parser.add_argument('--disable-compression', action='store_false',
+                        dest='compress', default=True,
+                        help='Disable jar compression')
     parser.add_argument('manifest', default=None, nargs='?',
                         help='Manifest file name')
     parser.add_argument('source', help='Source directory')
@@ -286,10 +293,11 @@ def main():
     if args.format == 'flat':
         formatter = FlatFormatter(copier)
     elif args.format == 'jar':
-        formatter = JarFormatter(copier, optimize=args.optimizejars)
+        formatter = JarFormatter(copier, compress=args.compress, optimize=args.optimizejars)
     elif args.format == 'omni':
         formatter = OmniJarFormatter(copier,
                                      buildconfig.substs['OMNIJAR_NAME'],
+                                     compress=args.compress,
                                      optimize=args.optimizejars,
                                      non_resources=args.non_resource)
     else:
@@ -319,7 +327,7 @@ def main():
         if is_native(args.source):
             launcher.tooldir = args.source
     elif not buildconfig.substs['CROSS_COMPILE']:
-        launcher.tooldir = buildconfig.substs['LIBXUL_DIST']
+        launcher.tooldir = mozpath.join(buildconfig.topobjdir, 'dist')
 
     with errors.accumulate():
         finder_args = dict(
@@ -359,7 +367,7 @@ def main():
 
     # shlibsign libraries
     if launcher.can_launch():
-        if not mozinfo.isMac:
+        if not mozinfo.isMac and buildconfig.substs.get('COMPILE_ENVIRONMENT'):
             for lib in SIGN_LIBS:
                 libbase = mozpath.join(respath, '%s%s') \
                     % (buildconfig.substs['DLL_PREFIX'], lib)
@@ -393,9 +401,10 @@ def main():
         for base in sorted(get_bases()):
             if not gre_path:
                 gre_path = base
-            base_path = sink.normalize_path(base)
-            if base_path in formatter.omnijars:
-                precompile_cache(formatter.omnijars[base_path],
+            omnijar_path = mozpath.join(sink.normalize_path(base),
+                                        buildconfig.substs['OMNIJAR_NAME'])
+            if formatter.contains(omnijar_path):
+                precompile_cache(formatter.copier[omnijar_path],
                                  args.source, gre_path, base)
 
     copier.copy(args.destination)

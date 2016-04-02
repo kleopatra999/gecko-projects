@@ -1,7 +1,7 @@
-/* vim:set ts=2 sw=2 sts=2 et: */
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
 
@@ -12,6 +12,7 @@ var {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
 var {Utils: WebConsoleUtils} = require("devtools/shared/webconsole/utils");
 var {Messages} = require("devtools/client/webconsole/console-output");
 const asyncStorage = require("devtools/shared/async-storage");
+const HUDService = require("devtools/client/webconsole/hudservice");
 
 // Services.prefs.setBoolPref("devtools.debugger.log", true);
 
@@ -38,15 +39,9 @@ const GROUP_INDENT = 12;
 
 const WEBCONSOLE_STRINGS_URI = "chrome://devtools/locale/" +
                                "webconsole.properties";
-var WCUL10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
+var WCUL10n = new WebConsoleUtils.L10n(WEBCONSOLE_STRINGS_URI);
 
 DevToolsUtils.testing = true;
-
-function asyncTest(generator) {
-  return () => {
-    Task.spawn(generator).then(finishTest);
-  };
-}
 
 function loadTab(url) {
   let deferred = promise.defer();
@@ -86,6 +81,45 @@ function closeTab(tab) {
   gBrowser.removeTab(tab);
 
   return deferred.promise;
+}
+
+/**
+ * Load the page and return the associated HUD.
+ *
+ * @param string uri
+ *   The URI of the page to load.
+ * @param string consoleType [optional]
+ *   The console type, either "browserConsole" or "webConsole". Defaults to
+ *   "webConsole".
+ * @return object
+ *   The HUD associated with the console
+ */
+function* loadPageAndGetHud(uri, consoleType) {
+  let { browser } = yield loadTab("data:text/html;charset=utf-8,Loading tab for tests");
+
+  let hud;
+  if (consoleType === "browserConsole") {
+    hud = yield HUDService.openBrowserConsoleOrFocus();
+  } else {
+    hud = yield openConsole();
+  }
+
+  ok(hud, "Console was opened");
+
+  let loaded = loadBrowser(browser);
+  yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, uri);
+  yield loaded;
+
+  yield waitForMessages({
+    webconsole: hud,
+    messages: [{
+      text: uri,
+      category: CATEGORY_NETWORK,
+      severity: SEVERITY_LOG,
+    }],
+  });
+
+  return hud;
 }
 
 function afterAllTabsLoaded(callback, win) {
@@ -339,8 +373,12 @@ registerCleanupFunction(function*() {
 
   dumpConsoles();
 
-  if (HUDService.getBrowserConsole()) {
-    HUDService.toggleBrowserConsole();
+  let browserConsole = HUDService.getBrowserConsole();
+  if (browserConsole) {
+    if (browserConsole.jsterm) {
+      browserConsole.jsterm.clearOutput(true);
+    }
+    yield HUDService.toggleBrowserConsole();
   }
 
   let target = TargetFactory.forTab(gBrowser.selectedTab);
@@ -811,7 +849,7 @@ function openDebugger(options = {}) {
     if (dbgPanelAlreadyOpen) {
       deferred.resolve(resolveObject);
     } else {
-      panelWin.once(panelWin.EVENTS.SOURCES_ADDED, () => {
+      panelWin.DebuggerController.waitForSourcesLoaded().then(() => {
         deferred.resolve(resolveObject);
       });
     }
@@ -1032,16 +1070,16 @@ function waitForMessages(options) {
   }
 
   function checkSource(rule, element) {
-    let location = element.querySelector(".message-location");
+    let location = getRenderedSource(element);
     if (!location) {
       return false;
     }
 
-    if (!checkText(rule.source.url, location.getAttribute("title"))) {
+    if (!checkText(rule.source.url, location.url)) {
       return false;
     }
 
-    if ("line" in rule.source && location.sourceLine != rule.source.line) {
+    if ("line" in rule.source && location.line === rule.source.line) {
       return false;
     }
 
@@ -1073,10 +1111,10 @@ function waitForMessages(options) {
       }
 
       if (expected.file) {
-        let file = frame.querySelector(".message-location").title;
-        if (!checkText(expected.file, file)) {
+        let url = getRenderedSource(frame).url;
+        if (!checkText(expected.file, url)) {
           ok(false, "frame #" + i + " does not match file name: " +
-                    expected.file + " != " + file);
+                    expected.file + " != " + url);
           displayErrorContext(rule, element);
           return false;
         }
@@ -1093,7 +1131,7 @@ function waitForMessages(options) {
       }
 
       if (expected.line) {
-        let line = frame.querySelector(".message-location").sourceLine;
+        let line = getRenderedSource(frame).line;
         if (!checkText(expected.line, line)) {
           ok(false, "frame #" + i + " does not match the line number: " +
                     expected.line + " != " + line);
@@ -1279,9 +1317,9 @@ function waitForMessages(options) {
   function onMessagesAdded(event, newMessages) {
     for (let msg of newMessages) {
       let elem = msg.node;
-      let location = elem.querySelector(".message-location");
-      if (location) {
-        let url = location.title;
+      let location = getRenderedSource(elem);
+      if (location && location.url) {
+        let url = location.url;
         // Prevent recursion with the browser console and any potential
         // messages coming from head.js.
         if (url.indexOf("devtools/client/webconsole/test/head.js") != -1) {
@@ -1439,7 +1477,7 @@ function checkOutputForInputs(hud, inputTests) {
   }
 
   function* checkConsoleLog(entry) {
-    info("Logging: " + entry.input);
+    info("Logging");
     hud.jsterm.clearOutput();
     hud.jsterm.execute("console.log(" + entry.input + ")");
 
@@ -1456,15 +1494,20 @@ function checkOutputForInputs(hud, inputTests) {
       }],
     });
 
+    let msg = [...result.matched][0];
+
+    if (entry.consoleLogClick) {
+      yield checkObjectClick(entry, msg);
+    }
+
     if (typeof entry.inspectorIcon == "boolean") {
-      let msg = [...result.matched][0];
-      info("Checking Inspector Link: " + entry.input);
+      info("Checking Inspector Link");
       yield checkLinkToInspector(entry.inspectorIcon, msg);
     }
   }
 
   function checkPrintOutput(entry) {
-    info("Printing: " + entry.input);
+    info("Printing");
     hud.jsterm.clearOutput();
     hud.jsterm.execute("print(" + entry.input + ")");
 
@@ -1481,15 +1524,17 @@ function checkOutputForInputs(hud, inputTests) {
   }
 
   function* checkJSEval(entry) {
-    info("Evaluating: " + entry.input);
+    info("Evaluating");
     hud.jsterm.clearOutput();
     hud.jsterm.execute(entry.input);
+
+    let evalOutput = entry.evalOutput || entry.output;
 
     let [result] = yield waitForMessages({
       webconsole: hud,
       messages: [{
-        name: "JS eval output: " + entry.output,
-        text: entry.output,
+        name: "JS eval output: " + entry.evalOutput,
+        text: entry.evalOutput,
         category: CATEGORY_OUTPUT,
       }],
     });
@@ -1505,9 +1550,14 @@ function checkOutputForInputs(hud, inputTests) {
   }
 
   function* checkObjectClick(entry, msg) {
-    info("Clicking: " + entry.input);
-    let body = msg.querySelector(".message-body a") ||
-               msg.querySelector(".message-body");
+    info("Clicking");
+    let body;
+    if (entry.getClickableNode) {
+      body = entry.getClickableNode(msg);
+    } else {
+      body = msg.querySelector(".message-body a") ||
+             msg.querySelector(".message-body");
+    }
     ok(body, "the message body");
 
     let deferredVariablesView = promise.defer();
@@ -1520,7 +1570,10 @@ function checkOutputForInputs(hud, inputTests) {
     container.addEventListener("TabOpen", entry._onTabOpen, true);
 
     body.scrollIntoView();
-    EventUtils.synthesizeMouse(body, 2, 2, {}, hud.iframeWindow);
+
+    if (!entry.suppressClick) {
+      EventUtils.synthesizeMouse(body, 2, 2, {}, hud.iframeWindow);
+    }
 
     if (entry.inspectable) {
       info("message body tagName '" + body.tagName + "' className '" +
@@ -1542,7 +1595,7 @@ function checkOutputForInputs(hud, inputTests) {
   }
 
   function onVariablesViewOpen(entry, {resolve, reject}, event, view, options) {
-    info("Variables view opened: " + entry.input);
+    info("Variables view opened");
     let label = entry.variablesViewLabel || entry.output;
     if (typeof label == "string" && options.label != label) {
       return;
@@ -1573,6 +1626,37 @@ function checkOutputForInputs(hud, inputTests) {
   }
 
   return Task.spawn(runner);
+}
+
+
+/**
+ * Finish the request and resolve with the request object.
+ *
+ * @param {Function} predicate A predicate function that takes the request
+ * object as an argument and returns true if the request was the expected one,
+ * false otherwise. The returned promise is resolved ONLY if the predicate
+ * matches a request. Defaults to accepting any request.
+ * @return promise
+ * @resolves The request object.
+ */
+function waitForFinishedRequest(predicate = () => true) {
+  registerCleanupFunction(function() {
+    HUDService.lastFinishedRequest.callback = null;
+  });
+
+  return new Promise(resolve => {
+    HUDService.lastFinishedRequest.callback = request => {
+      // Check if this is the expected request
+      if (predicate(request)) {
+        // Match found. Clear the listener.
+        HUDService.lastFinishedRequest.callback = null;
+
+        resolve(request);
+      } else {
+        info(`Ignoring unexpected request ${JSON.stringify(request, null, 2)}`);
+      }
+    }
+  });
 }
 
 /**
@@ -1641,6 +1725,21 @@ function getSourceActor(sources, URL) {
 }
 
 /**
+ * Make a request against an actor and resolve with the packet.
+ * @param object client
+ *   The client to use when making the request.
+ * @param function requestType
+ *   The client request function to run.
+ * @param array args
+ *   The arguments to pass into the function.
+ */
+function getPacket(client, requestType, args) {
+  return new Promise(resolve => {
+    client[requestType](...args, packet => resolve(packet));
+  });
+}
+
+/**
  * Verify that clicking on a link from a popup notification message tries to
  * open the expected URL.
  */
@@ -1667,4 +1766,13 @@ function simulateMessageLinkClick(element, expectedLink) {
   element.dispatchEvent(event);
 
   return deferred.promise;
+}
+
+function getRenderedSource (root) {
+  let location = root.querySelector(".message-location .frame-link");
+  return location ? {
+    url: location.getAttribute("data-url"),
+    line: location.getAttribute("data-line"),
+    column: location.getAttribute("data-column"),
+  } : null;
 }

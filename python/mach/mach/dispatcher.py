@@ -119,7 +119,7 @@ class CommandAction(argparse.Action):
         if command not in self._mach_registrar.command_handlers:
             # Make sure we don't suggest any deprecated commands.
             names = [h.name for h in self._mach_registrar.command_handlers.values()
-                        if h.cls.__name__ == 'DeprecatedCommands']
+                        if h.cls.__name__ != 'DeprecatedCommands']
             # We first try to look for a valid command that is very similar to the given command.
             suggested_commands = difflib.get_close_matches(command, names, cutoff=0.8)
             # If we find more than one matching command, or no command at all, we give command suggestions instead
@@ -154,17 +154,8 @@ class CommandAction(argparse.Action):
                 self._handle_subcommand_help(parser, command, subcommand, subhandler)
                 sys.exit(0)
             # We are running a sub command.
-            else:
+            elif args[0] in handler.subcommand_handlers:
                 subcommand = args[0]
-                if subcommand[0] == '-':
-                    raise MachError('%s invoked improperly. A sub-command name '
-                        'must be the first argument after the command name.' %
-                        command)
-
-                if subcommand not in handler.subcommand_handlers:
-                    raise UnknownCommandError(subcommand, 'run',
-                        handler.subcommand_handlers.keys())
-
                 handler = handler.subcommand_handlers[subcommand]
                 usage = '%(prog)s [global arguments] ' + command + ' ' + \
                     subcommand + ' [command arguments]'

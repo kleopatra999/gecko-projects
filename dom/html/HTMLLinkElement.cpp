@@ -21,13 +21,28 @@
 #include "nsIDOMEvent.h"
 #include "nsIDOMStyleSheet.h"
 #include "nsINode.h"
-#include "nsIStyleSheet.h"
 #include "nsIStyleSheetLinkingElement.h"
 #include "nsIURL.h"
 #include "nsPIDOMWindow.h"
 #include "nsReadableUtils.h"
 #include "nsStyleConsts.h"
 #include "nsUnicharUtils.h"
+
+#define LINK_ELEMENT_FLAG_BIT(n_) \
+  NODE_FLAG_BIT(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + (n_))
+
+// Link element specific bits
+enum {
+  // Indicates that a DNS Prefetch has been requested from this Link element.
+  HTML_LINK_DNS_PREFETCH_REQUESTED = LINK_ELEMENT_FLAG_BIT(0),
+
+  // Indicates that a DNS Prefetch was added to the deferral queue
+  HTML_LINK_DNS_PREFETCH_DEFERRED =  LINK_ELEMENT_FLAG_BIT(1)
+};
+
+#undef LINK_ELEMENT_FLAG_BIT
+
+ASSERT_NODE_FLAGS_SPACE(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 2);
 
 NS_IMPL_NS_NEW_HTML_ELEMENT(Link)
 
@@ -49,7 +64,6 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLLinkElement)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLLinkElement,
                                                   nsGenericHTMLElement)
   tmp->nsStyleLinkElement::Traverse(cb);
-  tmp->Link::Traverse(cb);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRelList)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mImportLoader)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -57,7 +71,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLLinkElement,
                                                 nsGenericHTMLElement)
   tmp->nsStyleLinkElement::Unlink();
-  tmp->Link::Unlink();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRelList)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mImportLoader)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -129,6 +142,26 @@ HTMLLinkElement::SetItemValueText(const nsAString& aValue)
   SetHref(aValue);
 }
 
+void
+HTMLLinkElement::OnDNSPrefetchRequested()
+{
+  UnsetFlags(HTML_LINK_DNS_PREFETCH_DEFERRED);
+  SetFlags(HTML_LINK_DNS_PREFETCH_REQUESTED);
+}
+
+void
+HTMLLinkElement::OnDNSPrefetchDeferred()
+{
+  UnsetFlags(HTML_LINK_DNS_PREFETCH_REQUESTED);
+  SetFlags(HTML_LINK_DNS_PREFETCH_DEFERRED);
+}
+
+bool
+HTMLLinkElement::HasDeferredDNSPrefetchRequest()
+{
+  return HasFlag(HTML_LINK_DNS_PREFETCH_DEFERRED);
+}
+
 nsresult
 HTMLLinkElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                             nsIContent* aBindingParent,
@@ -147,7 +180,7 @@ HTMLLinkElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
 
   if (IsInComposedDoc()) {
-    UpdatePreconnect();
+    TryDNSPrefetchPreconnectOrPrefetch();
   }
 
   void (HTMLLinkElement::*update)() = &HTMLLinkElement::UpdateStyleSheetInternal;
@@ -176,6 +209,13 @@ HTMLLinkElement::LinkRemoved()
 void
 HTMLLinkElement::UnbindFromTree(bool aDeep, bool aNullParent)
 {
+  // Cancel any DNS prefetches
+  // Note: Must come before ResetLinkState.  If called after, it will recreate
+  // mCachedURI based on data that is invalid - due to a call to GetHostname.
+  CancelDNSPrefetch(HTML_LINK_DNS_PREFETCH_DEFERRED,
+                    HTML_LINK_DNS_PREFETCH_REQUESTED);
+  CancelPrefetch();
+
   // If this link is ever reinserted into a document, it might
   // be under a different xml:base, so forget the cached state now.
   Link::ResetLinkState(false, Link::ElementHasHref());
@@ -302,27 +342,19 @@ HTMLLinkElement::UpdateImport()
   }
 }
 
-void
-HTMLLinkElement::UpdatePreconnect()
+nsresult
+HTMLLinkElement::BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+                               nsAttrValueOrString* aValue, bool aNotify)
 {
-  // rel type should be preconnect
-  nsAutoString rel;
-  if (!GetAttr(kNameSpaceID_None, nsGkAtoms::rel, rel)) {
-    return;
+  if (aNameSpaceID == kNameSpaceID_None &&
+      (aName == nsGkAtoms::href || aName == nsGkAtoms::rel)) {
+    CancelDNSPrefetch(HTML_LINK_DNS_PREFETCH_DEFERRED,
+                      HTML_LINK_DNS_PREFETCH_REQUESTED);
+    CancelPrefetch();
   }
 
-  uint32_t linkTypes = nsStyleLinkElement::ParseLinkTypes(rel, NodePrincipal());
-  if (!(linkTypes & ePRECONNECT)) {
-    return;
-  }
-
-  nsIDocument *owner = OwnerDoc();
-  if (owner) {
-    nsCOMPtr<nsIURI> uri = GetHrefURI();
-    if (uri) {
-        owner->MaybePreconnect(uri, GetCORSMode());
-    }
-  }
+  return nsGenericHTMLElement::BeforeSetAttr(aNameSpaceID, aName,
+                                             aValue, aNotify);
 }
 
 nsresult
@@ -359,16 +391,16 @@ HTMLLinkElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
           dropSheet = !(linkTypes & nsStyleLinkElement::eSTYLESHEET);
         } else if (linkTypes & eHTMLIMPORT) {
           UpdateImport();
-        } else if ((linkTypes & ePRECONNECT) && IsInComposedDoc()) {
-          UpdatePreconnect();
         }
       }
 
       if (aName == nsGkAtoms::href) {
         UpdateImport();
-        if (IsInComposedDoc()) {
-          UpdatePreconnect();
-        }
+      }
+
+      if ((aName == nsGkAtoms::rel || aName == nsGkAtoms::href) &&
+          IsInComposedDoc()) {
+        TryDNSPrefetchPreconnectOrPrefetch();
       }
 
       UpdateStyleSheetInternal(nullptr, nullptr,

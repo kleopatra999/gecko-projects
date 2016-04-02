@@ -55,7 +55,7 @@
 using namespace mozilla;
 using namespace mozilla::psm;
 
-PRLogModuleInfo* gPIPNSSLog = nullptr;
+LazyLogModule gPIPNSSLog("pipnss");
 
 int nsNSSComponent::mInstanceCount = 0;
 
@@ -135,7 +135,7 @@ bool EnsureNSSInitialized(EnsureNSSOperator op)
   case nssInitFailed:
     NS_ASSERTION(loading, "Bad call to EnsureNSSInitialized(nssInitFailed)");
     loading = false;
-    // no break
+    MOZ_FALLTHROUGH;
 
   case nssShutdown:
     PR_AtomicSet(&haveLoaded, 0);
@@ -221,14 +221,11 @@ nsNSSComponent::nsNSSComponent()
 #endif
    mCertVerificationThread(nullptr)
 {
-  if (!gPIPNSSLog)
-    gPIPNSSLog = PR_NewLogModule("pipnss");
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ctor\n"));
 
   NS_ASSERTION( (0 == mInstanceCount), "nsNSSComponent is a singleton, but instantiated multiple times!");
   ++mInstanceCount;
   mShutdownObjectList = nsNSSShutDownList::construct();
-  mIsNetworkDown = false;
 }
 
 void
@@ -613,13 +610,17 @@ typedef struct {
   bool weak;
 } CipherPref;
 
-// Update the switch statement in HandshakeCallback in nsNSSCallbacks.cpp when
-// you add/remove cipher suites here.
+// Update the switch statement in AccumulateCipherSuite in nsNSSCallbacks.cpp
+// when you add/remove cipher suites here.
 static const CipherPref sCipherPrefs[] = {
  { "security.ssl3.ecdhe_rsa_aes_128_gcm_sha256",
    TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, true },
  { "security.ssl3.ecdhe_ecdsa_aes_128_gcm_sha256",
    TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, true },
+ { "security.ssl3.ecdhe_ecdsa_chacha20_poly1305_sha256",
+   TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256, true },
+ { "security.ssl3.ecdhe_rsa_chacha20_poly1305_sha256",
+   TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256, true },
  { "security.ssl3.ecdhe_rsa_aes_128_sha",
    TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, true },
  { "security.ssl3.ecdhe_ecdsa_aes_128_sha",
@@ -847,6 +848,11 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   PublicSSLState()->SetOCSPStaplingEnabled(ocspStaplingEnabled);
   PrivateSSLState()->SetOCSPStaplingEnabled(ocspStaplingEnabled);
 
+  bool ocspMustStapleEnabled = Preferences::GetBool("security.ssl.enable_ocsp_must_staple",
+                                                    true);
+  PublicSSLState()->SetOCSPMustStapleEnabled(ocspMustStapleEnabled);
+  PrivateSSLState()->SetOCSPMustStapleEnabled(ocspMustStapleEnabled);
+
   CertVerifier::PinningMode pinningMode =
     static_cast<CertVerifier::PinningMode>
       (Preferences::GetInt("security.cert_pinning.enforcement_level",
@@ -858,8 +864,14 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   CertVerifier::SHA1Mode sha1Mode = static_cast<CertVerifier::SHA1Mode>
       (Preferences::GetInt("security.pki.sha1_enforcement_level",
                            static_cast<int32_t>(CertVerifier::SHA1Mode::Allowed)));
-  if (sha1Mode > CertVerifier::SHA1Mode::OnlyBefore2016) {
-    sha1Mode = CertVerifier::SHA1Mode::Allowed;
+  switch (sha1Mode) {
+    case CertVerifier::SHA1Mode::Allowed:
+    case CertVerifier::SHA1Mode::Forbidden:
+    case CertVerifier::SHA1Mode::Before2016:
+    case CertVerifier::SHA1Mode::ImportedRoot:
+      break;
+    default:
+      sha1Mode = CertVerifier::SHA1Mode::Allowed;
   }
 
   CertVerifier::OcspDownloadConfig odc;
@@ -922,8 +934,8 @@ GetNSSProfilePath(nsAutoCString& aProfilePath)
   nsresult rv = NS_GetSpecialDirectory(NS_APP_USER_PROFILE_50_DIR,
                                        getter_AddRefs(profileFile));
   if (NS_FAILED(rv)) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Error,
-           ("Unable to get profile directory - continuing with no NSS DB\n"));
+    NS_WARNING("NSS will be initialized without a profile directory. "
+               "Some things may not work as expected.");
     return NS_OK;
   }
 
@@ -946,6 +958,8 @@ GetNSSProfilePath(nsAutoCString& aProfilePath)
     return rv;
   }
 
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+          ("NSS profile at '%s'\n", aProfilePath.get()));
   return NS_OK;
 }
 
@@ -1058,6 +1072,8 @@ nsNSSComponent::InitializeNSS()
 
   SSL_OptionSetDefault(SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_REQUIRES_XTN);
 
+  SSL_OptionSetDefault(SSL_ENABLE_EXTENDED_MASTER_SECRET, true);
+
   SSL_OptionSetDefault(SSL_ENABLE_FALSE_START,
                        Preferences::GetBool("security.ssl.enable_false_start",
                                             FALSE_START_ENABLED_DEFAULT));
@@ -1087,8 +1103,6 @@ nsNSSComponent::InitializeNSS()
   // dynamic options from prefs
   setValidationOptions(true, lock);
 
-  mHttpForNSS.initTable();
-
 #ifndef MOZ_NO_SMART_CARDS
   LaunchSmartCardThreads();
 #endif
@@ -1103,6 +1117,17 @@ nsNSSComponent::InitializeNSS()
     return NS_ERROR_FAILURE;
   }
 
+  // Initialize the cert override service
+  nsCOMPtr<nsICertOverrideService> coService =
+    do_GetService(NS_CERTOVERRIDE_CONTRACTID);
+  if (!coService) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Cannot initialize cert override service\n"));
+    return NS_ERROR_FAILURE;
+  }
+
+  if (PK11_IsFIPS()) {
+    Telemetry::Accumulate(Telemetry::FIPS_ENABLED, true);
+  }
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization done\n"));
   return NS_OK;
@@ -1234,12 +1259,7 @@ nsNSSComponent::RandomUpdate(void* entropy, int32_t bufLen)
   return NS_OK;
 }
 
-static const char* const PROFILE_CHANGE_NET_TEARDOWN_TOPIC
-  = "profile-change-net-teardown";
-static const char* const PROFILE_CHANGE_NET_RESTORE_TOPIC
-  = "profile-change-net-restore";
 static const char* const PROFILE_BEFORE_CHANGE_TOPIC = "profile-before-change";
-static const char* const PROFILE_DO_CHANGE_TOPIC = "profile-do-change";
 
 NS_IMETHODIMP
 nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
@@ -1247,41 +1267,8 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
 {
   if (nsCRT::strcmp(aTopic, PROFILE_BEFORE_CHANGE_TOPIC) == 0) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("receiving profile change topic\n"));
-    DoProfileBeforeChange(aSubject);
-  }
-  else if (nsCRT::strcmp(aTopic, PROFILE_DO_CHANGE_TOPIC) == 0) {
-    if (someData && NS_LITERAL_STRING("startup").Equals(someData)) {
-      // The application is initializing against a known profile directory for
-      // the first time during process execution.
-      // However, earlier code execution might have already triggered NSS init.
-      // We must ensure that NSS gets shut down prior to any attempt to init
-      // it again. We use the same cleanup functionality used when switching
-      // profiles. The order of function calls must correspond to the order
-      // of notifications sent by Profile Manager (nsProfile).
-      DoProfileChangeNetTeardown();
-      DoProfileBeforeChange(aSubject);
-      DoProfileChangeNetRestore();
-    }
-
-    bool needsInit = true;
-
-    {
-      MutexAutoLock lock(mutex);
-
-      if (mNSSInitialized) {
-        // We have already initialized NSS before the profile came up,
-        // no need to do it again
-        needsInit = false;
-      }
-    }
-
-    if (needsInit) {
-      if (NS_FAILED(InitializeNSS())) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("Unable to Initialize NSS after profile switch.\n"));
-      }
-    }
-  }
-  else if (nsCRT::strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0) {
+    DoProfileBeforeChange();
+  } else if (nsCRT::strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0) {
 
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent: XPCom shutdown observed\n"));
 
@@ -1332,23 +1319,21 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.OCSP.GET.enabled") ||
                prefName.EqualsLiteral("security.pki.cert_short_lifetime_in_days") ||
                prefName.EqualsLiteral("security.ssl.enable_ocsp_stapling") ||
+               prefName.EqualsLiteral("security.ssl.enable_ocsp_must_staple") ||
                prefName.EqualsLiteral("security.cert_pinning.enforcement_level") ||
                prefName.EqualsLiteral("security.pki.sha1_enforcement_level")) {
       MutexAutoLock lock(mutex);
       setValidationOptions(false, lock);
+#ifdef DEBUG
+    } else if (prefName.EqualsLiteral("security.test.built_in_root_hash")) {
+      MutexAutoLock lock(mutex);
+      mTestBuiltInRootHash = Preferences::GetString("security.test.built_in_root_hash");
+#endif // DEBUG
     } else {
       clearSessionCache = false;
     }
     if (clearSessionCache)
       SSL_ClearSessionCache();
-  }
-  else if (nsCRT::strcmp(aTopic, PROFILE_CHANGE_NET_TEARDOWN_TOPIC) == 0) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("receiving network teardown topic\n"));
-    DoProfileChangeNetTeardown();
-  }
-  else if (nsCRT::strcmp(aTopic, PROFILE_CHANGE_NET_RESTORE_TOPIC) == 0) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("receiving network restore topic\n"));
-    DoProfileChangeNetRestore();
   }
 
   return NS_OK;
@@ -1435,26 +1420,13 @@ nsNSSComponent::RegisterObservers()
   // least as long as the observer service.
   observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
   observerService->AddObserver(this, PROFILE_BEFORE_CHANGE_TOPIC, false);
-  observerService->AddObserver(this, PROFILE_DO_CHANGE_TOPIC, false);
-  observerService->AddObserver(this, PROFILE_CHANGE_NET_TEARDOWN_TOPIC, false);
-  observerService->AddObserver(this, PROFILE_CHANGE_NET_RESTORE_TOPIC, false);
 
   return NS_OK;
 }
 
 void
-nsNSSComponent::DoProfileChangeNetTeardown()
+nsNSSComponent::DoProfileBeforeChange()
 {
-  if (mCertVerificationThread)
-    mCertVerificationThread->requestExit();
-  mIsNetworkDown = true;
-}
-
-void
-nsNSSComponent::DoProfileBeforeChange(nsISupports* aSubject)
-{
-  NS_ASSERTION(mIsNetworkDown, "nsNSSComponent relies on profile manager to wait for synchronous shutdown of all network activity");
-
   bool needsCleanup = true;
 
   {
@@ -1473,15 +1445,6 @@ nsNSSComponent::DoProfileBeforeChange(nsISupports* aSubject)
   }
 }
 
-void
-nsNSSComponent::DoProfileChangeNetRestore()
-{
-  // XXX this doesn't work well, since nothing expects null pointers
-  deleteBackgroundThreads();
-  createBackgroundThreads();
-  mIsNetworkDown = false;
-}
-
 NS_IMETHODIMP
 nsNSSComponent::IsNSSInitialized(bool* initialized)
 {
@@ -1489,6 +1452,34 @@ nsNSSComponent::IsNSSInitialized(bool* initialized)
   *initialized = mNSSInitialized;
   return NS_OK;
 }
+
+#ifdef DEBUG
+NS_IMETHODIMP
+nsNSSComponent::IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result)
+{
+  MutexAutoLock lock(mutex);
+  MOZ_ASSERT(mNSSInitialized);
+
+  result = false;
+
+  if (mTestBuiltInRootHash.IsEmpty()) {
+    return NS_OK;
+  }
+
+  RefPtr<nsNSSCertificate> nsc = nsNSSCertificate::Create(cert);
+  if (!nsc) {
+    return NS_ERROR_FAILURE;
+  }
+  nsAutoString certHash;
+  nsresult rv = nsc->GetSha256Fingerprint(certHash);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  result = mTestBuiltInRootHash.Equals(certHash);
+  return NS_OK;
+}
+#endif // DEBUG
 
 SharedCertVerifier::~SharedCertVerifier() { }
 

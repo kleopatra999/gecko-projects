@@ -1,3 +1,9 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
+"use strict";
+
+requestLongerTimeout(2);
+
 add_task(function* () {
   let tab1 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:robots");
   let tab2 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:config");
@@ -6,16 +12,16 @@ add_task(function* () {
 
   let extension = ExtensionTestUtils.loadExtension({
     manifest: {
-      "permissions": ["tabs"]
+      "permissions": ["tabs"],
     },
 
     background: function() {
       browser.tabs.query({
-        lastFocusedWindow: true
+        lastFocusedWindow: true,
       }, function(tabs) {
         browser.test.assertEq(tabs.length, 3, "should have three tabs");
 
-        tabs.sort(function (tab1, tab2) { return tab1.index - tab2.index; });
+        tabs.sort((tab1, tab2) => tab1.index - tab2.index);
 
         browser.test.assertEq(tabs[0].url, "about:blank", "first tab blank");
         tabs.shift();
@@ -53,16 +59,16 @@ add_task(function* () {
   // test simple queries
   extension = ExtensionTestUtils.loadExtension({
     manifest: {
-      "permissions": ["tabs"]
+      "permissions": ["tabs"],
     },
 
     background: function() {
       browser.tabs.query({
-        url: "<all_urls>"
+        url: "<all_urls>",
       }, function(tabs) {
         browser.test.assertEq(tabs.length, 3, "should have three tabs");
 
-        tabs.sort(function (tab1, tab2) { return tab1.index - tab2.index; });
+        tabs.sort((tab1, tab2) => tab1.index - tab2.index);
 
         browser.test.assertEq(tabs[0].url, "http://example.com/", "tab 0 url correct");
         browser.test.assertEq(tabs[1].url, "http://example.net/", "tab 1 url correct");
@@ -80,12 +86,12 @@ add_task(function* () {
   // match pattern
   extension = ExtensionTestUtils.loadExtension({
     manifest: {
-      "permissions": ["tabs"]
+      "permissions": ["tabs"],
     },
 
     background: function() {
       browser.tabs.query({
-        url: "http://*/MochiKit*"
+        url: "http://*/MochiKit*",
       }, function(tabs) {
         browser.test.assertEq(tabs.length, 1, "should have one tab");
 
@@ -103,16 +109,16 @@ add_task(function* () {
   // match array of patterns
   extension = ExtensionTestUtils.loadExtension({
     manifest: {
-      "permissions": ["tabs"]
+      "permissions": ["tabs"],
     },
 
     background: function() {
       browser.tabs.query({
-        url: ["http://*/MochiKit*", "http://*.com/*"]
+        url: ["http://*/MochiKit*", "http://*.com/*"],
       }, function(tabs) {
         browser.test.assertEq(tabs.length, 2, "should have two tabs");
 
-        tabs.sort(function (tab1, tab2) { return tab1.index - tab2.index; });
+        tabs.sort((tab1, tab2) => tab1.index - tab2.index);
 
         browser.test.assertEq(tabs[0].url, "http://example.com/", "tab 0 url correct");
         browser.test.assertEq(tabs[1].url, "http://test1.example.org/MochiKit/", "tab 1 url correct");
@@ -129,4 +135,51 @@ add_task(function* () {
   yield BrowserTestUtils.removeTab(tab1);
   yield BrowserTestUtils.removeTab(tab2);
   yield BrowserTestUtils.removeTab(tab3);
+});
+
+add_task(function* testQueryPermissions() {
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      "permissions": [],
+    },
+
+    background: function(x) {
+      browser.tabs.query({currentWindow: true, active: true}).then((tabs) => {
+        browser.test.assertEq(tabs.length, 1, "Expect query to return tabs");
+        browser.test.notifyPass("queryPermissions");
+      }).catch((e) => {
+        browser.test.notifyFail("queryPermissions");
+      });
+    },
+  });
+
+  yield extension.startup();
+
+  yield extension.awaitFinish("queryPermissions");
+
+  yield extension.unload();
+});
+
+add_task(function* testQueryWithURLPermissions() {
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      "permissions": [],
+    },
+
+    background: function(x) {
+      browser.tabs.query({"url": "http://www.bbc.com/"}).then(() => {
+        browser.test.notifyFail("queryWithURLPermissions");
+      }).catch((e) => {
+        browser.test.assertEq('The "tabs" permission is required to use the query API with the "url" parameter',
+                              e.message, "Expected permissions error message");
+        browser.test.notifyPass("queryWithURLPermissions");
+      });
+    },
+  });
+
+  yield extension.startup();
+
+  yield extension.awaitFinish("queryWithURLPermissions");
+
+  yield extension.unload();
 });

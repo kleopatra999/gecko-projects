@@ -9,10 +9,12 @@
 var { Ci, Cu } = require("chrome");
 var Services = require("Services");
 var promise = require("promise");
-var { ActorPool, createExtraActors, appendExtraActors } = require("devtools/server/actors/common");
+var {
+  ActorPool, createExtraActors, appendExtraActors, GeneratedLocation
+} = require("devtools/server/actors/common");
 var { DebuggerServer } = require("devtools/server/main");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
-var { assert, dbg_assert } = DevToolsUtils;
+var { assert } = DevToolsUtils;
 var { TabSources } = require("./utils/TabSources");
 var makeDebugger = require("./utils/make-debugger");
 
@@ -23,6 +25,8 @@ loader.lazyRequireGetter(this, "ThreadActor", "devtools/server/actors/script", t
 loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/script", true);
 loader.lazyRequireGetter(this, "BrowserAddonActor", "devtools/server/actors/addon", true);
 loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker", true);
+loader.lazyRequireGetter(this, "ServiceWorkerRegistrationActorList", "devtools/server/actors/worker", true);
+loader.lazyRequireGetter(this, "ProcessActorList", "devtools/server/actors/process", true);
 loader.lazyImporter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
 
 // Assumptions on events module:
@@ -129,7 +133,10 @@ function createRootActor(aConnection)
                        {
                          tabList: new BrowserTabList(aConnection),
                          addonList: new BrowserAddonList(aConnection),
-                         workerList: new WorkerActorList({}),
+                         workerList: new WorkerActorList(aConnection, {}),
+                         serviceWorkerRegistrationList:
+                           new ServiceWorkerRegistrationActorList(aConnection),
+                         processList: new ProcessActorList(),
                          globalActorFactories: DebuggerServer.globalActorFactories,
                          onShutdown: sendShutdownEvent
                        });
@@ -345,8 +352,7 @@ BrowserTabList.prototype._getActorForBrowser = function(browser) {
     this._checkListening();
     return actor.connect();
   } else {
-    actor = new BrowserTabActor(this._connection, browser,
-                                browser.getTabBrowser());
+    actor = new BrowserTabActor(this._connection, browser);
     this._actorByBrowser.set(browser, actor);
     this._checkListening();
     return promise.resolve(actor);
@@ -355,15 +361,9 @@ BrowserTabList.prototype._getActorForBrowser = function(browser) {
 
 BrowserTabList.prototype.getTab = function({ outerWindowID, tabId }) {
   if (typeof(outerWindowID) == "number") {
-    // Tabs in parent process
     for (let browser of this._getBrowsers()) {
-      if (browser.contentWindow) {
-        let windowUtils = browser.contentWindow
-          .QueryInterface(Ci.nsIInterfaceRequestor)
-          .getInterface(Ci.nsIDOMWindowUtils);
-        if (windowUtils.outerWindowID === outerWindowID) {
-          return this._getActorForBrowser(browser);
-        }
+      if (browser.outerWindowID == outerWindowID) {
+        return this._getActorForBrowser(browser);
       }
     }
     return promise.reject({
@@ -894,7 +894,7 @@ TabActor.prototype = {
 
   get sources() {
     if (!this._sources) {
-      dbg_assert(this.threadActor, "threadActor should exist when creating sources.");
+      assert(this.threadActor, "threadActor should exist when creating sources.");
       this._sources = new TabSources(this.threadActor);
     }
     return this._sources;
@@ -1090,8 +1090,12 @@ TabActor.prototype = {
   },
 
   onListWorkers: function BTA_onListWorkers(aRequest) {
+    if (!this.attached) {
+      return { error: "wrongState" };
+    }
+
     if (this._workerActorList === null) {
-      this._workerActorList = new WorkerActorList({
+      this._workerActorList = new WorkerActorList(this.conn, {
         type: Ci.nsIWorkerDebugger.TYPE_DEDICATED,
         window: this.window
       });
@@ -1343,7 +1347,26 @@ TabActor.prototype = {
       this._tabActorPool = null;
     }
 
+    // Make sure that no more workerListChanged notifications are sent.
+    if (this._workerActorList !== null) {
+      this._workerActorList.onListChanged = null;
+      this._workerActorList = null;
+    }
+
+    if (this._workerActorPool !== null) {
+      this.conn.removeActorPool(this._workerActorPool);
+      this._workerActorPool = null;
+    }
+
+    // Make sure that no more serviceWorkerRegistrationChanged notifications are
+    // sent.
+    if (this._mustNotifyServiceWorkerRegistrationChanged) {
+      swm.removeListener(this);
+      this._mustNotifyServiceWorkerRegistrationChanged = false;
+    }
+
     this._attached = false;
+
     return true;
   },
 
@@ -1371,6 +1394,16 @@ TabActor.prototype = {
     }
 
     return { type: "detached" };
+  },
+
+  /**
+   * Bring the tab's window to front.
+   */
+  onFocus: function() {
+    if (this.window) {
+      this.window.focus();
+    }
+    return {};
   },
 
   /**
@@ -1444,6 +1477,12 @@ TabActor.prototype = {
       );
     }
 
+    if ((typeof options.customUserAgent !== "undefined") &&
+         options.customUserAgent !== this._getCustomUserAgent()) {
+      this._setCustomUserAgent(options.customUserAgent);
+      reload = true;
+    }
+
     // Reload if:
     //  - there's an explicit `performReload` flag and it's true
     //  - there's no `performReload` flag, but it makes sense to do so
@@ -1462,6 +1501,7 @@ TabActor.prototype = {
     this._restoreJavascript();
     this._setCacheDisabled(false);
     this._setServiceWorkersTestingEnabled(false);
+    this._restoreUserAgent();
   },
 
   /**
@@ -1543,6 +1583,38 @@ TabActor.prototype = {
     let windowUtils = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
                                  .getInterface(Ci.nsIDOMWindowUtils);
     return windowUtils.serviceWorkersTestingEnabled;
+  },
+
+  _previousCustomUserAgent: null,
+
+  /**
+   * Return custom user agent.
+   */
+  _getCustomUserAgent: function() {
+    if (!this.docShell) {
+      // The tab is already closed.
+      return null;
+    }
+    return this.docShell.customUserAgent;
+  },
+
+  /**
+   * Sets custom user agent for the current tab
+   */
+  _setCustomUserAgent: function(userAgent) {
+    if (this._previousCustomUserAgent === null) {
+      this._previousCustomUserAgent = this.docShell.customUserAgent;
+    }
+    this.docShell.customUserAgent = userAgent;
+  },
+
+  /**
+   * Restore the user agent, before the actor modified it
+   */
+  _restoreUserAgent: function() {
+    if (this._previousCustomUserAgent !== null) {
+      this.docShell.customUserAgent = this._previousCustomUserAgent;
+    }
   },
 
   /**
@@ -1827,6 +1899,43 @@ TabActor.prototype = {
       delete this._extraActors[aName];
     }
   },
+
+  /**
+   * Takes a packet containing a url, line and column and returns
+   * the updated url, line and column based on the current source mapping
+   * (source mapped files, pretty prints).
+   *
+   * @param {String} request.url
+   * @param {Number} request.line
+   * @param {Number?} request.column
+   * @return {Promise<Object>}
+   */
+  onResolveLocation: function (request) {
+    let { url, line } = request;
+    let column = request.column || 0;
+    let actor;
+
+    if (actor = this.sources.getSourceActorByURL(url)) {
+      // Get the generated source actor if this is source mapped
+      let generatedActor = actor.generatedSource ?
+                           this.sources.createNonSourceMappedActor(actor.generatedSource) :
+                           actor;
+      let generatedLocation = new GeneratedLocation(generatedActor, line, column);
+
+      return this.sources.getOriginalLocation(generatedLocation).then(loc => {
+        // If no map found, return this packet
+        if (loc.originalLine == null) {
+          return { from: this.actorID, type: "resolveLocation", error: "MAP_NOT_FOUND" };
+        }
+
+        loc = loc.toJSON();
+        return { from: this.actorID, url: loc.source.url, column: loc.column, line: loc.line };
+      });
+    }
+
+    // Fall back to this packet when source is not found
+    return promise.resolve({ from: this.actorID, type: "resolveLocation", error: "SOURCE_NOT_FOUND" });
+  },
 };
 
 /**
@@ -1835,32 +1944,35 @@ TabActor.prototype = {
 TabActor.prototype.requestTypes = {
   "attach": TabActor.prototype.onAttach,
   "detach": TabActor.prototype.onDetach,
+  "focus": TabActor.prototype.onFocus,
   "reload": TabActor.prototype.onReload,
   "navigateTo": TabActor.prototype.onNavigateTo,
   "reconfigure": TabActor.prototype.onReconfigure,
   "switchToFrame": TabActor.prototype.onSwitchToFrame,
   "listFrames": TabActor.prototype.onListFrames,
-  "listWorkers": TabActor.prototype.onListWorkers
+  "listWorkers": TabActor.prototype.onListWorkers,
+  "resolveLocation": TabActor.prototype.onResolveLocation
 };
 
 exports.TabActor = TabActor;
 
 /**
  * Creates a tab actor for handling requests to a single in-process
- * <browser> tab. Most of the implementation comes from TabActor.
+ * <xul:browser> tab, or <html:iframe>.
+ * Most of the implementation comes from TabActor.
  *
  * @param aConnection DebuggerServerConnection
  *        The connection to the client.
  * @param aBrowser browser
- *        The browser instance that contains this tab.
- * @param aTabBrowser tabbrowser
- *        The tabbrowser that can receive nsIWebProgressListener events.
+ *        The frame instance that contains this tab.
  */
-function BrowserTabActor(aConnection, aBrowser, aTabBrowser)
+function BrowserTabActor(aConnection, aBrowser)
 {
   TabActor.call(this, aConnection, aBrowser);
   this._browser = aBrowser;
-  this._tabbrowser = aTabBrowser;
+  if (typeof(aBrowser.getTabBrowser) == "function") {
+    this._tabbrowser = aBrowser.getTabBrowser();
+  }
 
   Object.defineProperty(this, "docShell", {
     value: this._browser.docShell,

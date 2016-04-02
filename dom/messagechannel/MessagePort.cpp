@@ -12,6 +12,7 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessageChannel.h"
+#include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/MessagePortChild.h"
 #include "mozilla/dom/MessagePortList.h"
@@ -21,6 +22,9 @@
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
+#include "mozilla/MessagePortTimelineMarker.h"
+#include "mozilla/TimelineConsumers.h"
+#include "mozilla/TimelineMarker.h"
 #include "mozilla/unused.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
@@ -44,46 +48,10 @@ using namespace mozilla::dom::workers;
 namespace mozilla {
 namespace dom {
 
-class DispatchEventRunnable final : public nsICancelableRunnable
+class PostMessageRunnable final : public nsICancelableRunnable
 {
   friend class MessagePort;
 
-public:
-  NS_DECL_ISUPPORTS
-
-  explicit DispatchEventRunnable(MessagePort* aPort)
-    : mPort(aPort)
-  { }
-
-  NS_IMETHOD
-  Run() override
-  {
-    MOZ_ASSERT(mPort);
-    MOZ_ASSERT(mPort->mDispatchRunnable == this);
-    mPort->mDispatchRunnable = nullptr;
-    mPort->Dispatch();
-
-    return NS_OK;
-  }
-
-  NS_IMETHOD
-  Cancel() override
-  {
-    mPort = nullptr;
-    return NS_OK;
-  }
-
-private:
-  ~DispatchEventRunnable()
-  {}
-
-  RefPtr<MessagePort> mPort;
-};
-
-NS_IMPL_ISUPPORTS(DispatchEventRunnable, nsICancelableRunnable, nsIRunnable)
-
-class PostMessageRunnable final : public nsICancelableRunnable
-{
 public:
   NS_DECL_ISUPPORTS
 
@@ -98,15 +66,34 @@ public:
   NS_IMETHOD
   Run() override
   {
-    nsCOMPtr<nsIGlobalObject> globalObject;
+    MOZ_ASSERT(mPort);
+    MOZ_ASSERT(mPort->mPostMessageRunnable == this);
 
-    if (NS_IsMainThread()) {
-      globalObject = do_QueryInterface(mPort->GetParentObject());
-    } else {
-      WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
-      MOZ_ASSERT(workerPrivate);
-      globalObject = workerPrivate->GlobalScope();
-    }
+    nsresult rv = DispatchMessage();
+
+    // We must check if we were waiting for this message in order to shutdown
+    // the port.
+    mPort->UpdateMustKeepAlive();
+
+    mPort->mPostMessageRunnable = nullptr;
+    mPort->Dispatch();
+
+    return rv;
+  }
+
+  NS_IMETHOD
+  Cancel() override
+  {
+    mPort = nullptr;
+    mData = nullptr;
+    return NS_OK;
+  }
+
+private:
+  nsresult
+  DispatchMessage() const
+  {
+    nsCOMPtr<nsIGlobalObject> globalObject = mPort->GetParentObject();
 
     AutoJSAPI jsapi;
     if (!globalObject || !jsapi.Init(globalObject)) {
@@ -116,13 +103,30 @@ public:
 
     JSContext* cx = jsapi.cx();
 
-    nsCOMPtr<nsPIDOMWindow> window =
-      do_QueryInterface(mPort->GetParentObject());
-
     ErrorResult rv;
     JS::Rooted<JS::Value> value(cx);
 
-    mData->Read(window, cx, &value, rv);
+    UniquePtr<AbstractTimelineMarker> start;
+    UniquePtr<AbstractTimelineMarker> end;
+    RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
+    bool isTimelineRecording = timelines && !timelines->IsEmpty();
+
+    if (isTimelineRecording) {
+      start = MakeUnique<MessagePortTimelineMarker>(
+        ProfileTimelineMessagePortOperationType::DeserializeData,
+        MarkerTracingType::START);
+    }
+
+    mData->Read(mPort->GetParentObject(), cx, &value, rv);
+
+    if (isTimelineRecording) {
+      end = MakeUnique<MessagePortTimelineMarker>(
+        ProfileTimelineMessagePortOperationType::DeserializeData,
+        MarkerTracingType::END);
+      timelines->AddMarkerForAllObservedDocShells(start);
+      timelines->AddMarkerForAllObservedDocShells(end);
+    }
+
     if (NS_WARN_IF(rv.Failed())) {
       return rv.StealNSResult();
     }
@@ -133,10 +137,10 @@ public:
     RefPtr<MessageEvent> event =
       new MessageEvent(eventTarget, nullptr, nullptr);
 
-    event->InitMessageEvent(NS_LITERAL_STRING("message"),
+    event->InitMessageEvent(nullptr, NS_LITERAL_STRING("message"),
                             false /* non-bubbling */,
                             false /* cancelable */, value, EmptyString(),
-                            EmptyString(), nullptr);
+                            EmptyString(), nullptr, nullptr);
     event->SetTrusted(true);
     event->SetSource(mPort);
 
@@ -149,14 +153,7 @@ public:
 
     bool dummy;
     mPort->DispatchEvent(static_cast<dom::Event*>(event.get()), &dummy);
-    return NS_OK;
-  }
 
-  NS_IMETHOD
-  Cancel() override
-  {
-    mPort = nullptr;
-    mData = nullptr;
     return NS_OK;
   }
 
@@ -174,8 +171,8 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(MessagePort)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MessagePort,
                                                 DOMEventTargetHelper)
-  if (tmp->mDispatchRunnable) {
-    NS_IMPL_CYCLE_COLLECTION_UNLINK(mDispatchRunnable->mPort);
+  if (tmp->mPostMessageRunnable) {
+    NS_IMPL_CYCLE_COLLECTION_UNLINK(mPostMessageRunnable->mPort);
   }
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mMessages);
@@ -185,8 +182,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MessagePort,
                                                   DOMEventTargetHelper)
-  if (tmp->mDispatchRunnable) {
-    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDispatchRunnable->mPort);
+  if (tmp->mPostMessageRunnable) {
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPostMessageRunnable->mPort);
   }
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUnshippedEntangledPort);
@@ -214,10 +211,12 @@ public:
     MOZ_COUNT_CTOR(MessagePortFeature);
   }
 
-  virtual bool Notify(JSContext* aCx, workers::Status aStatus) override
+  virtual bool Notify(workers::Status aStatus) override
   {
-    if (mPort && aStatus > Running) {
-      mPort->Close();
+    if (aStatus > Running) {
+      // We cannot process messages anymore because we cannot dispatch new
+      // runnables. Let's force a Close().
+      mPort->CloseForced();
     }
 
     return true;
@@ -276,12 +275,14 @@ NS_IMPL_ISUPPORTS(ForceCloseHelper, nsIIPCBackgroundChildCreateCallback)
 
 } // namespace
 
-MessagePort::MessagePort(nsPIDOMWindow* aWindow)
-  : DOMEventTargetHelper(aWindow)
+MessagePort::MessagePort(nsIGlobalObject* aGlobal)
+  : DOMEventTargetHelper(aGlobal)
   , mInnerID(0)
   , mMessageQueueEnabled(false)
   , mIsKeptAlive(false)
 {
+  MOZ_ASSERT(aGlobal);
+
   mIdentifier = new MessagePortIdentifier();
   mIdentifier->neutered() = true;
   mIdentifier->sequenceId() = 0;
@@ -289,26 +290,30 @@ MessagePort::MessagePort(nsPIDOMWindow* aWindow)
 
 MessagePort::~MessagePort()
 {
-  Close();
+  CloseForced();
   MOZ_ASSERT(!mWorkerFeature);
 }
 
 /* static */ already_AddRefed<MessagePort>
-MessagePort::Create(nsPIDOMWindow* aWindow, const nsID& aUUID,
+MessagePort::Create(nsIGlobalObject* aGlobal, const nsID& aUUID,
                     const nsID& aDestinationUUID, ErrorResult& aRv)
 {
-  RefPtr<MessagePort> mp = new MessagePort(aWindow);
+  MOZ_ASSERT(aGlobal);
+
+  RefPtr<MessagePort> mp = new MessagePort(aGlobal);
   mp->Initialize(aUUID, aDestinationUUID, 1 /* 0 is an invalid sequence ID */,
                  false /* Neutered */, eStateUnshippedEntangled, aRv);
   return mp.forget();
 }
 
 /* static */ already_AddRefed<MessagePort>
-MessagePort::Create(nsPIDOMWindow* aWindow,
+MessagePort::Create(nsIGlobalObject* aGlobal,
                     const MessagePortIdentifier& aIdentifier,
                     ErrorResult& aRv)
 {
-  RefPtr<MessagePort> mp = new MessagePort(aWindow);
+  MOZ_ASSERT(aGlobal);
+
+  RefPtr<MessagePort> mp = new MessagePort(aGlobal);
   mp->Initialize(aIdentifier.uuid(), aIdentifier.destinationUuid(),
                  aIdentifier.sequenceId(), aIdentifier.neutered(),
                  eStateEntangling, aRv);
@@ -336,7 +341,6 @@ MessagePort::Initialize(const nsID& aUUID,
   mIdentifier->sequenceId() = aSequenceID;
 
   mState = aState;
-  mNextStep = eNextStepNone;
 
   if (mNeutered) {
     // If this port is neutered we don't want to keep it alive artificially nor
@@ -360,8 +364,7 @@ MessagePort::Initialize(const nsID& aUUID,
     MOZ_ASSERT(!mWorkerFeature);
 
     nsAutoPtr<WorkerFeature> feature(new MessagePortFeature(this));
-    JSContext* cx = workerPrivate->GetJSContext();
-    if (NS_WARN_IF(!workerPrivate->AddFeature(cx, feature))) {
+    if (NS_WARN_IF(!workerPrivate->AddFeature(feature))) {
       aRv.Throw(NS_ERROR_FAILURE);
       return;
     }
@@ -434,7 +437,27 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
 
   RefPtr<SharedMessagePortMessage> data = new SharedMessagePortMessage();
 
+  UniquePtr<AbstractTimelineMarker> start;
+  UniquePtr<AbstractTimelineMarker> end;
+  RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
+  bool isTimelineRecording = timelines && !timelines->IsEmpty();
+
+  if (isTimelineRecording) {
+    start = MakeUnique<MessagePortTimelineMarker>(
+      ProfileTimelineMessagePortOperationType::SerializeData,
+      MarkerTracingType::START);
+  }
+
   data->Write(aCx, aMessage, transferable, aRv);
+
+  if (isTimelineRecording) {
+    end = MakeUnique<MessagePortTimelineMarker>(
+      ProfileTimelineMessagePortOperationType::SerializeData,
+      MarkerTracingType::END);
+    timelines->AddMarkerForAllObservedDocShells(start);
+    timelines->AddMarkerForAllObservedDocShells(end);
+  }
+
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
@@ -452,8 +475,9 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
     return;
   }
 
-  // Not entangled yet, but already closed.
-  if (mNextStep != eNextStepNone) {
+  // Not entangled yet, but already closed/disentangled.
+  if (mState == eStateEntanglingForDisentangle ||
+      mState == eStateEntanglingForClose) {
     return;
   }
 
@@ -468,10 +492,10 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(mMessagesForTheOtherPort.IsEmpty());
 
-  nsAutoTArray<RefPtr<SharedMessagePortMessage>, 1> array;
+  AutoTArray<RefPtr<SharedMessagePortMessage>, 1> array;
   array.AppendElement(data);
 
-  nsAutoTArray<MessagePortMessage, 1> messages;
+  AutoTArray<MessagePortMessage, 1> messages;
   SharedMessagePortMessage::FromSharedToMessagesChild(mActor, array, messages);
   mActor->SendPostMessages(messages);
 }
@@ -490,26 +514,84 @@ MessagePort::Start()
 void
 MessagePort::Dispatch()
 {
-  if (!mMessageQueueEnabled || mMessages.IsEmpty() || mDispatchRunnable ||
-      mState > eStateEntangled || mNextStep != eNextStepNone) {
+  if (!mMessageQueueEnabled || mMessages.IsEmpty() || mPostMessageRunnable) {
     return;
+  }
+
+  switch (mState) {
+    case eStateUnshippedEntangled:
+      // Everything is fine here. We have messages because the other
+      // port populates our queue directly.
+      break;
+
+    case eStateEntangling:
+      // Everything is fine here as well. We have messages because the other
+      // port populated our queue directly when we were in the
+      // eStateUnshippedEntangled state.
+      break;
+
+    case eStateEntanglingForDisentangle:
+      // Here we don't want to ship messages because these messages must be
+      // delivered by the cloned version of this one. They will be sent in the
+      // SendDisentangle().
+      return;
+
+    case eStateEntanglingForClose:
+      // We still want to deliver messages if we are closing. These messages
+      // are here from the previous eStateUnshippedEntangled state.
+      break;
+
+    case eStateEntangled:
+      // This port is up and running.
+      break;
+
+    case eStateDisentangling:
+      // If we are in the process to disentangle the port, we cannot dispatch
+      // messages. They will be sent to the cloned version of this port via
+      // SendDisentangle();
+      return;
+
+    case eStateDisentangled:
+      MOZ_CRASH("This cannot happen.");
+      // It cannot happen because Disentangle should take off all the pending
+      // messages.
+      break;
+
+    case eStateDisentangledForClose:
+      // If we are here is because the port has been closed. We can still
+      // process the pending messages.
+      break;
   }
 
   RefPtr<SharedMessagePortMessage> data = mMessages.ElementAt(0);
   mMessages.RemoveElementAt(0);
 
-  RefPtr<PostMessageRunnable> runnable = new PostMessageRunnable(this, data);
+  mPostMessageRunnable = new PostMessageRunnable(this, data);
 
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(runnable)));
-
-  mDispatchRunnable = new DispatchEventRunnable(this);
-
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(mDispatchRunnable)));
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mPostMessageRunnable));
 }
 
 void
 MessagePort::Close()
 {
+  CloseInternal(true /* aSoftly */);
+}
+
+void
+MessagePort::CloseForced()
+{
+  CloseInternal(false /* aSoftly */);
+}
+
+void
+MessagePort::CloseInternal(bool aSoftly)
+{
+  // If we have some messages to send but we don't want a 'soft' close, we have
+  // to flush them now.
+  if (!aSoftly) {
+    mMessages.Clear();
+  }
+
   if (mState == eStateUnshippedEntangled) {
     MOZ_ASSERT(mUnshippedEntangledPort);
 
@@ -517,8 +599,8 @@ MessagePort::Close()
     RefPtr<MessagePort> port = Move(mUnshippedEntangledPort);
     MOZ_ASSERT(mUnshippedEntangledPort == nullptr);
 
-    mState = eStateDisentangled;
-    port->Close();
+    mState = eStateDisentangledForClose;
+    port->CloseInternal(aSoftly);
 
     UpdateMustKeepAlive();
     return;
@@ -526,7 +608,20 @@ MessagePort::Close()
 
   // Not entangled yet, we have to wait.
   if (mState == eStateEntangling) {
-    mNextStep = eNextStepClose;
+    mState = eStateEntanglingForClose;
+    return;
+  }
+
+  // Not entangled but already cloned or closed
+  if (mState == eStateEntanglingForDisentangle ||
+      mState == eStateEntanglingForClose) {
+    return;
+  }
+
+  // Maybe we were already closing the port but softly. In this case we call
+  // UpdateMustKeepAlive() to consider the empty pending message queue.
+  if (mState == eStateDisentangledForClose && !aSoftly) {
+    UpdateMustKeepAlive();
     return;
   }
 
@@ -536,7 +631,7 @@ MessagePort::Close()
 
   // We don't care about stopping the sending of messages because from now all
   // the incoming messages will be ignored.
-  mState = eStateDisentangled;
+  mState = eStateDisentangledForClose;
 
   MOZ_ASSERT(mActor);
 
@@ -576,8 +671,11 @@ MessagePort::SetOnmessage(EventHandlerNonNull* aCallback)
 void
 MessagePort::Entangled(nsTArray<MessagePortMessage>& aMessages)
 {
-  MOZ_ASSERT(mState == eStateEntangling);
+  MOZ_ASSERT(mState == eStateEntangling ||
+             mState == eStateEntanglingForDisentangle ||
+             mState == eStateEntanglingForClose);
 
+  State oldState = mState;
   mState = eStateEntangled;
 
   // If we have pending messages, these have to be sent.
@@ -598,8 +696,10 @@ MessagePort::Entangled(nsTArray<MessagePortMessage>& aMessages)
     return;
   }
 
-  if (mNextStep == eNextStepClose) {
-    Close();
+  // If the next step is to close the port, we do it ignoring the received
+  // messages.
+  if (oldState == eStateEntanglingForClose) {
+    CloseForced();
     return;
   }
 
@@ -607,12 +707,11 @@ MessagePort::Entangled(nsTArray<MessagePortMessage>& aMessages)
 
   // We were waiting for the entangling callback in order to disentangle this
   // port immediately after.
-  if (mNextStep == eNextStepDisentangle) {
+  if (oldState == eStateEntanglingForDisentangle) {
     StartDisentangling();
     return;
   }
 
-  MOZ_ASSERT(mNextStep == eNextStepNone);
   Dispatch();
 }
 
@@ -623,7 +722,6 @@ MessagePort::StartDisentangling()
   MOZ_ASSERT(mState == eStateEntangled);
 
   mState = eStateDisentangling;
-  mNextStep = eNextStepNone;
 
   // Sending this message we communicate to the parent actor that we don't want
   // to receive any new messages. It is possible that a message has been
@@ -635,8 +733,12 @@ MessagePort::StartDisentangling()
 void
 MessagePort::MessagesReceived(nsTArray<MessagePortMessage>& aMessages)
 {
-  MOZ_ASSERT(mState == eStateEntangled || mState == eStateDisentangling);
-  MOZ_ASSERT(mNextStep == eNextStepNone);
+  MOZ_ASSERT(mState == eStateEntangled ||
+             mState == eStateDisentangling ||
+             // This last step can happen only if Close() has been called
+             // manually. At this point SendClose() is sent but we can still
+             // receive something until the Closing request is processed.
+             mState == eStateDisentangledForClose);
   MOZ_ASSERT(mMessagesForTheOtherPort.IsEmpty());
 
   RemoveDocFromBFCache();
@@ -700,7 +802,8 @@ MessagePort::CloneAndDisentangle(MessagePortIdentifier& aIdentifier)
 
   // We already have a 'next step'. We have to consider this port as already
   // cloned/closed/disentangled.
-  if (mNextStep != eNextStepNone) {
+  if (mState == eStateEntanglingForDisentangle ||
+      mState == eStateEntanglingForClose) {
     return;
   }
 
@@ -730,27 +833,28 @@ MessagePort::CloneAndDisentangle(MessagePortIdentifier& aIdentifier)
     // Register this component to PBackground.
     ConnectToPBackground();
 
-    mNextStep = eNextStepDisentangle;
+    mState = eStateEntanglingForDisentangle;
     return;
   }
 
   // Not entangled yet, we have to wait.
-  if (mState < eStateEntangled) {
-    mNextStep = eNextStepDisentangle;
+  if (mState == eStateEntangling) {
+    mState = eStateEntanglingForDisentangle;
     return;
   }
 
+  MOZ_ASSERT(mState == eStateEntangled);
   StartDisentangling();
 }
 
 void
 MessagePort::Closed()
 {
-  if (mState == eStateDisentangled) {
+  if (mState >= eStateDisentangled) {
     return;
   }
 
-  mState = eStateDisentangled;
+  mState = eStateDisentangledForClose;
 
   if (mActor) {
     mActor->SetPort(nullptr);
@@ -789,7 +893,9 @@ MessagePort::ActorCreated(mozilla::ipc::PBackgroundChild* aActor)
   MOZ_ASSERT(aActor);
   MOZ_ASSERT(!mActor);
   MOZ_ASSERT(mIdentifier);
-  MOZ_ASSERT(mState == eStateEntangling);
+  MOZ_ASSERT(mState == eStateEntangling ||
+             mState == eStateEntanglingForDisentangle ||
+             mState == eStateEntanglingForClose);
 
   PMessagePortChild* actor =
     aActor->SendPMessagePortConstructor(mIdentifier->uuid(),
@@ -805,15 +911,16 @@ MessagePort::ActorCreated(mozilla::ipc::PBackgroundChild* aActor)
 void
 MessagePort::UpdateMustKeepAlive()
 {
-  if (mState == eStateDisentangled && mIsKeptAlive) {
+  if (mState >= eStateDisentangled &&
+      mMessages.IsEmpty() &&
+      mIsKeptAlive) {
     mIsKeptAlive = false;
 
     if (mWorkerFeature) {
       WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
       MOZ_ASSERT(workerPrivate);
 
-      workerPrivate->RemoveFeature(workerPrivate->GetJSContext(),
-                                   mWorkerFeature);
+      workerPrivate->RemoveFeature(mWorkerFeature);
       mWorkerFeature = nullptr;
     }
 
@@ -859,7 +966,7 @@ MessagePort::Observe(nsISupports* aSubject, const char* aTopic,
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (innerID == mInnerID) {
-    Close();
+    CloseForced();
   }
 
   return NS_OK;
@@ -872,7 +979,7 @@ MessagePort::RemoveDocFromBFCache()
     return;
   }
 
-  nsPIDOMWindow* window = GetOwner();
+  nsPIDOMWindowInner* window = GetOwner();
   if (!window) {
     return;
   }

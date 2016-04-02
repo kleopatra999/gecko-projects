@@ -5,16 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIconDecoder.h"
-#include "nsIInputStream.h"
-#include "nspr.h"
-#include "nsRect.h"
-#include "nsError.h"
 #include "RasterImage.h"
-#include <algorithm>
+#include "SurfacePipeFactory.h"
 
 using namespace mozilla::gfx;
-
-using std::min;
 
 namespace mozilla {
 namespace image {
@@ -24,10 +18,7 @@ static const uint32_t ICON_HEADER_SIZE = 2;
 nsIconDecoder::nsIconDecoder(RasterImage* aImage)
  : Decoder(aImage)
  , mLexer(Transition::To(State::HEADER, ICON_HEADER_SIZE))
- , mWidth()         // set by ReadHeader()
- , mHeight()        // set by ReadHeader()
  , mBytesPerRow()   // set by ReadHeader()
- , mCurrentRow(0)
 {
   // Nothing to do
 }
@@ -42,7 +33,7 @@ nsIconDecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
   MOZ_ASSERT(aBuffer);
   MOZ_ASSERT(aCount > 0);
 
-  Maybe<State> terminalState =
+  Maybe<TerminalState> terminalState =
     mLexer.Lex(aBuffer, aCount, [=](State aState,
                                     const char* aData, size_t aLength) {
       switch (aState) {
@@ -53,61 +44,51 @@ nsIconDecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
         case State::FINISH:
           return Finish();
         default:
-          MOZ_ASSERT_UNREACHABLE("Unknown State");
-          return Transition::Terminate(State::FAILURE);
+          MOZ_CRASH("Unknown State");
       }
     });
 
-  if (!terminalState) {
-    return;  // Need more data.
-  }
-
-  if (*terminalState == State::FAILURE) {
+  if (terminalState == Some(TerminalState::FAILURE)) {
     PostDataError();
-    return;
   }
-
-  MOZ_ASSERT(*terminalState == State::SUCCESS);
 }
 
 LexerTransition<nsIconDecoder::State>
 nsIconDecoder::ReadHeader(const char* aData)
 {
   // Grab the width and height.
-  mWidth  = uint8_t(aData[0]);
-  mHeight = uint8_t(aData[1]);
+  uint8_t width  = uint8_t(aData[0]);
+  uint8_t height = uint8_t(aData[1]);
 
   // The input is 32bpp, so we expect 4 bytes of data per pixel.
-  mBytesPerRow = mWidth * 4;
+  mBytesPerRow = width * 4;
 
   // Post our size to the superclass.
-  PostSize(mWidth, mHeight);
+  PostSize(width, height);
 
   // Icons have alpha.
   PostHasTransparency();
 
   // If we're doing a metadata decode, we're done.
   if (IsMetadataDecode()) {
-    return Transition::Terminate(State::SUCCESS);
+    return Transition::TerminateSuccess();
   }
 
   MOZ_ASSERT(!mImageData, "Already have a buffer allocated?");
   IntSize targetSize = mDownscaler ? mDownscaler->TargetSize() : GetSize();
-  nsresult rv = AllocateFrame(0, targetSize,
-                              IntRect(IntPoint(), targetSize),
-                              gfx::SurfaceFormat::B8G8R8A8);
-  if (NS_FAILED(rv)) {
-    return Transition::Terminate(State::FAILURE);
-  }
-  MOZ_ASSERT(mImageData, "Should have a buffer now");
+  IntRect targetFrameRect(IntPoint(0, 0), targetSize);
 
-  if (mDownscaler) {
-    nsresult rv = mDownscaler->BeginFrame(GetSize(), Nothing(),
-                                          mImageData, /* aHasAlpha = */ true);
-    if (NS_FAILED(rv)) {
-      return Transition::Terminate(State::FAILURE);
-    }
+  Maybe<SurfacePipe> pipe =
+    SurfacePipeFactory::CreateSurfacePipe(this, 0, GetSize(), targetSize,
+                                          targetFrameRect, SurfaceFormat::B8G8R8A8,
+                                          SurfacePipeFlags());
+  if (!pipe) {
+    return Transition::TerminateFailure();
   }
+
+  mPipe = Move(*pipe);
+
+  MOZ_ASSERT(mImageData, "Should have a buffer now");
 
   return Transition::To(State::ROW_OF_PIXELS, mBytesPerRow);
 }
@@ -115,25 +96,31 @@ nsIconDecoder::ReadHeader(const char* aData)
 LexerTransition<nsIconDecoder::State>
 nsIconDecoder::ReadRowOfPixels(const char* aData, size_t aLength)
 {
-  if (mDownscaler) {
-    memcpy(mDownscaler->RowBuffer(), aData, mBytesPerRow);
-    mDownscaler->CommitRow();
+  MOZ_ASSERT(aLength % 4 == 0, "Rows should contain a multiple of four bytes");
 
-    if (mDownscaler->HasInvalidation()) {
-      DownscalerInvalidRect invalidRect = mDownscaler->TakeInvalidRect();
-      PostInvalidation(invalidRect.mOriginalSizeRect,
-                       Some(invalidRect.mTargetSizeRect));
+  auto result = mPipe.WritePixels<uint32_t>([&]() -> NextPixel<uint32_t> {
+    if (aLength == 0) {
+      return AsVariant(WriteState::NEED_MORE_DATA);  // Done with this row.
     }
-  } else {
-    memcpy(mImageData + mCurrentRow * mBytesPerRow, aData, mBytesPerRow);
 
-    PostInvalidation(IntRect(0, mCurrentRow, mWidth, 1));
+    uint32_t pixel = *reinterpret_cast<const uint32_t*>(aData);
+    aData += 4;
+    aLength -= 4;
+
+    return AsVariant(pixel);
+  });
+
+  MOZ_ASSERT(result != WriteState::FAILURE);
+
+  Maybe<SurfaceInvalidRect> invalidRect = mPipe.TakeInvalidRect();
+  if (invalidRect) {
+    PostInvalidation(invalidRect->mInputSpaceRect,
+                     Some(invalidRect->mOutputSpaceRect));
   }
-  mCurrentRow++;
 
-  return (mCurrentRow < mHeight)
-       ? Transition::To(State::ROW_OF_PIXELS, mBytesPerRow)
-       : Transition::To(State::FINISH, 0);
+  return result == WriteState::FINISHED
+       ? Transition::To(State::FINISH, 0)
+       : Transition::To(State::ROW_OF_PIXELS, mBytesPerRow);
 }
 
 LexerTransition<nsIconDecoder::State>
@@ -142,7 +129,7 @@ nsIconDecoder::Finish()
   PostFrameStop();
   PostDecodeDone();
 
-  return Transition::Terminate(State::SUCCESS);
+  return Transition::TerminateSuccess();
 }
 
 } // namespace image

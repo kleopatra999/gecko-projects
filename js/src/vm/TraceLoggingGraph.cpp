@@ -10,6 +10,7 @@
 
 #include "jsstr.h"
 
+#include "threading/LockGuard.h"
 #include "vm/TraceLogging.h"
 
 #ifndef TRACE_LOG_DIR
@@ -24,31 +25,9 @@ using mozilla::NativeEndian;
 
 TraceLoggerGraphState* traceLoggerGraphState = nullptr;
 
-class MOZ_RAII AutoTraceLoggerGraphStateLock
-{
-  TraceLoggerGraphState* graph;
-
-  public:
-    explicit AutoTraceLoggerGraphStateLock(TraceLoggerGraphState* graph MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : graph(graph)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        PR_Lock(graph->lock);
-    }
-    ~AutoTraceLoggerGraphStateLock() {
-        PR_Unlock(graph->lock);
-    }
-  private:
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-};
-
 bool
 TraceLoggerGraphState::init()
 {
-    lock = PR_NewLock();
-    if (!lock)
-        return false;
-
     out = fopen(TRACE_LOG_DIR "tl-data.json", "w");
     if (!out)
         return false;
@@ -69,11 +48,6 @@ TraceLoggerGraphState::~TraceLoggerGraphState()
         out = nullptr;
     }
 
-    if (lock) {
-        PR_DestroyLock(lock);
-        lock = nullptr;
-    }
-
 #ifdef DEBUG
     initialized = false;
 #endif
@@ -82,7 +56,7 @@ TraceLoggerGraphState::~TraceLoggerGraphState()
 uint32_t
 TraceLoggerGraphState::nextLoggerId()
 {
-    AutoTraceLoggerGraphStateLock lock(this);
+    js::LockGuard<js::Mutex> guard(lock);
 
     MOZ_ASSERT(initialized);
 
@@ -276,7 +250,7 @@ TraceLoggerGraph::flush()
         if (bytesWritten < tree.size())
             return false;
 
-        treeOffset += tree.lastEntryId();
+        treeOffset += tree.size();
         tree.clear();
     }
 
@@ -359,7 +333,7 @@ TraceLoggerGraph::startEventInternal(uint32_t id, uint64_t timestamp)
 
     if (parent.lastChildId() == 0) {
         MOZ_ASSERT(!entry.hasChildren());
-        MOZ_ASSERT(parent.treeId() == tree.lastEntryId() + treeOffset);
+        MOZ_ASSERT(parent.treeId() == treeOffset + tree.size() - 1);
 
         if (!updateHasChildren(parent.treeId()))
             return false;
@@ -580,8 +554,10 @@ TraceLoggerGraph::addTextId(uint32_t id, const char* text)
         return;
 
     // Assume ids are given in order. Which is currently true.
+#ifdef DEBUG
     MOZ_ASSERT(id == nextTextId);
     nextTextId++;
+#endif
 
     if (id > 0) {
         int written = fprintf(dictFile, ",\n");

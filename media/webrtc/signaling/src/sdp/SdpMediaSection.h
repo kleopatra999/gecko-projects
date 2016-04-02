@@ -12,7 +12,7 @@
 #include "signaling/src/sdp/SdpAttributeList.h"
 #include <string>
 #include <vector>
-#include <iostream>
+#include <sstream>
 
 namespace mozilla
 {
@@ -169,6 +169,7 @@ public:
   void SetSsrcs(const std::vector<uint32_t>& ssrcs,
                 const std::string& cname);
   void AddMsid(const std::string& id, const std::string& appdata);
+  const SdpRidAttributeList::Rid* FindRid(const std::string& id) const;
 
 private:
   size_t mLevel;

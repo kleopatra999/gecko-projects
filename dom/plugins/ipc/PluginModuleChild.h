@@ -147,10 +147,7 @@ protected:
     virtual bool
     RecvProcessNativeEventsInInterruptCall() override;
 
-    virtual bool RecvStartProfiler(const uint32_t& aEntries,
-                                   const double& aInterval,
-                                   nsTArray<nsCString>&& aFeatures,
-                                   nsTArray<nsCString>&& aThreadNameFilters) override;
+    virtual bool RecvStartProfiler(const ProfilerInitParams& params) override;
     virtual bool RecvStopProfiler() override;
     virtual bool RecvGatherProfile() override;
 
@@ -366,7 +363,7 @@ private:
         bool _savedNestableTasksAllowed;
     };
 
-    nsAutoTArray<IncallFrame, 8> mIncallPumpingStack;
+    AutoTArray<IncallFrame, 8> mIncallPumpingStack;
 
     static LRESULT CALLBACK NestedInputEventHook(int code,
                                                  WPARAM wParam,

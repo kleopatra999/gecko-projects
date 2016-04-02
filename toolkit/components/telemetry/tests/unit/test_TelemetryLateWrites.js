@@ -1,5 +1,5 @@
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ 
+   http://creativecommons.org/publicdomain/zero/1.0/
 */
 /* A testcase to make sure reading late writes stacks works.  */
 
@@ -9,7 +9,7 @@ Cu.import("resource://gre/modules/Services.jsm", this);
 const PR_WRONLY = 0x2;
 const PR_CREATE_FILE = 0x8;
 const PR_TRUNCATE = 0x20;
-const RW_OWNER = 0600;
+const RW_OWNER = parseInt("0600", 8);
 
 const STACK_SUFFIX1 = "stack1.txt";
 const STACK_SUFFIX2 = "stack2.txt";

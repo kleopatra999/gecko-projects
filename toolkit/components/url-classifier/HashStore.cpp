@@ -93,7 +93,7 @@
 #define STORE_SUFFIX ".sbstore"
 
 // NSPR_LOG_MODULES=UrlClassifierDbService:5
-extern PRLogModuleInfo *gUrlClassifierDbServiceLog;
+extern mozilla::LazyLogModule gUrlClassifierDbServiceLog;
 #define LOG(args) MOZ_LOG(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug, args)
 #define LOG_ENABLED() MOZ_LOG_TEST(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug)
 
@@ -256,10 +256,7 @@ HashStore::Open()
   }
 
   uint32_t fileSize32 = static_cast<uint32_t>(fileSize);
-
-  rv = NS_NewBufferedInputStream(getter_AddRefs(mInputStream), origStream,
-                                 fileSize32);
-  NS_ENSURE_SUCCESS(rv, rv);
+  mInputStream = NS_BufferInputStream(origStream, fileSize32);
 
   rv = CheckChecksum(storeFile, fileSize32);
   SUCCESS_OR_RESET(rv);

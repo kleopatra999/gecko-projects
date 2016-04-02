@@ -34,6 +34,7 @@
 #include "MediaStreamAudioDestinationNode.h"
 #include "MediaStreamAudioSourceNode.h"
 #include "MediaStreamGraph.h"
+#include "nsContentUtils.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
@@ -59,6 +60,9 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(AudioContext)
   if (!tmp->mIsStarted) {
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mActiveNodes)
   }
+  // Remove weak reference on the global window as the context is not usable
+  // without mDestination.
+  tmp->DisconnectFromWindow();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END_INHERITED(DOMEventTargetHelper)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(AudioContext,
@@ -74,7 +78,9 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(AudioContext, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(AudioContext, DOMEventTargetHelper)
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(AudioContext)
+  NS_INTERFACE_MAP_ENTRY(nsIMemoryReporter)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 static float GetSampleRateForAudioContext(bool aIsOffline, float aSampleRate)
@@ -87,7 +93,7 @@ static float GetSampleRateForAudioContext(bool aIsOffline, float aSampleRate)
   }
 }
 
-AudioContext::AudioContext(nsPIDOMWindow* aWindow,
+AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
                            bool aIsOffline,
                            AudioChannel aChannel,
                            uint32_t aNumberOfChannels,
@@ -134,13 +140,18 @@ AudioContext::Init()
   return NS_OK;
 }
 
-AudioContext::~AudioContext()
+void
+AudioContext::DisconnectFromWindow()
 {
-  nsPIDOMWindow* window = GetOwner();
+  nsPIDOMWindowInner* window = GetOwner();
   if (window) {
     window->RemoveAudioContext(this);
   }
+}
 
+AudioContext::~AudioContext()
+{
+  DisconnectFromWindow();
   UnregisterWeakMemoryReporter(this);
 }
 
@@ -168,7 +179,7 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
                           AudioChannel aChannel,
                           ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -192,7 +203,7 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
                           float aSampleRate,
                           ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -242,8 +253,8 @@ AudioContext::CreateBufferSource(ErrorResult& aRv)
 }
 
 already_AddRefed<AudioBuffer>
-AudioContext::CreateBuffer(JSContext* aJSContext, uint32_t aNumberOfChannels,
-                           uint32_t aLength, float aSampleRate,
+AudioContext::CreateBuffer(uint32_t aNumberOfChannels, uint32_t aLength,
+                           float aSampleRate,
                            ErrorResult& aRv)
 {
   if (!aNumberOfChannels) {
@@ -252,7 +263,7 @@ AudioContext::CreateBuffer(JSContext* aJSContext, uint32_t aNumberOfChannels,
   }
 
   return AudioBuffer::Create(this, aNumberOfChannels, aLength,
-                             aSampleRate, aJSContext, aRv);
+                             aSampleRate, aRv);
 }
 
 namespace {
@@ -362,9 +373,7 @@ AudioContext::CreateMediaElementSource(HTMLMediaElement& aMediaElement,
   if (aRv.Failed()) {
     return nullptr;
   }
-  RefPtr<MediaElementAudioSourceNode> mediaElementAudioSourceNode =
-    new MediaElementAudioSourceNode(this, stream);
-  return mediaElementAudioSourceNode.forget();
+  return MediaElementAudioSourceNode::Create(this, stream, aRv);
 }
 
 already_AddRefed<MediaStreamAudioSourceNode>
@@ -380,9 +389,7 @@ AudioContext::CreateMediaStreamSource(DOMMediaStream& aMediaStream,
     return nullptr;
   }
 
-  RefPtr<MediaStreamAudioSourceNode> mediaStreamAudioSourceNode =
-    new MediaStreamAudioSourceNode(this, &aMediaStream);
-  return mediaStreamAudioSourceNode.forget();
+  return MediaStreamAudioSourceNode::Create(this, &aMediaStream, aRv);
 }
 
 already_AddRefed<GainNode>
@@ -570,7 +577,13 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
 
   aBuffer.ComputeLengthAndData();
 
-  // Neuter the array buffer
+  if (aBuffer.IsShared()) {
+    // Throw if the object is mapping shared memory (must opt in).
+    aRv.ThrowTypeError<MSG_TYPEDARRAY_IS_SHARED>(NS_LITERAL_STRING("Argument of AudioContext.decodeAudioData"));
+    return nullptr;
+  }
+
+  // Detach the array buffer
   size_t length = aBuffer.Length();
   JS::RootedObject obj(cx, aBuffer.Obj());
 
@@ -754,7 +767,7 @@ public:
   NS_IMETHODIMP
   Run() override
   {
-    nsCOMPtr<nsPIDOMWindow> parent = do_QueryInterface(mAudioContext->GetParentObject());
+    nsPIDOMWindowInner* parent = mAudioContext->GetParentObject();
     if (!parent) {
       return NS_ERROR_FAILURE;
     }

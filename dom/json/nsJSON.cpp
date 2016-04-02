@@ -298,8 +298,6 @@ nsJSONWriter::Write(const char16_t *aBuffer, uint32_t aLength)
 
   if (!mDidWrite) {
     mBuffer = new char16_t[JSON_STREAM_BUFSIZE];
-    if (!mBuffer)
-      return NS_ERROR_OUT_OF_MEMORY;
     mDidWrite = true;
   }
 
@@ -416,11 +414,14 @@ nsJSON::DecodeInternal(JSContext* cx,
   nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
   NS_ENSURE_TRUE(nullPrincipal, NS_ERROR_FAILURE);
 
+  // The ::Decode function is deprecated [Bug 675797] and the following
+  // channel is never openend, so it does not matter what securityFlags
+  // we pass to NS_NewInputStreamChannel here.
   rv = NS_NewInputStreamChannel(getter_AddRefs(jsonChannel),
                                 mURI,
                                 aStream,
                                 nullPrincipal,
-                                nsILoadInfo::SEC_NORMAL,
+                                nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
                                 nsIContentPolicy::TYPE_OTHER,
                                 NS_LITERAL_CSTRING("application/json"));
 
@@ -481,9 +482,6 @@ nsresult
 NS_NewJSON(nsISupports* aOuter, REFNSIID aIID, void** aResult)
 {
   nsJSON* json = new nsJSON();
-  if (!json)
-    return NS_ERROR_OUT_OF_MEMORY;
-
   NS_ADDREF(json);
   *aResult = json;
 

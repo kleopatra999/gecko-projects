@@ -384,8 +384,12 @@ static int nr_stun_client_send_request(nr_stun_client_ctx *ctx)
 
     assert(ctx->my_addr.protocol==ctx->peer_addr.protocol);
 
-    if(r=nr_socket_sendto(ctx->sock, ctx->request->buffer, ctx->request->length, 0, &ctx->peer_addr))
-      ABORT(r);
+    if(r=nr_socket_sendto(ctx->sock, ctx->request->buffer, ctx->request->length, 0, &ctx->peer_addr)) {
+      if (r != R_WOULDBLOCK) {
+        ABORT(r);
+      }
+      r_log(NR_LOG_STUN,LOG_WARNING,"STUN-CLIENT(%s): nr_socket_sendto blocked, treating as dropped packet",ctx->label);
+    }
 
     ctx->request_ct++;
 
@@ -460,9 +464,8 @@ int nr_stun_client_process_response(nr_stun_client_ctx *ctx, UCHAR *msg, int len
 
     ATTACH_DATA(hmac_key, hmac_key_d);
 
-    if(ctx->state==NR_STUN_CLIENT_STATE_CANCELLED)
-      ABORT(R_REJECTED);
-    if (ctx->state != NR_STUN_CLIENT_STATE_RUNNING)
+    if ((ctx->state != NR_STUN_CLIENT_STATE_RUNNING) &&
+        (ctx->state != NR_STUN_CLIENT_STATE_WAITING))
       ABORT(R_REJECTED);
 
     r_log(NR_LOG_STUN,LOG_DEBUG,"STUN-CLIENT(%s): Inspecting STUN response (my_addr=%s, peer_addr=%s)",ctx->label,ctx->my_addr.as_string,peer_addr->as_string);
@@ -750,7 +753,8 @@ int nr_stun_client_process_response(nr_stun_client_ctx *ctx, UCHAR *msg, int len
       r_log(NR_LOG_STUN,LOG_WARNING,"STUN-CLIENT(%s): Error processing response: %s, stun error code %d.", ctx->label, nr_strerror(_status), (int)ctx->error_code);
     }
 
-    if (ctx->state != NR_STUN_CLIENT_STATE_RUNNING) {
+    if ((ctx->state != NR_STUN_CLIENT_STATE_RUNNING) &&
+        (ctx->state != NR_STUN_CLIENT_STATE_WAITING)) {
         /* Cancel the timer firing */
         if (ctx->timer_handle) {
             NR_async_timer_cancel(ctx->timer_handle);
@@ -798,6 +802,17 @@ int nr_stun_client_cancel(nr_stun_client_ctx *ctx)
     return(0);
 }
 
+int nr_stun_client_wait(nr_stun_client_ctx *ctx)
+  {
+    nr_stun_client_cancel(ctx);
+    ctx->state=NR_STUN_CLIENT_STATE_WAITING;
+
+    ctx->request_ct = ctx->maximum_transmits;
+    ctx->timeout_ms = ctx->maximum_transmits_timeout_ms;
+    NR_ASYNC_TIMER_SET(ctx->timeout_ms, nr_stun_client_timer_expired_cb, ctx, &ctx->timer_handle);
+
+    return(0);
+  }
 
 int nr_stun_client_failed(nr_stun_client_ctx *ctx)
   {

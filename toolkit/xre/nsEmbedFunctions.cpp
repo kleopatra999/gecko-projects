@@ -476,18 +476,24 @@ XRE_InitChildProcess(int aArgc,
   nsQAppInstance::AddRef();
 #endif
 
-  if (PR_GetEnv("MOZ_DEBUG_CHILD_PROCESS")) {
 #ifdef OS_POSIX
-      printf("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n", getpid());
-      sleep(30);
-#elif defined(OS_WIN)
-      // Windows has a decent JIT debugging story, so NS_DebugBreak does the
-      // right thing.
-      NS_DebugBreak(NS_DEBUG_BREAK,
-                    "Invoking NS_DebugBreak() to debug child process",
-                    nullptr, __FILE__, __LINE__);
-#endif
+  if (PR_GetEnv("MOZ_DEBUG_CHILD_PROCESS") ||
+      PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE")) {
+    printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
+                  base::GetCurrentProcId());
+    sleep(30);
   }
+#elif defined(OS_WIN)
+  if (PR_GetEnv("MOZ_DEBUG_CHILD_PROCESS")) {
+    NS_DebugBreak(NS_DEBUG_BREAK,
+                  "Invoking NS_DebugBreak() to debug child process",
+                  nullptr, __FILE__, __LINE__);
+  } else if (PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE")) {
+    printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
+                  base::GetCurrentProcId());
+    ::Sleep(10000);
+  }
+#endif
 
   // child processes launched by GeckoChildProcessHost get this magic
   // argument appended to their command lines
@@ -606,6 +612,12 @@ XRE_InitChildProcess(int aArgc,
         return NS_ERROR_FAILURE;
       }
 
+#ifdef MOZ_CRASHREPORTER
+#if defined(XP_WIN) || defined(XP_MACOSX)
+      CrashReporter::InitChildProcessTmpDir();
+#endif
+#endif
+
 #if defined(XP_WIN)
       // Set child processes up such that they will get killed after the
       // chrome process is killed in cases where the user shuts the system
@@ -618,6 +630,8 @@ XRE_InitChildProcess(int aArgc,
       // InitLoggingIfRequired may need access to prefs.
       mozilla::sandboxing::InitLoggingIfRequired();
 #endif
+
+      OverrideDefaultLocaleIfNeeded();
 
       // Run the UI event loop on the main thread.
       uiMessageLoop.MessageLoop::Run();

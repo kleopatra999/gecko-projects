@@ -258,7 +258,7 @@ var WindowWatcher = {
     do_check_eq(url, URI_EXTENSION_BLOCKLIST_DIALOG);
     do_check_neq(gCallback, null);
 
-    var args = args.wrappedJSObject;
+    args = args.wrappedJSObject;
 
     gNewBlocks = [];
     var list = args.list;
@@ -303,10 +303,10 @@ function create_addon(addon) {
   target.append("extensions");
   target.append(addon.id);
   target.append("install.rdf");
-  target.create(target.NORMAL_FILE_TYPE, 0644);
+  target.create(target.NORMAL_FILE_TYPE, 0o644);
   var stream = Components.classes["@mozilla.org/network/file-output-stream;1"]
                          .createInstance(Ci.nsIFileOutputStream);
-  stream.init(target, 0x04 | 0x08 | 0x20, 0664, 0); // write, create, truncate
+  stream.init(target, 0x04 | 0x08 | 0x20, 0o664, 0); // write, create, truncate
   stream.write(installrdf, installrdf.length);
   stream.close();
 }

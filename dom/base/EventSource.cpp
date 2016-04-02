@@ -12,6 +12,7 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/EventSourceBinding.h"
 #include "mozilla/dom/MessageEvent.h"
+#include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
 
 #include "nsNetUtil.h"
@@ -58,7 +59,7 @@ namespace dom {
 #define DEFAULT_RECONNECTION_TIME_VALUE   5000
 #define MAX_RECONNECTION_TIME_VALUE       PR_IntervalToMilliseconds(DELAY_INTERVAL_LIMIT)
 
-EventSource::EventSource(nsPIDOMWindow* aOwnerWindow) :
+EventSource::EventSource(nsPIDOMWindowInner* aOwnerWindow) :
   DOMEventTargetHelper(aOwnerWindow),
   mStatus(PARSE_STATE_OFF),
   mFrozen(false),
@@ -280,7 +281,7 @@ EventSource::Constructor(const GlobalObject& aGlobal,
                          const EventSourceInit& aEventSourceInitDict,
                          ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> ownerWindow =
+  nsCOMPtr<nsPIDOMWindowInner> ownerWindow =
     do_QueryInterface(aGlobal.GetAsSupports());
   if (!ownerWindow) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
@@ -307,7 +308,7 @@ EventSource::Observe(nsISupports* aSubject,
     return NS_OK;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aSubject);
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aSubject);
   if (!GetOwner() || window != GetOwner()) {
     return NS_OK;
   }
@@ -564,7 +565,7 @@ EventSource::GetInterface(const nsIID & aIID,
     // Get the an auth prompter for our window so that the parenting
     // of the dialogs works as it should when using tabs.
 
-    nsCOMPtr<nsIDOMWindow> window;
+    nsCOMPtr<nsPIDOMWindowOuter> window;
     if (GetOwner()) {
       window = GetOwner()->GetOuterWindow();
     }
@@ -678,7 +679,7 @@ EventSource::InitChannelAndRequestEventSource()
     nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS;
 
   if (mWithCredentials) {
-    securityFlags |= nsILoadInfo::SEC_REQUIRE_CORS_WITH_CREDENTIALS;
+    securityFlags |= nsILoadInfo::SEC_COOKIES_INCLUDE;
   }
 
   nsCOMPtr<nsIChannel> channel;
@@ -757,12 +758,7 @@ EventSource::AnnounceConnection()
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
   // it doesn't bubble, and it isn't cancelable
-  rv = event->InitEvent(NS_LITERAL_STRING("open"), false, false);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the open event!!!");
-    return;
-  }
-
+  event->InitEvent(NS_LITERAL_STRING("open"), false, false);
   event->SetTrusted(true);
 
   rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -813,12 +809,7 @@ EventSource::ReestablishConnection()
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
   // it doesn't bubble, and it isn't cancelable
-  rv = event->InitEvent(NS_LITERAL_STRING("error"), false, false);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the error event!!!");
-    return;
-  }
-
+  event->InitEvent(NS_LITERAL_STRING("error"), false, false);
   event->SetTrusted(true);
 
   rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -964,12 +955,7 @@ EventSource::FailConnection()
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
   // it doesn't bubble, and it isn't cancelable
-  rv = event->InitEvent(NS_LITERAL_STRING("error"), false, false);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the error event!!!");
-    return;
-  }
-
+  event->InitEvent(NS_LITERAL_STRING("error"), false, false);
   event->SetTrusted(true);
 
   rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -1066,7 +1052,7 @@ EventSource::DispatchCurrentMessageEvent()
     message->mLastEventID.Assign(mLastEventID);
   }
 
-  int32_t sizeBefore = mMessagesToDispatch.GetSize();
+  size_t sizeBefore = mMessagesToDispatch.GetSize();
   mMessagesToDispatch.Push(message.forget());
   NS_ENSURE_TRUE(mMessagesToDispatch.GetSize() == sizeBefore + 1,
                  NS_ERROR_OUT_OF_MEMORY);
@@ -1127,13 +1113,8 @@ EventSource::DispatchAllMessageEvents()
     RefPtr<MessageEvent> event =
       NS_NewDOMMessageEvent(this, nullptr, nullptr);
 
-    rv = event->InitMessageEvent(message->mEventName, false, false, jsData,
-                                 mOrigin, message->mLastEventID, nullptr);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("Failed to init the message event!!!");
-      return;
-    }
-
+    event->InitMessageEvent(nullptr, message->mEventName, false, false, jsData,
+                            mOrigin, message->mLastEventID, nullptr, nullptr);
     event->SetTrusted(true);
 
     rv = DispatchDOMEvent(nullptr, static_cast<Event*>(event), nullptr,

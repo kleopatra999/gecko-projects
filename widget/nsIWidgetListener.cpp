@@ -55,6 +55,11 @@ nsIWidgetListener::SizeModeChanged(nsSizeMode aSizeMode)
 }
 
 void
+nsIWidgetListener::UIResolutionChanged()
+{
+}
+
+void
 nsIWidgetListener::FullscreenChanged(bool aInFullscreen)
 {
 }
@@ -96,7 +101,7 @@ nsIWidgetListener::WillPaintWindow(nsIWidget* aWidget)
 
 bool
 nsIWidgetListener::PaintWindow(nsIWidget* aWidget,
-                               nsIntRegion aRegion)
+                               LayoutDeviceIntRegion aRegion)
 {
   return false;
 }

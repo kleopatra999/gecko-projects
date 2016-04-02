@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Hitting ESC to open the split console when paused on reload should not stop
@@ -18,6 +20,7 @@ function* runTests() {
   let frames = dbgWin.DebuggerView.StackFrames;
   let toolbox = gDevTools.getToolbox(panel.target);
 
+  yield waitForSourceShown(panel, ".html");
   yield panel.addBreakpoint({ actor: getSourceActor(sources, TAB_URL), line: 16 });
   info("Breakpoint was set.");
   dbgWin.DebuggerController._target.activeTab.reload();

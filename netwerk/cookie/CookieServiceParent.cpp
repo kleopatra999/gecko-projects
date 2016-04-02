@@ -10,6 +10,7 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsCookieService.h"
+#include "nsIChannel.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIPrivateBrowsingChannel.h"
 #include "nsNetCID.h"
@@ -18,7 +19,8 @@
 
 using namespace mozilla::ipc;
 using mozilla::BasePrincipal;
-using mozilla::OriginAttributes;
+using mozilla::NeckoOriginAttributes;
+using mozilla::PrincipalOriginAttributes;
 using mozilla::dom::PContentParent;
 using mozilla::net::NeckoParent;
 
@@ -27,13 +29,16 @@ namespace {
 // Ignore failures from this function, as they only affect whether we do or
 // don't show a dialog box in private browsing mode if the user sets a pref.
 void
-CreateDummyChannel(nsIURI* aHostURI, OriginAttributes &aAttrs, bool aIsPrivate,
-                   nsIChannel **aChannel)
+CreateDummyChannel(nsIURI* aHostURI, NeckoOriginAttributes& aAttrs, bool aIsPrivate,
+                   nsIChannel** aChannel)
 {
   MOZ_ASSERT(aAttrs.mAppId != nsIScriptSecurityManager::UNKNOWN_APP_ID);
 
+  PrincipalOriginAttributes attrs;
+  attrs.InheritFromNecko(aAttrs);
+
   nsCOMPtr<nsIPrincipal> principal =
-    BasePrincipal::CreateCodebasePrincipal(aHostURI, aAttrs);
+    BasePrincipal::CreateCodebasePrincipal(aHostURI, attrs);
   if (!principal) {
     return;
   }
@@ -44,9 +49,12 @@ CreateDummyChannel(nsIURI* aHostURI, OriginAttributes &aAttrs, bool aIsPrivate,
       return;
   }
 
+  // The following channel is never openend, so it does not matter what
+  // securityFlags we pass; let's follow the principle of least privilege.
   nsCOMPtr<nsIChannel> dummyChannel;
   NS_NewChannel(getter_AddRefs(dummyChannel), dummyURI, principal,
-                nsILoadInfo::SEC_NORMAL, nsIContentPolicy::TYPE_INVALID);
+                nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
+                nsIContentPolicy::TYPE_INVALID);
   nsCOMPtr<nsIPrivateBrowsingChannel> pbChannel = do_QueryInterface(dummyChannel);
   if (!pbChannel) {
     return;
@@ -65,14 +73,15 @@ namespace net {
 MOZ_WARN_UNUSED_RESULT
 bool
 CookieServiceParent::GetOriginAttributesFromParams(const IPC::SerializedLoadContext &aLoadContext,
-                                                   OriginAttributes& aAttrs,
+                                                   NeckoOriginAttributes& aAttrs,
                                                    bool& aIsPrivate)
 {
   aIsPrivate = false;
 
+  DocShellOriginAttributes docShellAttrs;
   const char* error = NeckoParent::GetValidatedAppInfo(aLoadContext,
                                                        Manager()->Manager(),
-                                                       aAttrs);
+                                                       docShellAttrs);
   if (error) {
     NS_WARNING(nsPrintfCString("CookieServiceParent: GetOriginAttributesFromParams: "
                                "FATAL error: %s: KILLING CHILD PROCESS\n",
@@ -83,6 +92,8 @@ CookieServiceParent::GetOriginAttributesFromParams(const IPC::SerializedLoadCont
   if (aLoadContext.IsPrivateBitValid()) {
     aIsPrivate = aLoadContext.mUsePrivateBrowsing;
   }
+
+  aAttrs.InheritFromDocShellToNecko(docShellAttrs);
   return true;
 }
 
@@ -125,7 +136,7 @@ CookieServiceParent::RecvGetCookieString(const URIParams& aHost,
   if (!hostURI)
     return false;
 
-  OriginAttributes attrs;
+  NeckoOriginAttributes attrs;
   bool isPrivate;
   bool valid = GetOriginAttributesFromParams(aLoadContext, attrs, isPrivate);
   if (!valid) {
@@ -155,7 +166,7 @@ CookieServiceParent::RecvSetCookieString(const URIParams& aHost,
   if (!hostURI)
     return false;
 
-  OriginAttributes attrs;
+  NeckoOriginAttributes attrs;
   bool isPrivate;
   bool valid = GetOriginAttributesFromParams(aLoadContext, attrs, isPrivate);
   if (!valid) {

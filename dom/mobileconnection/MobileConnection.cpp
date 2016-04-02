@@ -108,7 +108,8 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(MobileConnection, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(MobileConnection, DOMEventTargetHelper)
 
-MobileConnection::MobileConnection(nsPIDOMWindow* aWindow, uint32_t aClientId)
+MobileConnection::MobileConnection(nsPIDOMWindowInner* aWindow,
+                                   uint32_t aClientId)
   : DOMEventTargetHelper(aWindow)
   , mClientId(aClientId)
 {
@@ -1124,6 +1125,13 @@ MobileConnection::NotifyLastKnownHomeNetworkChanged()
 NS_IMETHODIMP
 MobileConnection::NotifyNetworkSelectionModeChanged()
 {
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+MobileConnection::NotifyDeviceIdentitiesChanged()
+{
+  // To be supported when bug 1222870 is required in m-c.
   return NS_OK;
 }
 

@@ -1,5 +1,5 @@
 // Enable signature checks for these tests
-Services.prefs.setBoolPref(PREF_XPI_SIGNATURES_REQUIRED, true);
+gUseRealCertChecks = true;
 // Disable update security
 Services.prefs.setBoolPref(PREF_EM_CHECK_UPDATE_SECURITY, false);
 
@@ -15,7 +15,6 @@ const ADDONS = {
 const WORKING = "signed_bootstrap_1.xpi";
 const ID = "test@tests.mozilla.org";
 
-Components.utils.import("resource://testing-common/httpd.js");
 var gServer = createHttpServer(4444);
 
 // Creates an add-on with a broken signature by changing an existing file

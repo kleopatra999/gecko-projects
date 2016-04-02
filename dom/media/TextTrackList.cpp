@@ -23,12 +23,12 @@ NS_IMPL_RELEASE_INHERITED(TextTrackList, DOMEventTargetHelper)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TextTrackList)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-TextTrackList::TextTrackList(nsPIDOMWindow* aOwnerWindow)
+TextTrackList::TextTrackList(nsPIDOMWindowInner* aOwnerWindow)
   : DOMEventTargetHelper(aOwnerWindow)
 {
 }
 
-TextTrackList::TextTrackList(nsPIDOMWindow* aOwnerWindow,
+TextTrackList::TextTrackList(nsPIDOMWindowInner* aOwnerWindow,
                              TextTrackManager* aTextTrackManager)
  : DOMEventTargetHelper(aOwnerWindow)
  , mTextTrackManager(aTextTrackManager)
@@ -165,12 +165,7 @@ TextTrackList::CreateAndDispatchChangeEvent()
 {
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
-  nsresult rv = event->InitEvent(NS_LITERAL_STRING("change"), false, false);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the change event!");
-    return;
-  }
-
+  event->InitEvent(NS_LITERAL_STRING("change"), false, false);
   event->SetTrusted(true);
 
   nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);

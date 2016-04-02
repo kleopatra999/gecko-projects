@@ -4,14 +4,18 @@
 "use strict";
 
 var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
-var { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-var { gDevTools } = Cu.import("resource://devtools/client/framework/gDevTools.jsm", {});
 var { console } = Cu.import("resource://gre/modules/Console.jsm", {});
 var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+
+var Services = require("Services");
+var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+DevToolsUtils.testing = true;
+DevToolsUtils.dumpn.wantLogging = true;
+DevToolsUtils.dumpv.wantVerbose = false;
+
 var { OS } = require("resource://gre/modules/osfile.jsm");
 var { FileUtils } = require("resource://gre/modules/FileUtils.jsm");
 var { TargetFactory } = require("devtools/client/framework/target");
-var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var promise = require("promise");
 var { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 var { expectState } = require("devtools/server/actors/common");
@@ -19,9 +23,12 @@ var HeapSnapshotFileUtils = require("devtools/shared/heapsnapshot/HeapSnapshotFi
 var HeapAnalysesClient = require("devtools/shared/heapsnapshot/HeapAnalysesClient");
 var { addDebuggerToGlobal } = require("resource://gre/modules/jsdebugger.jsm");
 var Store = require("devtools/client/memory/store");
+var { L10N } = require("devtools/client/memory/utils");
 var SYSTEM_PRINCIPAL = Cc["@mozilla.org/systemprincipal;1"].createInstance(Ci.nsIPrincipal);
 
-DevToolsUtils.testing = true;
+function dumpn(msg) {
+  dump(`MEMORY-TEST: ${msg}\n`);
+}
 
 function initDebugger () {
   let global = new Cu.Sandbox(SYSTEM_PRINCIPAL, { freshZone: true });
@@ -55,42 +62,6 @@ StubbedMemoryFront.prototype.stopRecordingAllocations = expectState("attached", 
   this.recordingAllocations = false;
 }));
 
-function waitUntilState (store, predicate) {
-  let deferred = promise.defer();
-  let unsubscribe = store.subscribe(check);
-
-  function check () {
-    if (predicate(store.getState())) {
-      unsubscribe();
-      deferred.resolve()
-    }
-  }
-
-  // Fire the check immediately incase the action has already occurred
-  check();
-
-  return deferred.promise;
-}
-
-function waitUntilAction (store, actionType) {
-  let deferred = promise.defer();
-  let unsubscribe = store.subscribe(check);
-  let history = store.history;
-  let index = history.length;
-
-  do_print(`Waiting for action "${actionType}"`);
-  function check () {
-    let action = history[index++];
-    if (action && action.type === actionType) {
-      do_print(`Found action "${actionType}"`);
-      unsubscribe();
-      deferred.resolve(store.getState());
-    }
-  }
-
-  return deferred.promise;
-}
-
 function waitUntilSnapshotState (store, expected) {
   let predicate = () => {
     let snapshots = store.getState().snapshots;
@@ -100,24 +71,6 @@ function waitUntilSnapshotState (store, expected) {
   };
   do_print(`Waiting for snapshots to be of state: ${expected}`);
   return waitUntilState(store, predicate);
-}
-
-function isBreakdownType (census, type) {
-  // Little sanity check, all censuses should have atleast a children array
-  if (!census || !Array.isArray(census.children)) {
-    return false;
-  }
-  switch (type) {
-    case "coarseType":
-      return census.children.find(c => c.name === "objects");
-    case "objectClass":
-      return census.children.find(c => c.name === "Function");
-    case "internalType":
-      return census.children.find(c => c.name === "js::BaseShape") &&
-             !census.children.find(c => c.name === "objects");
-    default:
-      throw new Error(`isBreakdownType does not yet support ${type}`);
-  }
 }
 
 function *createTempFile () {

@@ -7,12 +7,13 @@
 const {Cu, Ci} = require("chrome");
 
 const promise = require("promise");
+
+loader.lazyGetter(this, "system", () => require("devtools/shared/system"));
 loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
 loader.lazyGetter(this, "AutocompletePopup", () => require("devtools/client/shared/autocomplete-popup").AutocompletePopup);
 
 // Maximum number of selector suggestions shown in the panel.
 const MAX_SUGGESTIONS = 15;
-
 
 /**
  * Converts any input field into a document search box.
@@ -107,8 +108,12 @@ InspectorSearch.prototype = {
       this.searchBox.setAttribute("filled", true);
     }
     if (event.keyCode === event.DOM_VK_RETURN) {
-      this._onSearch();
-    } if (event.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_G && event.metaKey) {
+      this._onSearch(event.shiftKey);
+    }
+
+    const modifierKey = system.constants.platform === "macosx" ? event.metaKey :
+event.ctrlKey;
+    if (event.keyCode === Ci.nsIDOMKeyEvent.DOM_VK_G && modifierKey) {
       this._onSearch(event.shiftKey);
       event.preventDefault();
     }
@@ -390,19 +395,20 @@ SelectorAutocompleter.prototype = {
     let items = [];
 
     for (let [value, /*count*/, state] of list) {
-      // for cases like 'div ' or 'div >' or 'div+'
       if (query.match(/[\s>+]$/)) {
+        // for cases like 'div ' or 'div >' or 'div+'
         value = query + value;
-      }
-      // for cases like 'div #a' or 'div .a' or 'div > d' and likewise
-      else if (query.match(/[\s>+][\.#a-zA-Z][^\s>+\.#]*$/)) {
-        let lastPart = query.match(/[\s>+][\.#a-zA-Z][^>\s+\.#]*$/)[0];
+      } else if (query.match(/[\s>+][\.#a-zA-Z][^\s>+\.#\[]*$/)) {
+        // for cases like 'div #a' or 'div .a' or 'div > d' and likewise
+        let lastPart = query.match(/[\s>+][\.#a-zA-Z][^\s>+\.#\[]*$/)[0];
         value = query.slice(0, -1 * lastPart.length + 1) + value;
-      }
-      // for cases like 'div.class' or '#foo.bar' and likewise
-      else if (query.match(/[a-zA-Z][#\.][^#\.\s+>]*$/)) {
-        let lastPart = query.match(/[a-zA-Z][#\.][^#\.\s>+]*$/)[0];
+      } else if (query.match(/[a-zA-Z][#\.][^#\.\s+>]*$/)) {
+        // for cases like 'div.class' or '#foo.bar' and likewise
+        let lastPart = query.match(/[a-zA-Z][#\.][^#\.\s+>]*$/)[0];
         value = query.slice(0, -1 * lastPart.length + 1) + value;
+      } else if (query.match(/[a-zA-Z]\[[^\]]*\]?$/)) {
+        // for cases like 'div[foo=bar]' and likewise
+        value = query;
       }
 
       let item = {
@@ -456,6 +462,13 @@ SelectorAutocompleter.prototype = {
     let query = this.searchBox.value;
     let state = this.state;
     let firstPart = "";
+
+    if (query.endsWith("*")) {
+      // Hide the popup if the query ends with * because we don't want to
+      // suggest all nodes.
+      this.hidePopup();
+      return;
+    }
 
     if (state === this.States.TAG) {
       // gets the tag that is being completed. For ex. 'div.foo > s' returns 's',

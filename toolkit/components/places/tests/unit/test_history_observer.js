@@ -39,7 +39,7 @@ function onNotify(callback) {
 /**
  * Asynchronous task that adds a visit to the history database.
  */
-function task_add_visit(uri, timestamp, transition) {
+function* task_add_visit(uri, timestamp, transition) {
   uri = uri || NetUtil.newURI("http://firefox.com/");
   timestamp = timestamp || Date.now() * 1000;
   yield PlacesTestUtils.addVisits({
@@ -47,11 +47,7 @@ function task_add_visit(uri, timestamp, transition) {
     transition: transition || TRANSITION_TYPED,
     visitDate: timestamp
   });
-  throw new Task.Result([uri, timestamp]);
-}
-
-function run_test() {
-  run_next_test();
+  return [uri, timestamp];
 }
 
 add_task(function* test_onVisit() {
@@ -161,6 +157,7 @@ add_task(function* test_onPageChanged() {
   PlacesUtils.favicons.setAndFetchFaviconForPage(testuri, SMALLPNG_DATA_URI,
                                                  false,
                                                  PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
-                                                 null);
+                                                 null,
+                                                 Services.scriptSecurityManager.getSystemPrincipal());
   yield promiseNotify;
 });

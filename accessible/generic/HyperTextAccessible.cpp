@@ -284,7 +284,7 @@ HyperTextAccessible::DOMPointToOffset(nsINode* aNode, int32_t aNodeOffset,
       if (container) {
         TreeWalker walker(container, findNode->AsContent(),
                           TreeWalker::eWalkContextTree);
-        descendant = walker.NextChild();
+        descendant = walker.Next();
         if (!descendant)
           descendant = container;
       }
@@ -408,15 +408,23 @@ HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset)
   Accessible* child = GetChildAt(childIdx);
   int32_t innerOffset = aOffset - GetChildOffset(childIdx);
 
-  // A text leaf case. The point is inside the text node.
+  // A text leaf case.
   if (child->IsTextLeaf()) {
-    nsIContent* content = child->GetContent();
-    int32_t idx = 0;
-    if (NS_FAILED(RenderedToContentOffset(content->GetPrimaryFrame(),
-                                          innerOffset, &idx)))
-      return DOMPoint();
+    // The point is inside the text node. This is always true for any text leaf
+    // except a last child one. See assertion below.
+    if (aOffset < GetChildOffset(childIdx + 1)) {
+      nsIContent* content = child->GetContent();
+      int32_t idx = 0;
+      if (NS_FAILED(RenderedToContentOffset(content->GetPrimaryFrame(),
+                                            innerOffset, &idx)))
+        return DOMPoint();
 
-    return DOMPoint(content, idx);
+      return DOMPoint(content, idx);
+    }
+
+    // Set the DOM point right after the text node.
+    MOZ_ASSERT(static_cast<uint32_t>(aOffset) == CharacterCount());
+    innerOffset = 1;
   }
 
   // Case of embedded object. The point is either before or after the element.
@@ -1306,7 +1314,8 @@ HyperTextAccessible::GetEditor() const
   }
 
   nsCOMPtr<nsIDocShell> docShell = nsCoreUtils::GetDocShellFor(mContent);
-  nsCOMPtr<nsIEditingSession> editingSession(do_GetInterface(docShell));
+  nsCOMPtr<nsIEditingSession> editingSession;
+  docShell->GetEditingSession(getter_AddRefs(editingSession));
   if (!editingSession)
     return nullptr; // No editing session interface
 
@@ -1360,7 +1369,7 @@ HyperTextAccessible::SetSelectionRange(int32_t aStartPos, int32_t aEndPos)
     NS_ENSURE_TRUE(mDoc, NS_ERROR_FAILURE);
     nsIDocument* docNode = mDoc->DocumentNode();
     NS_ENSURE_TRUE(docNode, NS_ERROR_FAILURE);
-    nsCOMPtr<nsPIDOMWindow> window = docNode->GetWindow();
+    nsCOMPtr<nsPIDOMWindowOuter> window = docNode->GetWindow();
     nsCOMPtr<nsIDOMElement> result;
     DOMFocusManager->MoveFocus(window, nullptr, nsIFocusManager::MOVEFOCUS_CARET,
                                nsIFocusManager::FLAG_BYMOVEFOCUS, getter_AddRefs(result));
@@ -1466,7 +1475,7 @@ HyperTextAccessible::CaretLineNumber()
       break;
 
     // Add lines for the sibling frames before the caret
-    nsIFrame *sibling = parentFrame->GetFirstPrincipalChild();
+    nsIFrame *sibling = parentFrame->PrincipalChildList().FirstChild();
     while (sibling && sibling != caretFrame) {
       nsAutoLineIterator lineIterForSibling = sibling->GetLineIterator();
       if (lineIterForSibling) {
@@ -1494,34 +1503,34 @@ HyperTextAccessible::CaretLineNumber()
   return lineNumber;
 }
 
-nsIntRect
+LayoutDeviceIntRect
 HyperTextAccessible::GetCaretRect(nsIWidget** aWidget)
 {
   *aWidget = nullptr;
 
   RefPtr<nsCaret> caret = mDoc->PresShell()->GetCaret();
-  NS_ENSURE_TRUE(caret, nsIntRect());
+  NS_ENSURE_TRUE(caret, LayoutDeviceIntRect());
 
   bool isVisible = caret->IsVisible();
   if (!isVisible)
-    return nsIntRect();
+    return LayoutDeviceIntRect();
 
   nsRect rect;
   nsIFrame* frame = caret->GetGeometry(&rect);
   if (!frame || rect.IsEmpty())
-    return nsIntRect();
+    return LayoutDeviceIntRect();
 
   nsPoint offset;
   // Offset from widget origin to the frame origin, which includes chrome
   // on the widget.
   *aWidget = frame->GetNearestWidget(offset);
-  NS_ENSURE_TRUE(*aWidget, nsIntRect());
+  NS_ENSURE_TRUE(*aWidget, LayoutDeviceIntRect());
   rect.MoveBy(offset);
 
-  nsIntRect caretRect;
-  caretRect = rect.ToOutsidePixels(frame->PresContext()->AppUnitsPerDevPixel());
+  LayoutDeviceIntRect caretRect = LayoutDeviceIntRect::FromUnknownRect(
+    rect.ToOutsidePixels(frame->PresContext()->AppUnitsPerDevPixel()));
   // ((content screen origin) - (content offset in the widget)) = widget origin on the screen
-  caretRect.MoveBy((*aWidget)->WidgetToScreenOffsetUntyped() - (*aWidget)->GetClientOffset());
+  caretRect.MoveBy((*aWidget)->WidgetToScreenOffset() - (*aWidget)->GetClientOffset());
 
   // Correct for character size, so that caret always matches the size of
   // the character. This is important for font size transitions, and is
@@ -1769,7 +1778,7 @@ HyperTextAccessible::EnclosingRange(a11y::TextRange& aRange) const
 void
 HyperTextAccessible::SelectionRanges(nsTArray<a11y::TextRange>* aRanges) const
 {
-  NS_ASSERTION(aRanges->Length() != 0, "TextRange array supposed to be empty");
+  MOZ_ASSERT(aRanges->Length() == 0, "TextRange array supposed to be empty");
 
   dom::Selection* sel = DOMSelection();
   if (!sel)
@@ -1880,11 +1889,10 @@ HyperTextAccessible::NativeName(nsString& aName)
 }
 
 void
-HyperTextAccessible::InvalidateChildren()
+HyperTextAccessible::Shutdown()
 {
   mOffsets.Clear();
-
-  AccessibleWrap::InvalidateChildren();
+  AccessibleWrap::Shutdown();
 }
 
 bool
@@ -1935,31 +1943,6 @@ HyperTextAccessible::RelationByType(RelationType aType)
   return rel;
 }
 
-void
-HyperTextAccessible::CacheChildren()
-{
-  // Trailing HTML br element don't play any difference. We don't need to expose
-  // it to AT (see bug https://bugzilla.mozilla.org/show_bug.cgi?id=899433#c16
-  // for details).
-
-  TreeWalker walker(this, mContent);
-  Accessible* child = nullptr;
-  Accessible* lastChild = nullptr;
-  while ((child = walker.NextChild())) {
-    if (lastChild)
-      AppendChild(lastChild);
-
-    lastChild = child;
-  }
-
-  if (lastChild) {
-    if (lastChild->IsHTMLBr())
-      Document()->UnbindFromDocument(lastChild);
-    else
-      AppendChild(lastChild);
-  }
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // HyperTextAccessible public static
 
@@ -1985,7 +1968,8 @@ HyperTextAccessible::ContentToRenderedOffset(nsIFrame* aFrame, int32_t aContentO
                "Call on primary frame only");
 
   nsIFrame::RenderedText text = aFrame->GetRenderedText(aContentOffset,
-      aContentOffset + 1);
+      aContentOffset + 1, nsIFrame::TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
+      nsIFrame::TrailingWhitespace::DONT_TRIM_TRAILING_WHITESPACE);
   *aRenderedOffset = text.mOffsetWithinNodeRenderedText;
 
   return NS_OK;
@@ -2009,7 +1993,8 @@ HyperTextAccessible::RenderedToContentOffset(nsIFrame* aFrame, uint32_t aRendere
                "Call on primary frame only");
 
   nsIFrame::RenderedText text = aFrame->GetRenderedText(aRenderedOffset,
-      aRenderedOffset + 1, nsIFrame::TextOffsetType::OFFSETS_IN_RENDERED_TEXT);
+      aRenderedOffset + 1, nsIFrame::TextOffsetType::OFFSETS_IN_RENDERED_TEXT,
+      nsIFrame::TrailingWhitespace::DONT_TRIM_TRAILING_WHITESPACE);
   *aContentOffset = text.mOffsetWithinNodeText;
 
   return NS_OK;

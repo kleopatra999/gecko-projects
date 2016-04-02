@@ -5,8 +5,8 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
-#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/Version.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
@@ -26,6 +26,17 @@ using namespace clang;
 typedef std::unique_ptr<ASTConsumer> ASTConsumerPtr;
 #else
 typedef ASTConsumer *ASTConsumerPtr;
+#endif
+
+#ifndef HAVE_NEW_ASTMATCHER_NAMES
+// In clang 3.8, a number of AST matchers were renamed to better match the
+// respective AST node.  We use the new names, and #define them to the old
+// ones for compatibility with older versions.
+#define cxxConstructExpr constructExpr
+#define cxxConstructorDecl constructorDecl
+#define cxxMethodDecl methodDecl
+#define cxxNewExpr newExpr
+#define cxxRecordDecl recordDecl
 #endif
 
 namespace {
@@ -156,6 +167,7 @@ bool isInIgnoredNamespaceForImplicitCtor(const Decl *decl) {
          name == "__gnu_cxx" ||         // gnu C++ lib
          name == "boost" ||             // boost
          name == "webrtc" ||            // upstream webrtc
+         name == "rtc" ||               // upstream webrtc 'base' package
          name.substr(0, 4) == "icu_" || // icu
          name == "google" ||            // protobuf
          name == "google_breakpad" ||   // breakpad
@@ -376,6 +388,7 @@ public:
   void HandleUnusedExprResult(const Stmt *stmt) {
     const Expr *E = dyn_cast_or_null<Expr>(stmt);
     if (E) {
+      E = E->IgnoreImplicit(); // Ignore ExprWithCleanup etc. implicit wrappers
       QualType T = E->getType();
       if (MustUse.hasEffectiveAnnotation(T) && !isIgnoredExprForMustUse(E)) {
         unsigned errorID = Diag.getDiagnosticIDs()->getCustomDiagID(
@@ -533,7 +546,7 @@ bool isClassRefCounted(const CXXRecordDecl *D) {
 }
 
 bool isClassRefCounted(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
+  while (const clang::ArrayType *arrTy = T->getAsArrayTypeUnsafe())
     T = arrTy->getElementType();
   CXXRecordDecl *clazz = T->getAsCXXRecordDecl();
   return clazz ? isClassRefCounted(clazz) : false;
@@ -578,14 +591,14 @@ const FieldDecl *getBaseRefCntMember(const CXXRecordDecl *D) {
 }
 
 const FieldDecl *getBaseRefCntMember(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
+  while (const clang::ArrayType *arrTy = T->getAsArrayTypeUnsafe())
     T = arrTy->getElementType();
   CXXRecordDecl *clazz = T->getAsCXXRecordDecl();
   return clazz ? getBaseRefCntMember(clazz) : 0;
 }
 
 bool typeHasVTable(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
+  while (const clang::ArrayType *arrTy = T->getAsArrayTypeUnsafe())
     T = arrTy->getElementType();
   CXXRecordDecl *offender = T->getAsCXXRecordDecl();
   return offender && offender->hasDefinition() && offender->isDynamicClass();
@@ -818,7 +831,7 @@ CustomTypeAnnotation::directAnnotationReason(QualType T) {
   }
 
   // Check if we have a type which we can recurse into
-  if (const ArrayType *Array = T->getAsArrayTypeUnsafe()) {
+  if (const clang::ArrayType *Array = T->getAsArrayTypeUnsafe()) {
     if (hasEffectiveAnnotation(Array->getElementType())) {
       AnnotationReason Reason = {Array->getElementType(), RK_ArrayElement,
                                  nullptr};
@@ -892,7 +905,7 @@ bool isPlacementNew(const CXXNewExpr *Expr) {
 
 DiagnosticsMatcher::DiagnosticsMatcher() {
   astMatcher.addMatcher(varDecl().bind("node"), &scopeChecker);
-  astMatcher.addMatcher(newExpr().bind("node"), &scopeChecker);
+  astMatcher.addMatcher(cxxNewExpr().bind("node"), &scopeChecker);
   astMatcher.addMatcher(materializeTemporaryExpr().bind("node"), &scopeChecker);
   astMatcher.addMatcher(
       callExpr(callee(functionDecl(heapAllocator()))).bind("node"),
@@ -918,7 +931,7 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
           .bind("call"),
       &arithmeticArgChecker);
   astMatcher.addMatcher(
-      constructExpr(
+      cxxConstructExpr(
           allOf(hasDeclaration(noArithmeticExprInArgs()),
                 anyOf(hasDescendant(
                           binaryOperator(
@@ -937,7 +950,7 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
           .bind("call"),
       &arithmeticArgChecker);
 
-  astMatcher.addMatcher(recordDecl(hasTrivialCtorDtor()).bind("node"),
+  astMatcher.addMatcher(cxxRecordDecl(hasTrivialCtorDtor()).bind("node"),
                         &trivialCtorDtorChecker);
 
   astMatcher.addMatcher(
@@ -974,18 +987,19 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
   // lambda, where the declaration they reference is not inside the lambda.
   // This excludes arguments and local variables, leaving only captured
   // variables.
-  astMatcher.addMatcher(lambdaExpr().bind("lambda"), &refCountedInsideLambdaChecker);
+  astMatcher.addMatcher(lambdaExpr().bind("lambda"),
+                        &refCountedInsideLambdaChecker);
 
   // Older clang versions such as the ones used on the infra recognize these
   // conversions as 'operator _Bool', but newer clang versions recognize these
   // as 'operator bool'.
   astMatcher.addMatcher(
-      methodDecl(anyOf(hasName("operator bool"), hasName("operator _Bool")))
+      cxxMethodDecl(anyOf(hasName("operator bool"), hasName("operator _Bool")))
           .bind("node"),
       &explicitOperatorBoolChecker);
 
   astMatcher.addMatcher(
-      recordDecl(allOf(decl().bind("decl"), hasRefCntMember())),
+      cxxRecordDecl(allOf(decl().bind("decl"), hasRefCntMember())),
       &noDuplicateRefCntMemberChecker);
 
   astMatcher.addMatcher(
@@ -1003,24 +1017,26 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
           .bind("specialization"),
       &nonMemMovableChecker);
 
-  astMatcher.addMatcher(
-      constructorDecl(isInterestingImplicitCtor(),
-                      ofClass(allOf(isConcreteClass(), decl().bind("class"))),
-                      unless(isMarkedImplicit()))
-          .bind("ctor"),
-      &explicitImplicitChecker);
+  astMatcher.addMatcher(cxxConstructorDecl(isInterestingImplicitCtor(),
+                                           ofClass(allOf(isConcreteClass(),
+                                                         decl().bind("class"))),
+                                           unless(isMarkedImplicit()))
+                            .bind("ctor"),
+                        &explicitImplicitChecker);
 
   astMatcher.addMatcher(varDecl(hasType(autoNonAutoableType())).bind("node"),
                         &noAutoTypeChecker);
 
-  astMatcher.addMatcher(constructorDecl(isExplicitMoveConstructor()).bind("node"),
-                        &noExplicitMoveConstructorChecker);
+  astMatcher.addMatcher(
+      cxxConstructorDecl(isExplicitMoveConstructor()).bind("node"),
+      &noExplicitMoveConstructorChecker);
 
-  astMatcher.addMatcher(constructExpr(hasDeclaration(
-                                          constructorDecl(
-                                              isCompilerProvidedCopyConstructor(),
-                                              ofClass(hasRefCntMember())))).bind("node"),
-                        &refCountedCopyConstructorChecker);
+  astMatcher.addMatcher(
+      cxxConstructExpr(
+          hasDeclaration(cxxConstructorDecl(isCompilerProvidedCopyConstructor(),
+                                            ofClass(hasRefCntMember()))))
+          .bind("node"),
+      &refCountedCopyConstructorChecker);
 }
 
 // These enum variants determine whether an allocation has occured in the code.
@@ -1035,7 +1051,8 @@ enum AllocationVariety {
 // XXX Currently the Decl* in the AutomaticTemporaryMap is unused, but it
 // probably will be used at some point in the future, in order to produce better
 // error messages.
-typedef DenseMap<const MaterializeTemporaryExpr *, const Decl *> AutomaticTemporaryMap;
+typedef DenseMap<const MaterializeTemporaryExpr *, const Decl *>
+    AutomaticTemporaryMap;
 AutomaticTemporaryMap AutomaticTemporaries;
 
 void DiagnosticsMatcher::ScopeChecker::run(
@@ -1047,9 +1064,11 @@ void DiagnosticsMatcher::ScopeChecker::run(
   SourceLocation Loc;
   QualType T;
 
-  if (const ParmVarDecl *D = Result.Nodes.getNodeAs<ParmVarDecl>("parm_vardecl")) {
+  if (const ParmVarDecl *D =
+          Result.Nodes.getNodeAs<ParmVarDecl>("parm_vardecl")) {
     if (const Expr *Default = D->getDefaultArg()) {
-      if (const MaterializeTemporaryExpr *E = dyn_cast<MaterializeTemporaryExpr>(Default)) {
+      if (const MaterializeTemporaryExpr *E =
+              dyn_cast<MaterializeTemporaryExpr>(Default)) {
         // We have just found a ParmVarDecl which has, as its default argument,
         // a MaterializeTemporaryExpr. We mark that MaterializeTemporaryExpr as
         // automatic, by adding it to the AutomaticTemporaryMap.
@@ -1088,18 +1107,17 @@ void DiagnosticsMatcher::ScopeChecker::run(
     // XXX We maybe should mark these lifetimes as being due to a temporary
     // which has had its lifetime extended, to improve the error messages.
     switch (E->getStorageDuration()) {
-    case SD_FullExpression:
-      {
-        // Check if this temporary is allocated as a default argument!
-        // if it is, we want to pretend that it is automatic.
-        AutomaticTemporaryMap::iterator AutomaticTemporary = AutomaticTemporaries.find(E);
-        if (AutomaticTemporary != AutomaticTemporaries.end()) {
-          Variety = AV_Automatic;
-        } else {
-          Variety = AV_Temporary;
-        }
+    case SD_FullExpression: {
+      // Check if this temporary is allocated as a default argument!
+      // if it is, we want to pretend that it is automatic.
+      AutomaticTemporaryMap::iterator AutomaticTemporary =
+          AutomaticTemporaries.find(E);
+      if (AutomaticTemporary != AutomaticTemporaries.end()) {
+        Variety = AV_Automatic;
+      } else {
+        Variety = AV_Temporary;
       }
-      break;
+    } break;
     case SD_Automatic:
       Variety = AV_Automatic;
       break;
@@ -1164,8 +1182,8 @@ void DiagnosticsMatcher::ScopeChecker::run(
   case AV_Temporary:
     GlobalClass.reportErrorIfPresent(Diag, T, Loc, GlobalID, TemporaryNoteID);
     HeapClass.reportErrorIfPresent(Diag, T, Loc, HeapID, TemporaryNoteID);
-    NonTemporaryClass.reportErrorIfPresent(Diag, T, Loc,
-                                           NonTemporaryID, TemporaryNoteID);
+    NonTemporaryClass.reportErrorIfPresent(Diag, T, Loc, NonTemporaryID,
+                                           TemporaryNoteID);
     break;
 
   case AV_Heap:
@@ -1199,7 +1217,11 @@ void DiagnosticsMatcher::TrivialCtorDtorChecker::run(
       "class %0 must have trivial constructors and destructors");
   const CXXRecordDecl *node = Result.Nodes.getNodeAs<CXXRecordDecl>("node");
 
-  bool badCtor = !node->hasTrivialDefaultConstructor();
+  // We need to accept non-constexpr trivial constructors as well. This occurs
+  // when a struct contains pod members, which will not be initialized. As
+  // constexpr values are initialized, the constructor is non-constexpr.
+  bool badCtor = !(node->hasConstexprDefaultConstructor() ||
+                   node->hasTrivialDefaultConstructor());
   bool badDtor = !node->hasTrivialDestructor();
   if (badCtor || badDtor)
     Diag.Report(node->getLocStart(), errorID) << node;
@@ -1267,12 +1289,12 @@ void DiagnosticsMatcher::RefCountedInsideLambdaChecker::run(
   const LambdaExpr *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("lambda");
 
   for (const LambdaCapture Capture : Lambda->captures()) {
-    if (Capture.capturesVariable()) {
+    if (Capture.capturesVariable() && Capture.getCaptureKind() != LCK_ByRef) {
       QualType Pointee = Capture.getCapturedVar()->getType()->getPointeeType();
 
       if (!Pointee.isNull() && isClassRefCounted(Pointee)) {
-        Diag.Report(Capture.getLocation(), errorID)
-          << Capture.getCapturedVar() << Pointee;
+        Diag.Report(Capture.getLocation(), errorID) << Capture.getCapturedVar()
+                                                    << Pointee;
         Diag.Report(Capture.getLocation(), noteID);
       }
     }
@@ -1440,7 +1462,7 @@ void DiagnosticsMatcher::NoExplicitMoveConstructorChecker::run(
   // Everything we needed to know was checked in the matcher - we just report
   // the error here
   const CXXConstructorDecl *D =
-    Result.Nodes.getNodeAs<CXXConstructorDecl>("node");
+      Result.Nodes.getNodeAs<CXXConstructorDecl>("node");
 
   Diag.Report(D->getLocation(), ErrorID);
 }
@@ -1452,16 +1474,16 @@ void DiagnosticsMatcher::RefCountedCopyConstructorChecker::run(
       DiagnosticIDs::Error, "Invalid use of compiler-provided copy constructor "
                             "on refcounted type");
   unsigned NoteID = Diag.getDiagnosticIDs()->getCustomDiagID(
-      DiagnosticIDs::Note, "The default copy constructor also copies the "
-                           "default mRefCnt property, leading to reference "
-                           "count imbalance issues. Please provide your own "
-                           "copy constructor which only copies the fields which "
-                           "need to be copied");
+      DiagnosticIDs::Note,
+      "The default copy constructor also copies the "
+      "default mRefCnt property, leading to reference "
+      "count imbalance issues. Please provide your own "
+      "copy constructor which only copies the fields which "
+      "need to be copied");
 
   // Everything we needed to know was checked in the matcher - we just report
   // the error here
-  const CXXConstructExpr *E =
-    Result.Nodes.getNodeAs<CXXConstructExpr>("node");
+  const CXXConstructExpr *E = Result.Nodes.getNodeAs<CXXConstructExpr>("node");
 
   Diag.Report(E->getLocation(), ErrorID);
   Diag.Report(E->getLocation(), NoteID);
@@ -1496,3 +1518,7 @@ public:
 
 static FrontendPluginRegistry::Add<MozCheckAction> X("moz-check",
                                                      "check moz action");
+// Export the registry on Windows.
+#ifdef LLVM_EXPORT_REGISTRY
+LLVM_EXPORT_REGISTRY(FrontendPluginRegistry)
+#endif

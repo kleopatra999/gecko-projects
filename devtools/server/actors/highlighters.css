@@ -29,6 +29,10 @@
   display: none;
 }
 
+:-moz-native-anonymous .highlighter-container [dragging] {
+  cursor: grabbing;
+}
+
 /* Box model highlighter */
 
 :-moz-native-anonymous .box-model-regions {
@@ -97,6 +101,8 @@
 
   color: hsl(216,33%,97%);
   text-shadow: none;
+
+  border: 1px solid rgba(255,255,255,0.2);
 }
 
 :-moz-native-anonymous .box-model-nodeinfobar-container[hide-arrow] > .box-model-nodeinfobar {
@@ -106,26 +112,35 @@
 /* Arrows */
 
 :-moz-native-anonymous .box-model-nodeinfobar-container > .box-model-nodeinfobar:before {
+  left: calc(50% - 8px);
+  border: 8px solid rgba(255,255,255,0.2);
+}
+
+:-moz-native-anonymous .box-model-nodeinfobar-container > .box-model-nodeinfobar:after {
+  left: calc(50% - 7px);
+  border: 7px solid hsl(214,13%,24%);
+}
+
+:-moz-native-anonymous .box-model-nodeinfobar-container > .box-model-nodeinfobar:before,
+:-moz-native-anonymous .box-model-nodeinfobar-container > .box-model-nodeinfobar:after {
   content: "";
   display: none;
-
   position: absolute;
-  left: calc(50% - 8px);
-
   height: 0;
   width: 0;
-  border: 8px solid hsl(214,13%,24%);
   border-left-color: transparent;
   border-right-color: transparent;
 }
 
-:-moz-native-anonymous .box-model-nodeinfobar-container[position="top"]:not([hide-arrow]) > .box-model-nodeinfobar:before {
+:-moz-native-anonymous .box-model-nodeinfobar-container[position="top"]:not([hide-arrow]) > .box-model-nodeinfobar:before,
+:-moz-native-anonymous .box-model-nodeinfobar-container[position="top"]:not([hide-arrow]) > .box-model-nodeinfobar:after {
   border-bottom: 0;
   top: 100%;
   display: block;
 }
 
-:-moz-native-anonymous .box-model-nodeinfobar-container[position="bottom"]:not([hide-arrow]) > .box-model-nodeinfobar:before {
+:-moz-native-anonymous .box-model-nodeinfobar-container[position="bottom"]:not([hide-arrow]) > .box-model-nodeinfobar:before,
+:-moz-native-anonymous .box-model-nodeinfobar-container[position="bottom"]:not([hide-arrow]) > .box-model-nodeinfobar:after {
   border-top: 0;
   bottom: 100%;
   display: block;
@@ -196,6 +211,7 @@
   /* The geometry editor can be interacted with, so it needs to react to
      pointer events */
   pointer-events: auto;
+  -moz-user-select: none;
 }
 
 :-moz-native-anonymous .geometry-editor-offset-parent {
@@ -215,6 +231,35 @@
 :-moz-native-anonymous .geometry-editor-arrow {
   stroke: #08c;
   shape-rendering: crispEdges;
+}
+
+:-moz-native-anonymous .geometry-editor-root circle {
+  stroke: #08c;
+  fill: #87ceeb;
+}
+
+:-moz-native-anonymous .geometry-editor-handler-top,
+:-moz-native-anonymous .geometry-editor-handler-bottom {
+  cursor: ns-resize;
+}
+
+:-moz-native-anonymous .geometry-editor-handler-right,
+:-moz-native-anonymous .geometry-editor-handler-left {
+  cursor: ew-resize;
+}
+
+:-moz-native-anonymous [dragging] .geometry-editor-handler-top,
+:-moz-native-anonymous [dragging] .geometry-editor-handler-right,
+:-moz-native-anonymous [dragging] .geometry-editor-handler-bottom,
+:-moz-native-anonymous [dragging] .geometry-editor-handler-left {
+  cursor: grabbing;
+}
+
+:-moz-native-anonymous .geometry-editor-handler-top.dragging,
+:-moz-native-anonymous .geometry-editor-handler-right.dragging,
+:-moz-native-anonymous .geometry-editor-handler-bottom.dragging,
+:-moz-native-anonymous .geometry-editor-handler-left.dragging {
+  fill: #08c;
 }
 
 :-moz-native-anonymous .geometry-editor-label-bubble {

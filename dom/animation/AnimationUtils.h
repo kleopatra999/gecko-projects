@@ -9,17 +9,23 @@
 
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/Nullable.h"
+#include "nsStringFwd.h"
+
+class nsIContent;
+class nsIDocument;
+struct JSContext;
 
 namespace mozilla {
-namespace dom {
+
+class ComputedTimingFunction;
 
 class AnimationUtils
 {
 public:
-  static Nullable<double>
-    TimeDurationToDouble(const Nullable<TimeDuration>& aTime)
+  static dom::Nullable<double>
+  TimeDurationToDouble(const dom::Nullable<TimeDuration>& aTime)
   {
-    Nullable<double> result;
+    dom::Nullable<double> result;
 
     if (!aTime.IsNull()) {
       result.SetValue(aTime.Value().ToMilliseconds());
@@ -28,10 +34,10 @@ public:
     return result;
   }
 
-  static Nullable<TimeDuration>
-    DoubleToTimeDuration(const Nullable<double>& aTime)
+  static dom::Nullable<TimeDuration>
+  DoubleToTimeDuration(const dom::Nullable<double>& aTime)
   {
-    Nullable<TimeDuration> result;
+    dom::Nullable<TimeDuration> result;
 
     if (!aTime.IsNull()) {
       result.SetValue(TimeDuration::FromMilliseconds(aTime.Value()));
@@ -39,9 +45,25 @@ public:
 
     return result;
   }
+
+  static void LogAsyncAnimationFailure(nsCString& aMessage,
+                                       const nsIContent* aContent = nullptr);
+
+  /**
+   * Parses a CSS <single-transition-timing-function> value from
+   * aEasing into a ComputedTimingFunction.  If parsing fails, Nothing() will
+   * be returned.
+   */
+  static Maybe<ComputedTimingFunction>
+  ParseEasing(const nsAString& aEasing, nsIDocument* aDocument);
+
+  /**
+   * Get the document from the JS context to use when parsing CSS properties.
+   */
+  static nsIDocument*
+  GetCurrentRealmDocument(JSContext* aCx);
 };
 
-} // namespace dom
 } // namespace mozilla
 
 #endif

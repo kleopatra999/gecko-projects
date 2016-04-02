@@ -108,7 +108,6 @@ int nr_ice_fetch_stun_servers(int ct, nr_ice_stun_server **out)
       if(r=nr_ip4_port_to_transport_addr(ntohl(addr_int), port, IPPROTO_UDP,
         &servers[i].u.addr))
         ABORT(r);
-      servers[i].index=i;
       servers[i].type = NR_ICE_STUN_SERVER_TYPE_ADDR;
       RFREE(addr);
       addr=0;
@@ -299,8 +298,6 @@ int nr_ice_fetch_turn_servers(int ct, nr_ice_turn_server **out)
         data.data=0;
       }
 
-      servers[i].turn_server.index=i;
-
       RFREE(addr);
       addr=0;
     }
@@ -346,7 +343,7 @@ int nr_ice_ctx_create(char *label, UINT4 flags, nr_ice_ctx **ctxp)
     /* Get the STUN servers */
     if(r=NR_reg_get_child_count(NR_ICE_REG_STUN_SRV_PRFX,
       (unsigned int *)&ctx->stun_server_ct)||ctx->stun_server_ct==0) {
-      r_log(LOG_ICE,LOG_WARNING,"ICE(%s): No STUN servers specified", ctx->label);
+      r_log(LOG_ICE,LOG_DEBUG,"ICE(%s): No STUN servers specified in nICEr registry", ctx->label);
       ctx->stun_server_ct=0;
     }
 
@@ -368,7 +365,7 @@ int nr_ice_ctx_create(char *label, UINT4 flags, nr_ice_ctx **ctxp)
     /* Get the TURN servers */
     if(r=NR_reg_get_child_count(NR_ICE_REG_TURN_SRV_PRFX,
       (unsigned int *)&ctx->turn_server_ct)||ctx->turn_server_ct==0) {
-      r_log(LOG_ICE,LOG_NOTICE,"ICE(%s): No TURN servers specified", ctx->label);
+      r_log(LOG_ICE,LOG_DEBUG,"ICE(%s): No TURN servers specified in nICEr registry", ctx->label);
       ctx->turn_server_ct=0;
     }
 #else
@@ -418,7 +415,7 @@ int nr_ice_ctx_create(char *label, UINT4 flags, nr_ice_ctx **ctxp)
 
     _status=0;
   abort:
-    if(_status)
+    if(_status && ctx)
       nr_ice_ctx_destroy_cb(0,0,ctx);
 
     return(_status);
@@ -600,6 +597,8 @@ static int nr_ice_get_default_address(nr_ice_ctx *ctx, int ip_version, nr_transp
       ABORT(r);
     if ((r=nr_socket_getaddr(sock, addrp)))
       ABORT(r);
+
+    r_log(LOG_GENERIC, LOG_DEBUG, "Default address: %s", addrp->as_string);
 
     _status=0;
   abort:

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that grips are correctly applied to variables.
@@ -138,8 +140,8 @@ function test() {
 
     is([...variables].length, 0,
        "VariablesView should have been emptied.");
-    is(Cu.nondeterministicGetWeakMapKeys(variables._itemsByElement).length, 0,
-       "VariablesView _itemsByElement map has been emptied.");
+    is(ThreadSafeChromeUtils.nondeterministicGetWeakMapKeys(variables._itemsByElement).length,
+       0, "VariablesView _itemsByElement map has been emptied.");
     is(variables._currHierarchy.size, 0,
        "VariablesView _currHierarchy map has been emptied.");
     is(variables._list.children.length, 0,

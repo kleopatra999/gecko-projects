@@ -17,6 +17,7 @@
 #include "nsIIOService.h"
 #include "mozilla/Services.h"
 #include "nsNetCID.h"
+#include "nsServiceManagerUtils.h"
 
 class nsIURI;
 class nsIPrincipal;
@@ -42,10 +43,12 @@ class nsIRequestObserver;
 class nsIStreamListener;
 class nsIStreamLoader;
 class nsIStreamLoaderObserver;
+class nsIIncrementalStreamLoader;
+class nsIIncrementalStreamLoaderObserver;
 class nsIUnicharStreamLoader;
 class nsIUnicharStreamLoaderObserver;
 
-namespace mozilla { class OriginAttributes; }
+namespace mozilla { class NeckoOriginAttributes; }
 
 template <class> class nsCOMPtr;
 template <typename> struct already_AddRefed;
@@ -314,6 +317,14 @@ nsresult NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
                                           nsContentPolicyType aContentPolicyType,
                                           bool                aIsSrcdocChannel = false);
 
+nsresult
+NS_NewInputStreamChannelInternal(nsIChannel        **outChannel,
+                                 nsIURI             *aUri,
+                                 const nsAString    &aData,
+                                 const nsACString   &aContentType,
+                                 nsILoadInfo        *aLoadInfo,
+                                 bool                aIsSrcdocChannel = false);
+
 nsresult NS_NewInputStreamChannel(nsIChannel        **outChannel,
                                   nsIURI             *aUri,
                                   const nsAString    &aData,
@@ -368,6 +379,9 @@ nsresult NS_NewDownloader(nsIStreamListener   **result,
 nsresult NS_NewStreamLoader(nsIStreamLoader        **result,
                             nsIStreamLoaderObserver *observer,
                             nsIRequestObserver      *requestObserver = nullptr);
+
+nsresult NS_NewIncrementalStreamLoader(nsIIncrementalStreamLoader        **result,
+                                       nsIIncrementalStreamLoaderObserver *observer);
 
 nsresult NS_NewStreamLoaderInternal(nsIStreamLoader        **outStream,
                                     nsIURI                  *aUri,
@@ -567,8 +581,8 @@ nsresult NS_NewBufferedOutputStream(nsIOutputStream **result,
                                     uint32_t          bufferSize);
 
 /**
- * Attempts to buffer a given output stream.  If this fails, it returns the
- * passed-in output stream.
+ * Attempts to buffer a given stream.  If this fails, it returns the
+ * passed-in stream.
  *
  * @param aOutputStream
  *        The output stream we want to buffer.  This cannot be null.
@@ -579,6 +593,9 @@ nsresult NS_NewBufferedOutputStream(nsIOutputStream **result,
  */
 already_AddRefed<nsIOutputStream>
 NS_BufferOutputStream(nsIOutputStream *aOutputStream,
+                      uint32_t aBufferSize);
+already_AddRefed<nsIInputStream>
+NS_BufferInputStream(nsIInputStream *aInputStream,
                       uint32_t aBufferSize);
 
 // returns an input stream compatible with nsIUploadChannel::SetUploadStream()
@@ -681,10 +698,16 @@ NS_QueryNotificationCallbacks(nsIInterfaceRequestor  *callbacks,
 bool NS_UsePrivateBrowsing(nsIChannel *channel);
 
 /**
- * Extract the OriginAttributes from the channel's triggering principal.
+ * Extract the NeckoOriginAttributes from the channel's triggering principal.
  */
 bool NS_GetOriginAttributes(nsIChannel *aChannel,
-                            mozilla::OriginAttributes &aAttributes);
+                            mozilla::NeckoOriginAttributes &aAttributes);
+
+/**
+ * Returns true if the channel has visited any cross-origin URLs on any
+ * URLs that it was redirected through.
+ */
+bool NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport = false);
 
 // Constants duplicated from nsIScriptSecurityManager so we avoid having necko
 // know about script security manager.
@@ -694,12 +717,12 @@ bool NS_GetOriginAttributes(nsIChannel *aChannel,
 #define NECKO_SAFEBROWSING_APP_ID UINT32_MAX - 1
 
 /**
- * Gets AppId and isInBrowserElement from channel's nsILoadContext.
+ * Gets AppId and isInIsolatedMozBrowserElement from channel's nsILoadContext.
  * Returns false if error or channel's callbacks don't implement nsILoadContext.
  */
 bool NS_GetAppInfo(nsIChannel *aChannel,
                    uint32_t *aAppID,
-                   bool *aIsInBrowserElement);
+                   bool *aIsInIsolatedMozBrowserElement);
 
 /**
  *  Gets appId and browserOnly parameters from the TOPIC_WEB_APP_CLEAR_DATA
@@ -964,6 +987,22 @@ bool NS_IsReasonableHTTPHeaderValue(const nsACString &aValue);
  * 2.2.
  */
 bool NS_IsValidHTTPToken(const nsACString &aToken);
+
+/**
+ * Return true if the given request must be upgraded to HTTPS.
+ */
+nsresult NS_ShouldSecureUpgrade(nsIURI* aURI,
+                                nsILoadInfo* aLoadInfo,
+                                nsIPrincipal* aChannelResultPrincipal,
+                                bool aPrivateBrowsing,
+                                bool aAllowSTS,
+                                bool& aShouldUpgrade);
+
+/**
+ * Returns an https URI for channels that need to go through secure upgrades.
+ */
+nsresult NS_GetSecureUpgradedURI(nsIURI* aURI, nsIURI** aUpgradedURI);
+
 
 namespace mozilla {
 namespace net {

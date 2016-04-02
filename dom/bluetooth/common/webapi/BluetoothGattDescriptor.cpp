@@ -57,7 +57,7 @@ const uint16_t BluetoothGattDescriptor::sHandleCount = 1;
 
 // Constructor of BluetoothGattDescriptor in ATT client role
 BluetoothGattDescriptor::BluetoothGattDescriptor(
-  nsPIDOMWindow* aOwner,
+  nsPIDOMWindowInner* aOwner,
   BluetoothGattCharacteristic* aCharacteristic,
   const BluetoothGattId& aDescriptorId)
   : mOwner(aOwner)
@@ -80,7 +80,7 @@ BluetoothGattDescriptor::BluetoothGattDescriptor(
 
 // Constructor of BluetoothGattDescriptor in ATT server role
 BluetoothGattDescriptor::BluetoothGattDescriptor(
-  nsPIDOMWindow* aOwner,
+  nsPIDOMWindowInner* aOwner,
   BluetoothGattCharacteristic* aCharacteristic,
   const nsAString& aDescriptorUuid,
   const GattPermissions& aPermissions,
@@ -202,7 +202,7 @@ public:
 
     JSContext* cx = jsapi.cx();
     if (!ToJSValue(cx, v.get_ArrayOfuint8_t(), aValue)) {
-      JS_ClearPendingException(cx);
+      jsapi.ClearException();
       return false;
     }
 
@@ -232,6 +232,12 @@ BluetoothGattDescriptor::ReadValue(ErrorResult& aRv)
   RefPtr<Promise> promise = Promise::Create(global, aRv);
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
+  BluetoothUuid appUuid;
+  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(StringToUuid(
+                        mCharacteristic->Service()->GetAppUuid(), appUuid)),
+                        promise,
+                        NS_ERROR_DOM_OPERATION_ERR);
+
   if (mAttRole == ATT_SERVER_ROLE) {
     promise->MaybeResolve(mValue);
     return promise.forget();
@@ -241,7 +247,7 @@ BluetoothGattDescriptor::ReadValue(ErrorResult& aRv)
   BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   bs->GattClientReadDescriptorValueInternal(
-    mCharacteristic->Service()->GetAppUuid(),
+    appUuid,
     mCharacteristic->Service()->GetServiceId(),
     mCharacteristic->GetCharacteristicId(),
     mDescriptorId,
@@ -263,6 +269,12 @@ BluetoothGattDescriptor::WriteValue(
   RefPtr<Promise> promise = Promise::Create(global, aRv);
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
+  BluetoothUuid appUuid;
+  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(StringToUuid(
+                        mCharacteristic->Service()->GetAppUuid(), appUuid)),
+                        promise,
+                        NS_ERROR_DOM_OPERATION_ERR);
+
   aValue.ComputeLengthAndData();
 
   if (mAttRole == ATT_SERVER_ROLE) {
@@ -280,7 +292,7 @@ BluetoothGattDescriptor::WriteValue(
   BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   bs->GattClientWriteDescriptorValueInternal(
-    mCharacteristic->Service()->GetAppUuid(),
+    appUuid,
     mCharacteristic->Service()->GetServiceId(),
     mCharacteristic->GetCharacteristicId(),
     mDescriptorId,

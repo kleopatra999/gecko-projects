@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,28 +18,12 @@
 #include "mozilla/dom/Element.h"
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
-#include "RestyleManager.h"
+#include "nsCSSPseudoElements.h"
+#include "mozilla/RestyleManagerHandle.h"
+#include "mozilla/RestyleManagerHandleInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-namespace {
-
-PLDHashOperator
-ClearAttrCache(const nsAString& aKey, MiscContainer*& aValue, void*)
-{
-  // Ideally we'd just call MiscContainer::Evict, but we can't do that since
-  // we're iterating the hashtable.
-  MOZ_ASSERT(aValue->mType == nsAttrValue::eCSSDeclaration);
-
-  css::Declaration* declaration = aValue->mValue.mCSSDeclaration;
-  declaration->SetHTMLCSSStyleSheet(nullptr);
-  aValue->mValue.mCached = 0;
-
-  return PL_DHASH_REMOVE;
-}
-
-} // namespace
 
 nsHTMLCSSStyleSheet::nsHTMLCSSStyleSheet()
 {
@@ -48,7 +33,19 @@ nsHTMLCSSStyleSheet::~nsHTMLCSSStyleSheet()
 {
   // We may go away before all of our cached style attributes do,
   // so clean up any that are left.
-  mCachedStyleAttrs.Enumerate(ClearAttrCache, nullptr);
+  for (auto iter = mCachedStyleAttrs.Iter(); !iter.Done(); iter.Next()) {
+    MiscContainer*& value = iter.Data();
+
+    // Ideally we'd just call MiscContainer::Evict, but we can't do that since
+    // we're iterating the hashtable.
+    MOZ_ASSERT(value->mType == nsAttrValue::eCSSDeclaration);
+
+    css::Declaration* declaration = value->mValue.mCSSDeclaration;
+    declaration->SetHTMLCSSStyleSheet(nullptr);
+    value->mValue.mCached = 0;
+
+    iter.Remove();
+  }
 }
 
 NS_IMPL_ISUPPORTS(nsHTMLCSSStyleSheet, nsIStyleRuleProcessor)
@@ -74,7 +71,10 @@ nsHTMLCSSStyleSheet::ElementRulesMatching(nsPresContext* aPresContext,
 
   declaration = aElement->GetSMILOverrideStyleDeclaration();
   if (declaration) {
-    RestyleManager* restyleManager = aPresContext->RestyleManager();
+    MOZ_ASSERT(aPresContext->RestyleManager()->IsGecko(),
+               "stylo: ElementRulesMatching must not be called when we have "
+               "a Servo-backed style system");
+    RestyleManager* restyleManager = aPresContext->RestyleManager()->AsGecko();
     if (!restyleManager->SkipAnimationRules()) {
       // Animation restyle (or non-restyle traversal of rules)
       // Now we can walk SMIL overrride style, without triggering transitions.
@@ -86,7 +86,7 @@ nsHTMLCSSStyleSheet::ElementRulesMatching(nsPresContext* aPresContext,
 
 void
 nsHTMLCSSStyleSheet::PseudoElementRulesMatching(Element* aPseudoElement,
-                                                nsCSSPseudoElements::Type
+                                                CSSPseudoElementType
                                                   aPseudoType,
                                                 nsRuleWalker* aRuleWalker)
 {

@@ -20,7 +20,7 @@ using namespace android;
 
 namespace mozilla {
 
-extern PRLogModuleInfo* gMediaDecoderLog;
+extern LazyLogModule gMediaDecoderLog;
 #define DECODER_LOG(type, msg) MOZ_LOG(gMediaDecoderLog, type, msg)
 
 MediaOmxCommonDecoder::MediaOmxCommonDecoder(MediaDecoderOwner* aOwner)
@@ -80,10 +80,6 @@ MediaOmxCommonDecoder::FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (mShuttingDown) {
-    return;
-  }
-
   MediaDecoder::FirstFrameLoaded(aInfo, aEventVisibility);
 
   if (!CheckDecoderCanOffloadAudio()) {
@@ -131,13 +127,7 @@ MediaOmxCommonDecoder::PauseStateMachine()
   MOZ_ASSERT(NS_IsMainThread());
   DECODER_LOG(LogLevel::Debug, ("%s", __PRETTY_FUNCTION__));
 
-  if (mShuttingDown) {
-    return;
-  }
-
-  if (!GetStateMachine()) {
-    return;
-  }
+  MOZ_ASSERT(GetStateMachine());
   // enter dormant state
   GetStateMachine()->DispatchSetDormant(true);
 }

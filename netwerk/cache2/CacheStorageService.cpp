@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -53,7 +55,7 @@ typedef nsClassHashtable<nsCStringHashKey, CacheEntryTable>
 /**
  * Keeps tables of entries.  There is one entries table for each distinct load
  * context type.  The distinction is based on following load context info states:
- * <isPrivate|isAnon|appId|inBrowser> which builds a mapping key.
+ * <isPrivate|isAnon|appId|inIsolatedMozBrowser> which builds a mapping key.
  *
  * Thread-safe to access, protected by the service mutex.
  */
@@ -86,7 +88,7 @@ CacheStorageService::MemoryPool::~MemoryPool()
   }
 }
 
-uint32_t const
+uint32_t
 CacheStorageService::MemoryPool::Limit() const
 {
   switch (mType) {
@@ -237,8 +239,24 @@ private:
         return NS_ERROR_NOT_INITIALIZED;
 
       CacheEntryTable* entries;
-      if (sGlobalEntryTables->Get(mContextKey, &entries))
-        entries->EnumerateRead(&WalkMemoryCacheRunnable::WalkStorage, this);
+      if (sGlobalEntryTables->Get(mContextKey, &entries)) {
+        for (auto iter = entries->Iter(); !iter.Done(); iter.Next()) {
+          CacheEntry* entry = iter.UserData();
+
+          // Ignore disk entries
+          if (entry->IsUsingDisk()) {
+            continue;
+          }
+
+          mSize += entry->GetMetadataMemoryConsumption();
+
+          int64_t size;
+          if (NS_SUCCEEDED(entry->GetDataSize(&size))) {
+            mSize += size;
+          }
+          mEntryArray.AppendElement(entry);
+        }
+      }
 
       // Next, we dispatch to the main thread
     } else if (NS_IsMainThread()) {
@@ -285,28 +303,6 @@ private:
   {
     if (mCallback)
       ProxyReleaseMainThread(mCallback);
-  }
-
-  static PLDHashOperator
-  WalkStorage(const nsACString& aKey,
-              CacheEntry* aEntry,
-              void* aClosure)
-  {
-    WalkMemoryCacheRunnable* walker =
-      static_cast<WalkMemoryCacheRunnable*>(aClosure);
-
-    // Ignore disk entries
-    if (aEntry->IsUsingDisk())
-      return PL_DHASH_NEXT;
-
-    walker->mSize += aEntry->GetMetadataMemoryConsumption();
-
-    int64_t size;
-    if (NS_SUCCEEDED(aEntry->GetDataSize(&size)))
-      walker->mSize += size;
-
-    walker->mEntryArray.AppendElement(aEntry);
-    return PL_DHASH_NEXT;
   }
 
   virtual void OnEntryInfo(const nsACString & aURISpec, const nsACString & aIdEnhance,
@@ -424,7 +420,7 @@ private:
         }
 
         mPass = ITERATE_METADATA;
-        // no break
+        MOZ_FALLTHROUGH;
 
       case ITERATE_METADATA:
         // Now grab the context iterator.
@@ -505,29 +501,6 @@ private:
   uint32_t mCount;
 };
 
-PLDHashOperator CollectPrivateContexts(const nsACString& aKey,
-                                       CacheEntryTable* aTable,
-                                       void* aClosure)
-{
-  nsCOMPtr<nsILoadContextInfo> info = CacheFileUtils::ParseKey(aKey);
-  if (info && info->IsPrivate()) {
-    nsTArray<nsCString>* keys = static_cast<nsTArray<nsCString>*>(aClosure);
-    keys->AppendElement(aKey);
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-PLDHashOperator CollectContexts(const nsACString& aKey,
-                                       CacheEntryTable* aTable,
-                                       void* aClosure)
-{
-  nsTArray<nsCString>* keys = static_cast<nsTArray<nsCString>*>(aClosure);
-  keys->AppendElement(aKey);
-
-  return PL_DHASH_NEXT;
-}
-
 } // namespace
 
 void CacheStorageService::DropPrivateBrowsingEntries()
@@ -538,10 +511,17 @@ void CacheStorageService::DropPrivateBrowsingEntries()
     return;
 
   nsTArray<nsCString> keys;
-  sGlobalEntryTables->EnumerateRead(&CollectPrivateContexts, &keys);
+  for (auto iter = sGlobalEntryTables->Iter(); !iter.Done(); iter.Next()) {
+    const nsACString& key = iter.Key();
+    nsCOMPtr<nsILoadContextInfo> info = CacheFileUtils::ParseKey(key);
+    if (info && info->IsPrivate()) {
+      keys.AppendElement(key);
+    }
+  }
 
-  for (uint32_t i = 0; i < keys.Length(); ++i)
+  for (uint32_t i = 0; i < keys.Length(); ++i) {
     DoomStorageEntries(keys[i], nullptr, true, false, nullptr);
+  }
 }
 
 namespace {
@@ -789,10 +769,17 @@ NS_IMETHODIMP CacheStorageService::Clear()
     {
       mozilla::MutexAutoLock lock(mLock);
 
+      {
+        mozilla::MutexAutoLock forcedValidEntriesLock(mForcedValidEntriesLock);
+        mForcedValidEntries.Clear();
+      }
+
       NS_ENSURE_TRUE(!mShutdown, NS_ERROR_NOT_INITIALIZED);
 
       nsTArray<nsCString> keys;
-      sGlobalEntryTables->EnumerateRead(&CollectContexts, &keys);
+      for (auto iter = sGlobalEntryTables->Iter(); !iter.Done(); iter.Next()) {
+        keys.AppendElement(iter.Key());
+      }
 
       for (uint32_t i = 0; i < keys.Length(); ++i) {
         DoomStorageEntries(keys[i], nullptr, true, false, nullptr);
@@ -1039,7 +1026,7 @@ CacheStorageService::RemoveEntry(CacheEntry* aEntry, bool aOnlyUnreferenced)
       return false;
     }
 
-    if (!aEntry->IsUsingDisk() && IsForcedValidEntry(entryKey)) {
+    if (!aEntry->IsUsingDisk() && IsForcedValidEntry(aEntry->GetStorageID(), entryKey)) {
       LOG(("  forced valid, not removing"));
       return false;
     }
@@ -1112,13 +1099,19 @@ CacheStorageService::RecordMemoryOnlyEntry(CacheEntry* aEntry,
 
 // Checks if a cache entry is forced valid (will be loaded directly from cache
 // without further validation) - see nsICacheEntry.idl for further details
-bool CacheStorageService::IsForcedValidEntry(nsACString &aCacheEntryKey)
+bool CacheStorageService::IsForcedValidEntry(nsACString const &aContextKey,
+                                             nsACString const &aEntryKey)
+{
+  return IsForcedValidEntry(aContextKey + aEntryKey);
+}
+
+bool CacheStorageService::IsForcedValidEntry(nsACString const &aContextEntryKey)
 {
   mozilla::MutexAutoLock lock(mForcedValidEntriesLock);
 
   TimeStamp validUntil;
 
-  if (!mForcedValidEntries.Get(aCacheEntryKey, &validUntil)) {
+  if (!mForcedValidEntries.Get(aContextEntryKey, &validUntil)) {
     return false;
   }
 
@@ -1132,13 +1125,14 @@ bool CacheStorageService::IsForcedValidEntry(nsACString &aCacheEntryKey)
   }
 
   // Entry timeout has been reached
-  mForcedValidEntries.Remove(aCacheEntryKey);
+  mForcedValidEntries.Remove(aContextEntryKey);
   return false;
 }
 
 // Allows a cache entry to be loaded directly from cache without further
 // validation - see nsICacheEntry.idl for further details
-void CacheStorageService::ForceEntryValidFor(nsACString &aCacheEntryKey,
+void CacheStorageService::ForceEntryValidFor(nsACString const &aContextKey,
+                                             nsACString const &aEntryKey,
                                              uint32_t aSecondsToTheFuture)
 {
   mozilla::MutexAutoLock lock(mForcedValidEntriesLock);
@@ -1149,23 +1143,16 @@ void CacheStorageService::ForceEntryValidFor(nsACString &aCacheEntryKey,
   // This will be the timeout
   TimeStamp validUntil = now + TimeDuration::FromSeconds(aSecondsToTheFuture);
 
-  mForcedValidEntries.Put(aCacheEntryKey, validUntil);
+  mForcedValidEntries.Put(aContextKey + aEntryKey, validUntil);
 }
 
-namespace {
-
-PLDHashOperator PruneForcedValidEntries(
-  const nsACString& aKey, TimeStamp& aTimeStamp, void* aClosure)
+void CacheStorageService::RemoveEntryForceValid(nsACString const &aContextKey,
+                                                nsACString const &aEntryKey)
 {
-  TimeStamp* now = static_cast<TimeStamp*>(aClosure);
-  if (aTimeStamp < *now) {
-    return PL_DHASH_REMOVE;
-  }
+  mozilla::MutexAutoLock lock(mForcedValidEntriesLock);
 
-  return PL_DHASH_NEXT;
+  mForcedValidEntries.Remove(aContextKey + aEntryKey);
 }
-
-} // namespace
 
 // Cleans out the old entries in mForcedValidEntries
 void CacheStorageService::ForcedValidEntriesPrune(TimeStamp &now)
@@ -1175,7 +1162,11 @@ void CacheStorageService::ForcedValidEntriesPrune(TimeStamp &now)
   if (now < dontPruneUntil)
     return;
 
-  mForcedValidEntries.Enumerate(PruneForcedValidEntries, &now);
+  for (auto iter = mForcedValidEntries.Iter(); !iter.Done(); iter.Next()) {
+    if (iter.Data() < now) {
+      iter.Remove();
+    }
+  }
   dontPruneUntil = now + oneMinute;
 }
 
@@ -1267,6 +1258,16 @@ CacheStorageService::PurgeOverMemoryLimit()
   MOZ_ASSERT(IsOnManagementThread());
 
   LOG(("CacheStorageService::PurgeOverMemoryLimit"));
+
+  static TimeDuration const kFourSeconds = TimeDuration::FromSeconds(4);
+  TimeStamp now = TimeStamp::NowLoRes();
+
+  if (!mLastPurgeTime.IsNull() && now - mLastPurgeTime < kFourSeconds) {
+    LOG(("  bypassed, too soon"));
+    return;
+  }
+
+  mLastPurgeTime = now;
 
   Pool(true).PurgeOverMemoryLimit();
   Pool(false).PurgeOverMemoryLimit();
@@ -1397,7 +1398,6 @@ nsresult
 CacheStorageService::AddStorageEntry(CacheStorage const* aStorage,
                                      nsIURI* aURI,
                                      const nsACString & aIdExtension,
-                                     bool aCreateIfNotExist,
                                      bool aReplace,
                                      CacheEntryHandle** aResult)
 {
@@ -1412,7 +1412,7 @@ CacheStorageService::AddStorageEntry(CacheStorage const* aStorage,
                          aStorage->WriteToDisk(),
                          aStorage->SkipSizeCheck(),
                          aStorage->Pinning(),
-                         aCreateIfNotExist, aReplace,
+                         aReplace,
                          aResult);
 }
 
@@ -1423,7 +1423,6 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
                                      bool aWriteToDisk,
                                      bool aSkipSizeCheck,
                                      bool aPin,
-                                     bool aCreateIfNotExist,
                                      bool aReplace,
                                      CacheEntryHandle** aResult)
 {
@@ -1459,7 +1458,7 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
     if (entryExists && !aReplace) {
       // check whether we want to turn this entry to a memory-only.
       if (MOZ_UNLIKELY(!aWriteToDisk) && MOZ_LIKELY(entry->IsUsingDisk())) {
-        LOG(("  entry is persistnet but we want mem-only, replacing it"));
+        LOG(("  entry is persistent but we want mem-only, replacing it"));
         aReplace = true;
       }
     }
@@ -1476,10 +1475,20 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
 
       entry = nullptr;
       entryExists = false;
+
+      // Would only lead to deleting force-valid timestamp again.  We don't need the
+      // replace information anymore after this point anyway.
+      aReplace = false;
     }
 
-    // Ensure entry for the particular URL, if not read/only
-    if (!entryExists && (aCreateIfNotExist || aReplace)) {
+    // Ensure entry for the particular URL
+    if (!entryExists) {
+      // When replacing with a new entry, always remove the current force-valid timestamp,
+      // this is the only place to do it.
+      if (aReplace) {
+        RemoveEntryForceValid(aContextKey, entryKey);
+      }
+
       // Entry is not in the hashtable or has just been truncated...
       entry = new CacheEntry(aContextKey, aURI, aIdExtension, aWriteToDisk, aSkipSizeCheck, aPin);
       entries->Put(entryKey, entry);
@@ -1658,6 +1667,10 @@ CacheStorageService::DoomStorageEntry(CacheStorage const* aStorage,
         }
       }
     }
+
+    if (!entry) {
+      RemoveEntryForceValid(contextKey, entryKey);
+    }
   }
 
   if (entry) {
@@ -1775,12 +1788,30 @@ CacheStorageService::DoomStorageEntries(nsCSubstring const& aContextKey,
     sGlobalEntryTables->RemoveAndForget(memoryStorageID, memoryEntries);
 
     CacheEntryTable* diskEntries;
-    sGlobalEntryTables->Get(aContextKey, &diskEntries);
-    if (memoryEntries && diskEntries) {
+    if (memoryEntries && sGlobalEntryTables->Get(aContextKey, &diskEntries)) {
       for (auto iter = memoryEntries->Iter(); !iter.Done(); iter.Next()) {
         auto entry = iter.Data();
         RemoveExactEntry(diskEntries, iter.Key(), entry, false);
       }
+    }
+  }
+
+  {
+    mozilla::MutexAutoLock lock(mForcedValidEntriesLock);
+
+    if (aContext) {
+      for (auto iter = mForcedValidEntries.Iter(); !iter.Done(); iter.Next()) {
+        bool matches;
+        DebugOnly<nsresult> rv = CacheFileUtils::KeyMatchesLoadContextInfo(
+          iter.Key(), aContext, &matches);
+        MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+        if (matches) {
+          iter.Remove();
+        }
+      }
+    } else {
+      mForcedValidEntries.Clear();
     }
   }
 
@@ -1844,24 +1875,28 @@ CacheStorageService::CacheFileDoomed(nsILoadContextInfo* aLoadContextInfo,
 
   mozilla::MutexAutoLock lock(mLock);
 
-  if (mShutdown)
+  if (mShutdown) {
     return;
+  }
 
   CacheEntryTable* entries;
-  if (!sGlobalEntryTables->Get(contextKey, &entries))
-    return;
-
   RefPtr<CacheEntry> entry;
-  if (!entries->Get(entryKey, getter_AddRefs(entry)))
-    return;
 
-  if (!entry->IsFileDoomed())
-    return;
+  if (sGlobalEntryTables->Get(contextKey, &entries) &&
+      entries->Get(entryKey, getter_AddRefs(entry))) {
+    if (entry->IsFileDoomed()) {
+      // Need to remove under the lock to avoid possible race leading
+      // to duplication of the entry per its key.
+      RemoveExactEntry(entries, entryKey, entry, false);
+      entry->DoomAlreadyRemoved();
+    }
 
-  // Need to remove under the lock to avoid possible race leading
-  // to duplication of the entry per its key.
-  RemoveExactEntry(entries, entryKey, entry, false);
-  entry->DoomAlreadyRemoved();
+    // Entry found, but it's not the entry that has been found doomed
+    // by the lower eviction layer.  Just leave everything unchanged.
+    return;
+  }
+
+  RemoveEntryForceValid(contextKey, entryKey);
 }
 
 bool
@@ -1955,21 +1990,6 @@ bool TelemetryEntryKey(CacheEntry const* entry, nsAutoCString& key)
   return true;
 }
 
-PLDHashOperator PrunePurgeTimeStamps(
-  const nsACString& aKey, TimeStamp& aTimeStamp, void* aClosure)
-{
-  TimeStamp* now = static_cast<TimeStamp*>(aClosure);
-  static TimeDuration const fifteenMinutes = TimeDuration::FromSeconds(900);
-
-  if (*now - aTimeStamp > fifteenMinutes) {
-    // We are not interested in resurrection of entries after 15 minutes
-    // of time.  This is also the limit for the telemetry.
-    return PL_DHASH_REMOVE;
-  }
-
-  return PL_DHASH_NEXT;
-}
-
 } // namespace
 
 void
@@ -1980,7 +2000,14 @@ CacheStorageService::TelemetryPrune(TimeStamp &now)
   if (now < dontPruneUntil)
     return;
 
-  mPurgeTimeStamps.Enumerate(PrunePurgeTimeStamps, &now);
+  static TimeDuration const fifteenMinutes = TimeDuration::FromSeconds(900);
+  for (auto iter = mPurgeTimeStamps.Iter(); !iter.Done(); iter.Next()) {
+    if (now - iter.Data() > fifteenMinutes) {
+      // We are not interested in resurrection of entries after 15 minutes
+      // of time.  This is also the limit for the telemetry.
+      iter.Remove();
+    }
+  }
   dontPruneUntil = now + oneMinute;
 }
 
@@ -2066,57 +2093,6 @@ CacheStorageService::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) con
   return mallocSizeOf(this) + SizeOfExcludingThis(mallocSizeOf);
 }
 
-namespace {
-
-class ReportStorageMemoryData
-{
-public:
-  nsIMemoryReporterCallback *mHandleReport;
-  nsISupports *mData;
-};
-
-PLDHashOperator ReportStorageMemory(const nsACString& aKey,
-                                    CacheEntryTable* aTable,
-                                    void* aClosure)
-{
-  CacheStorageService::Self()->Lock().AssertCurrentThreadOwns();
-
-  size_t size = 0;
-  mozilla::MallocSizeOf mallocSizeOf = CacheStorageService::MallocSizeOf;
-
-  size += aTable->ShallowSizeOfIncludingThis(mallocSizeOf);
-  for (auto iter = aTable->Iter(); !iter.Done(); iter.Next()) {
-    size += iter.Key().SizeOfExcludingThisIfUnshared(mallocSizeOf);
-
-    // Bypass memory-only entries, those will be reported when iterating
-    // the memory only table. Memory-only entries are stored in both ALL_ENTRIES
-    // and MEMORY_ONLY hashtables.
-    RefPtr<mozilla::net::CacheEntry> const& entry = iter.Data();
-    if (aTable->Type() == CacheEntryTable::MEMORY_ONLY ||
-        entry->IsUsingDisk()) {
-      size += entry->SizeOfIncludingThis(mallocSizeOf);
-    }
-  }
-
-  ReportStorageMemoryData& data =
-    *static_cast<ReportStorageMemoryData*>(aClosure);
-  // These key names are not privacy-sensitive.
-  data.mHandleReport->Callback(
-    EmptyCString(),
-    nsPrintfCString("explicit/network/cache2/%s-storage(%s)",
-      aTable->Type() == CacheEntryTable::MEMORY_ONLY ? "memory" : "disk",
-      aKey.BeginReading()),
-    nsIMemoryReporter::KIND_HEAP,
-    nsIMemoryReporter::UNITS_BYTES,
-    size,
-    NS_LITERAL_CSTRING("Memory used by the cache storage."),
-    data.mData);
-
-  return PL_DHASH_NEXT;
-}
-
-} // namespace
-
 NS_IMETHODIMP
 CacheStorageService::CollectReports(nsIMemoryReporterCallback* aHandleReport,
                                     nsISupports* aData, bool aAnonymize)
@@ -2159,10 +2135,40 @@ CacheStorageService::CollectReports(nsIMemoryReporterCallback* aHandleReport,
   //   1 CacheFileOutputStream
   //   N CacheFileInputStream
   if (sGlobalEntryTables) {
-    ReportStorageMemoryData data;
-    data.mHandleReport = aHandleReport;
-    data.mData = aData;
-    sGlobalEntryTables->EnumerateRead(&ReportStorageMemory, &data);
+    for (auto iter1 = sGlobalEntryTables->Iter(); !iter1.Done(); iter1.Next()) {
+      CacheStorageService::Self()->Lock().AssertCurrentThreadOwns();
+
+      CacheEntryTable* table = iter1.UserData();
+
+      size_t size = 0;
+      mozilla::MallocSizeOf mallocSizeOf = CacheStorageService::MallocSizeOf;
+
+      size += table->ShallowSizeOfIncludingThis(mallocSizeOf);
+      for (auto iter2 = table->Iter(); !iter2.Done(); iter2.Next()) {
+        size += iter2.Key().SizeOfExcludingThisIfUnshared(mallocSizeOf);
+
+        // Bypass memory-only entries, those will be reported when iterating the
+        // memory only table. Memory-only entries are stored in both ALL_ENTRIES
+        // and MEMORY_ONLY hashtables.
+        RefPtr<mozilla::net::CacheEntry> const& entry = iter2.Data();
+        if (table->Type() == CacheEntryTable::MEMORY_ONLY ||
+            entry->IsUsingDisk()) {
+          size += entry->SizeOfIncludingThis(mallocSizeOf);
+        }
+      }
+
+      // These key names are not privacy-sensitive.
+      aHandleReport->Callback(
+        EmptyCString(),
+        nsPrintfCString("explicit/network/cache2/%s-storage(%s)",
+          table->Type() == CacheEntryTable::MEMORY_ONLY ? "memory" : "disk",
+          iter1.Key().BeginReading()),
+        nsIMemoryReporter::KIND_HEAP,
+        nsIMemoryReporter::UNITS_BYTES,
+        size,
+        NS_LITERAL_CSTRING("Memory used by the cache storage."),
+        aData);
+    }
   }
 
   return NS_OK;
@@ -2174,7 +2180,9 @@ NS_IMETHODIMP
 CacheStorageService::IOThreadSuspender::Run()
 {
   MonitorAutoLock mon(mMon);
-  mon.Wait();
+  while (!mSignaled) {
+    mon.Wait();
+  }
   return NS_OK;
 }
 
@@ -2182,6 +2190,7 @@ void
 CacheStorageService::IOThreadSuspender::Notify()
 {
   MonitorAutoLock mon(mMon);
+  mSignaled = true;
   mon.Notify();
 }
 

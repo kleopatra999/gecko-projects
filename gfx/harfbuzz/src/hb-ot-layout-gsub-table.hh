@@ -630,7 +630,7 @@ struct Ligature
     unsigned int total_component_count = 0;
 
     unsigned int match_length = 0;
-    unsigned int match_positions[MAX_CONTEXT_LENGTH];
+    unsigned int match_positions[HB_MAX_CONTEXT_LENGTH];
 
     if (likely (!match_input (c, count,
 			      &component[1],
@@ -970,7 +970,7 @@ struct ReverseChainSingleSubstFormat1
   inline bool apply (hb_apply_context_t *c) const
   {
     TRACE_APPLY (this);
-    if (unlikely (c->nesting_level_left != MAX_NESTING_LEVEL))
+    if (unlikely (c->nesting_level_left != HB_MAX_NESTING_LEVEL))
       return_trace (false); /* No chaining to this type */
 
     unsigned int index = (this+coverage).get_coverage (c->buffer->cur().codepoint);
@@ -1268,7 +1268,6 @@ struct GSUB : GSUBGPOS
   { return CastR<SubstLookup> (GSUBGPOS::get_lookup (i)); }
 
   static inline void substitute_start (hb_font_t *font, hb_buffer_t *buffer);
-  static inline void substitute_finish (hb_font_t *font, hb_buffer_t *buffer);
 
   inline bool sanitize (hb_sanitize_context_t *c) const
   {
@@ -1295,11 +1294,6 @@ GSUB::substitute_start (hb_font_t *font, hb_buffer_t *buffer)
     _hb_glyph_info_clear_lig_props (&buffer->info[i]);
     buffer->info[i].syllable() = 0;
   }
-}
-
-void
-GSUB::substitute_finish (hb_font_t *font HB_UNUSED, hb_buffer_t *buffer HB_UNUSED)
-{
 }
 
 

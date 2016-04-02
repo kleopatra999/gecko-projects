@@ -337,8 +337,8 @@ typedef JSString*
  * (e.g., the DOM attributes for a given node reflected as obj) on demand.
  *
  * JS looks for a property in an object, and if not found, tries to resolve
- * the given id. *resolvedp should be set to true iff the property was
- * was defined on |obj|.
+ * the given id. *resolvedp should be set to true iff the property was defined
+ * on |obj|.
  */
 typedef bool
 (* JSResolveOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
@@ -412,7 +412,7 @@ typedef bool
                      JS::MutableHandleObject objp, JS::MutableHandle<Shape*> propp);
 typedef bool
 (* DefinePropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                     JS::Handle<JSPropertyDescriptor> desc,
+                     JS::Handle<JS::PropertyDescriptor> desc,
                      JS::ObjectOpResult& result);
 typedef bool
 (* HasPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool* foundp);
@@ -424,7 +424,7 @@ typedef bool
                   JS::HandleValue receiver, JS::ObjectOpResult& result);
 typedef bool
 (* GetOwnPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                     JS::MutableHandle<JSPropertyDescriptor> desc);
+                     JS::MutableHandle<JS::PropertyDescriptor> desc);
 typedef bool
 (* DeletePropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
                      JS::ObjectOpResult& result);
@@ -629,23 +629,21 @@ inline ClassObjectCreationOp DELEGATED_CLASSSPEC(const ClassSpec* spec) {
 
 struct ObjectOps
 {
-    LookupPropertyOp    lookupProperty;
-    DefinePropertyOp    defineProperty;
-    HasPropertyOp       hasProperty;
-    GetPropertyOp       getProperty;
-    SetPropertyOp       setProperty;
-    GetOwnPropertyOp    getOwnPropertyDescriptor;
-    DeletePropertyOp    deleteProperty;
-    WatchOp             watch;
-    UnwatchOp           unwatch;
-    GetElementsOp       getElements;
-    JSNewEnumerateOp    enumerate;
-    JSFunToStringOp     funToString;
+    LookupPropertyOp lookupProperty;
+    DefinePropertyOp defineProperty;
+    HasPropertyOp    hasProperty;
+    GetPropertyOp    getProperty;
+    SetPropertyOp    setProperty;
+    GetOwnPropertyOp getOwnPropertyDescriptor;
+    DeletePropertyOp deleteProperty;
+    WatchOp          watch;
+    UnwatchOp        unwatch;
+    GetElementsOp    getElements;
+    JSNewEnumerateOp enumerate;
+    JSFunToStringOp  funToString;
 };
 
-#define JS_NULL_OBJECT_OPS                                                    \
-    {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,  \
-     nullptr, nullptr, nullptr, nullptr}
+#define JS_NULL_OBJECT_OPS nullptr
 
 } // namespace js
 
@@ -656,7 +654,7 @@ typedef void (*JSClassInternal)();
 struct JSClass {
     JS_CLASS_MEMBERS(JSFinalizeOp);
 
-    void*               reserved[23];
+    void*               reserved[12];
 };
 
 #define JSCLASS_HAS_PRIVATE             (1<<0)  // objects have private slot
@@ -665,7 +663,19 @@ struct JSClass {
                                                 // SetNewObjectMetadata itself
 #define JSCLASS_PRIVATE_IS_NSISUPPORTS  (1<<3)  // private is (nsISupports*)
 #define JSCLASS_IS_DOMJSCLASS           (1<<4)  // objects are DOM
-// Bit 5 is unused.
+#define JSCLASS_HAS_XRAYED_CONSTRUCTOR  (1<<5)  // if wrapped by an xray
+                                                // wrapper, the builtin
+                                                // class's constructor won't
+                                                // be unwrapped and invoked.
+                                                // Instead, the constructor is
+                                                // resolved in the caller's
+                                                // compartment and invoked
+                                                // with a wrapped newTarget.
+                                                // The constructor has to
+                                                // detect and handle this
+                                                // situation.
+                                                // See PromiseConstructor for
+                                                // details.
 #define JSCLASS_EMULATES_UNDEFINED      (1<<6)  // objects of this class act
                                                 // like the value undefined,
                                                 // in some contexts
@@ -719,7 +729,7 @@ struct JSClass {
 // application.
 #define JSCLASS_GLOBAL_APPLICATION_SLOTS 5
 #define JSCLASS_GLOBAL_SLOT_COUNT                                             \
-    (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 3 + 37)
+    (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 3 + 36)
 #define JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(n)                                    \
     (JSCLASS_IS_GLOBAL | JSCLASS_HAS_RESERVED_SLOTS(JSCLASS_GLOBAL_SLOT_COUNT + (n)))
 #define JSCLASS_GLOBAL_FLAGS                                                  \
@@ -730,7 +740,7 @@ struct JSClass {
 
 // Fast access to the original value of each standard class's prototype.
 #define JSCLASS_CACHED_PROTO_SHIFT      (JSCLASS_HIGH_FLAGS_SHIFT + 10)
-#define JSCLASS_CACHED_PROTO_MASK       JS_BITMASK(JSCLASS_CACHED_PROTO_WIDTH)
+#define JSCLASS_CACHED_PROTO_MASK       JS_BITMASK(js::JSCLASS_CACHED_PROTO_WIDTH)
 #define JSCLASS_HAS_CACHED_PROTO(key)   (uint32_t(key) << JSCLASS_CACHED_PROTO_SHIFT)
 #define JSCLASS_CACHED_PROTO_KEY(clasp) ((JSProtoKey)                         \
                                          (((clasp)->flags                     \
@@ -748,7 +758,7 @@ struct Class
     JS_CLASS_MEMBERS(FinalizeOp);
     ClassSpec          spec;
     ClassExtension      ext;
-    ObjectOps           ops;
+    const ObjectOps*    ops;
 
     /*
      * Objects of this class aren't native objects. They don't have Shapes that
@@ -793,6 +803,21 @@ struct Class
     }
 
     static size_t offsetOfFlags() { return offsetof(Class, flags); }
+
+    LookupPropertyOp getOpsLookupProperty() const { return ops ? ops->lookupProperty : nullptr; }
+    DefinePropertyOp getOpsDefineProperty() const { return ops ? ops->defineProperty : nullptr; }
+    HasPropertyOp    getOpsHasProperty()    const { return ops ? ops->hasProperty    : nullptr; }
+    GetPropertyOp    getOpsGetProperty()    const { return ops ? ops->getProperty    : nullptr; }
+    SetPropertyOp    getOpsSetProperty()    const { return ops ? ops->setProperty    : nullptr; }
+    GetOwnPropertyOp getOpsGetOwnPropertyDescriptor()
+                                            const { return ops ? ops->getOwnPropertyDescriptor
+                                                                                     : nullptr; }
+    DeletePropertyOp getOpsDeleteProperty() const { return ops ? ops->deleteProperty : nullptr; }
+    WatchOp          getOpsWatch()          const { return ops ? ops->watch          : nullptr; }
+    UnwatchOp        getOpsUnwatch()        const { return ops ? ops->unwatch        : nullptr; }
+    GetElementsOp    getOpsGetElements()    const { return ops ? ops->getElements    : nullptr; }
+    JSNewEnumerateOp getOpsEnumerate()      const { return ops ? ops->enumerate      : nullptr; }
+    JSFunToStringOp  getOpsFunToString()    const { return ops ? ops->funToString    : nullptr; }
 };
 
 static_assert(offsetof(JSClass, name) == offsetof(Class, name),
@@ -845,7 +870,7 @@ Valueify(const JSClass* c)
 enum ESClassValue {
     ESClass_Object, ESClass_Array, ESClass_Number, ESClass_String,
     ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_SharedArrayBuffer,
-    ESClass_Date, ESClass_Set, ESClass_Map,
+    ESClass_Date, ESClass_Set, ESClass_Map, ESClass_Promise,
 
     /** None of the above. */
     ESClass_Other

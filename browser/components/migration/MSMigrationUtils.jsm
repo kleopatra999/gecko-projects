@@ -13,8 +13,9 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource:///modules/MigrationUtils.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/LoginHelper.jsm");
+
+Cu.importGlobalProperties(['FileReader']);
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
@@ -26,7 +27,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
 const EDGE_COOKIE_PATH_OPTIONS = ["", "#!001\\", "#!002\\"];
 const EDGE_COOKIES_SUFFIX = "MicrosoftEdge\\Cookies";
 const EDGE_FAVORITES = "AC\\MicrosoftEdge\\User\\Default\\Favorites";
-const EDGE_READINGLIST = "AC\\MicrosoftEdge\\User\\Default\\DataStore\\Data\\";
 const FREE_CLOSE_FAILED = 0;
 const INTERNET_EXPLORER_EDGE_GUID = [0x3CCD5499,
                                      0x4B1087A8,
@@ -274,9 +274,9 @@ CtypesVaultHelpers.prototype = {
 function hostIsIPAddress(aHost) {
   try {
     Services.eTLD.getBaseDomainFromHost(aHost);
-  } catch (e if e.result == Cr.NS_ERROR_HOST_IS_IP_ADDRESS) {
-    return true;
-  } catch (e) {}
+  } catch (e) {
+    return e.result == Cr.NS_ERROR_HOST_IS_IP_ADDRESS;
+  }
   return false;
 }
 
@@ -310,7 +310,7 @@ function getEdgeLocalDataFolder() {
     Cu.reportError("Exception trying to find the Edge favorites directory: " + ex);
   }
   return null;
-};
+}
 
 
 function Bookmarks(migrationType) {
@@ -376,10 +376,6 @@ Bookmarks.prototype = {
           yield MigrationUtils.createImportedBookmarksFolder(this.importedAppLabel, folderGuid);
       }
       yield this._migrateFolder(this._favoritesFolder, folderGuid);
-
-      if (this._migrationType == MSMigrationUtils.MIGRATION_TYPE_EDGE) {
-        yield this._migrateEdgeReadingList(PlacesUtils.bookmarks.menuGuid);
-      }
     }.bind(this)).then(() => aCallback(true),
                         e => { Cu.reportError(e); aCallback(false) });
   },
@@ -390,6 +386,7 @@ Bookmarks.prototype = {
     // for IE, and in a similar location for Edge.
     // Until we support it, bookmarks are imported in alphabetical order.
     let entries = aSourceFolder.directoryEntries;
+    let succeeded = true;
     while (entries.hasMoreElements()) {
       let entry = entries.getNext().QueryInterface(Ci.nsIFile);
       try {
@@ -439,82 +436,14 @@ Bookmarks.prototype = {
         }
       } catch (ex) {
         Components.utils.reportError("Unable to import " + this.importedAppLabel + " favorite (" + entry.leafName + "): " + ex);
+        succeeded = false;
       }
     }
-  }),
-
-  _migrateEdgeReadingList: Task.async(function*(parentGuid) {
-    let edgeDir = getEdgeLocalDataFolder();
-    if (!edgeDir) {
-      return;
-    }
-
-    this._readingListExtractor = Cc["@mozilla.org/profile/migrator/edgereadinglistextractor;1"].
-                                 createInstance(Ci.nsIEdgeReadingListExtractor);
-    edgeDir.appendRelativePath(EDGE_READINGLIST);
-    if (edgeDir.exists() && edgeDir.isReadable() && edgeDir.isDirectory()) {
-      let expectedDir = edgeDir.clone();
-      expectedDir.appendRelativePath("nouser1\\120712-0049");
-      if (expectedDir.exists() && expectedDir.isReadable() && expectedDir.isDirectory()) {
-        yield this._migrateEdgeReadingListDB(expectedDir, parentGuid);
-      } else {
-        let getSubdirs = someDir => {
-          let subdirs = someDir.directoryEntries;
-          let rv = [];
-          while (subdirs.hasMoreElements()) {
-            let subdir = subdirs.getNext().QueryInterface(Ci.nsIFile);
-            if (subdir.isDirectory() && subdir.isReadable()) {
-              rv.push(subdir);
-            }
-          }
-          return rv;
-        };
-        let dirs = getSubdirs(edgeDir).map(getSubdirs);
-        for (let dir of dirs) {
-          yield this._migrateEdgeReadingListDB(dir, parentGuid);
-        }
-      }
-    }
-  }),
-  _migrateEdgeReadingListDB: Task.async(function*(dbFile, parentGuid) {
-    dbFile.appendRelativePath("DBStore\\spartan.edb");
-    if (!dbFile.exists() || !dbFile.isReadable() || !dbFile.isFile()) {
-      return;
-    }
-    let readingListItems;
-    try {
-      readingListItems = this._readingListExtractor.extract(dbFile.path);
-    } catch (ex) {
-      Cu.reportError("Failed to extract Edge reading list information from " +
-                     "the database at " + dbPath + " due to the following error: " + ex);
-      return;
-    }
-    if (!readingListItems.length) {
-      return;
-    }
-    let destFolderGuid = yield this._ensureEdgeReadingListFolder(parentGuid);
-    for (let i = 0; i < readingListItems.length; i++) {
-      let readingListItem = readingListItems.queryElementAt(i, Ci.nsIPropertyBag2);
-      let url = readingListItem.get("uri");
-      let title = readingListItem.get("title");
-      let time = readingListItem.get("time");
-      // time is a PRTime, which is microseconds (since unix epoch), or null.
-      // We need milliseconds for the date constructor, so divide by 1000:
-      let dateAdded = time ? new Date(time / 1000) : new Date();
-      yield PlacesUtils.bookmarks.insert({
-        parentGuid: destFolderGuid, url: url, title, dateAdded
-      });
+    if (!succeeded) {
+      throw new Error("Failed to import all bookmarks correctly.");
     }
   }),
 
-  _ensureEdgeReadingListFolder: Task.async(function*(parentGuid) {
-    if (!this.__edgeReadingListFolderGuid) {
-      let folderTitle = MigrationUtils.getLocalizedString("importedEdgeReadingList");
-      let folderSpec = {type: PlacesUtils.bookmarks.TYPE_FOLDER, parentGuid, title: folderTitle};
-      this.__edgeReadingListFolderGuid = (yield PlacesUtils.bookmarks.insert(folderSpec)).guid;
-    }
-    return this.__edgeReadingListFolderGuid;
-  }),
 };
 
 function Cookies(migrationType) {
@@ -584,7 +513,7 @@ Cookies.prototype = {
   migrate(aCallback) {
     this.ctypesKernelHelpers = new CtypesKernelHelpers();
 
-    let cookiesGenerator = (function genCookie() {
+    let cookiesGenerator = (function* genCookie() {
       let success = false;
       let folders = this._migrationType == MSMigrationUtils.MIGRATION_TYPE_EDGE ?
                       this.__cookiesFolders : [this.__cookiesFolder];
@@ -617,8 +546,7 @@ Cookies.prototype = {
   },
 
   _readCookieFile(aFile, aCallback) {
-    let fileReader = Cc["@mozilla.org/files/filereader;1"].
-                     createInstance(Ci.nsIDOMFileReader);
+    let fileReader = new FileReader();
     let onLoadEnd = () => {
       fileReader.removeEventListener("loadend", onLoadEnd, false);
 
@@ -695,7 +623,7 @@ Cookies.prototype = {
       // a domain cookie.  See bug 222343.
       if (host.length > 0) {
         // Fist delete any possible extant matching host cookie.
-        Services.cookies.remove(host, name, path, false);
+        Services.cookies.remove(host, name, path, {}, false);
         // Now make it a domain cookie.
         if (host[0] != "." && !hostIsIPAddress(host))
           host = "." + host;
@@ -863,12 +791,21 @@ WindowsVaultFormPasswords.prototype = {
           if (!_isIEOrEdgePassword(item.contents.schemaId.id)) {
             continue;
           }
+          let url = item.contents.pResourceElement.contents.itemValue.readString();
+          let realURL;
+          try {
+            realURL = Services.io.newURI(url, null, null);
+          } catch (ex) { /* leave realURL as null */ }
+          if (!realURL || ["http", "https", "ftp"].indexOf(realURL.scheme) == -1) {
+            // Ignore items for non-URLs or URLs that aren't HTTP(S)/FTP
+            continue;
+          }
+
           // if aOnlyCheckExists is set to true, the purpose of the call is to return true if there is at
           // least a password which is true in this case because a password was by now already found
           if (aOnlyCheckExists) {
             return true;
           }
-          let url = item.contents.pResourceElement.contents.itemValue.readString();
           let username = item.contents.pIdentityElement.contents.itemValue.readString();
           // the current login credential object
           let credential = new ctypesVaultHelpers._structs.VAULT_ELEMENT.ptr;
@@ -895,7 +832,7 @@ WindowsVaultFormPasswords.prototype = {
           // create a new login
           let login = {
             username, password,
-            hostname: NetUtil.newURI(url).prePath,
+            hostname: realURL.prePath,
             timeCreated: creation,
           };
           LoginHelper.maybeImportLogin(login);
@@ -948,4 +885,5 @@ var MSMigrationUtils = {
     return new WindowsVaultFormPasswords();
   },
   getTypedURLs,
+  getEdgeLocalDataFolder,
 };

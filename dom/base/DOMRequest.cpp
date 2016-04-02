@@ -13,6 +13,8 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "jsfriendapi.h"
+#include "nsContentUtils.h"
 
 using mozilla::dom::AnyCallback;
 using mozilla::dom::DOMError;
@@ -22,9 +24,8 @@ using mozilla::dom::DOMCursor;
 using mozilla::dom::Promise;
 using mozilla::dom::AutoJSAPI;
 
-DOMRequest::DOMRequest(nsPIDOMWindow* aWindow)
-  : DOMEventTargetHelper(aWindow->IsInnerWindow() ?
-                           aWindow : aWindow->GetCurrentInnerWindow())
+DOMRequest::DOMRequest(nsPIDOMWindowInner* aWindow)
+  : DOMEventTargetHelper(aWindow)
   , mResult(JS::UndefinedValue())
   , mDone(false)
 {
@@ -62,7 +63,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(DOMRequest,
                                                DOMEventTargetHelper)
   // Don't need NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER because
   // DOMEventTargetHelper does it for us.
-  NS_IMPL_CYCLE_COLLECTION_TRACE_JSVAL_MEMBER_CALLBACK(mResult)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mResult)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(DOMRequest)
@@ -193,11 +194,7 @@ DOMRequest::FireEvent(const nsAString& aType, bool aBubble, bool aCancelable)
   }
 
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
-  nsresult rv = event->InitEvent(aType, aBubble, aCancelable);
-  if (NS_FAILED(rv)) {
-    return;
-  }
-
+  event->InitEvent(aType, aBubble, aCancelable);
   event->SetTrusted(true);
 
   bool dummy;
@@ -210,14 +207,16 @@ DOMRequest::RootResultVal()
   mozilla::HoldJSObjects(this);
 }
 
-already_AddRefed<Promise>
+void
 DOMRequest::Then(JSContext* aCx, AnyCallback* aResolveCallback,
-                 AnyCallback* aRejectCallback, mozilla::ErrorResult& aRv)
+                 AnyCallback* aRejectCallback,
+                 JS::MutableHandle<JS::Value> aRetval,
+                 mozilla::ErrorResult& aRv)
 {
   if (!mPromise) {
     mPromise = Promise::Create(DOMEventTargetHelper::GetParentObject(), aRv);
     if (aRv.Failed()) {
-      return nullptr;
+      return;
     }
     if (mDone) {
       // Since we create mPromise lazily, it's possible that the DOMRequest object
@@ -232,30 +231,33 @@ DOMRequest::Then(JSContext* aCx, AnyCallback* aResolveCallback,
     }
   }
 
-  return mPromise->Then(aCx, aResolveCallback, aRejectCallback, aRv);
+  // Just use the global of the Promise itself as the callee global.
+  JS::Rooted<JSObject*> global(aCx, mPromise->PromiseObj());
+  global = js::GetGlobalForObjectCrossCompartment(global);
+  mPromise->Then(aCx, global, aResolveCallback, aRejectCallback, aRetval, aRv);
 }
 
 NS_IMPL_ISUPPORTS(DOMRequestService, nsIDOMRequestService)
 
 NS_IMETHODIMP
-DOMRequestService::CreateRequest(nsIDOMWindow* aWindow,
+DOMRequestService::CreateRequest(mozIDOMWindow* aWindow,
                                  nsIDOMDOMRequest** aRequest)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  nsCOMPtr<nsPIDOMWindow> win(do_QueryInterface(aWindow));
-  NS_ENSURE_STATE(win);
+  NS_ENSURE_STATE(aWindow);
+  auto* win = nsPIDOMWindowInner::From(aWindow);
   NS_ADDREF(*aRequest = new DOMRequest(win));
 
   return NS_OK;
 }
 
 NS_IMETHODIMP
-DOMRequestService::CreateCursor(nsIDOMWindow* aWindow,
+DOMRequestService::CreateCursor(mozIDOMWindow* aWindow,
                                 nsICursorContinueCallback* aCallback,
                                 nsIDOMDOMCursor** aCursor)
 {
-  nsCOMPtr<nsPIDOMWindow> win(do_QueryInterface(aWindow));
-  NS_ENSURE_STATE(win);
+  NS_ENSURE_STATE(aWindow);
+  auto* win = nsPIDOMWindowInner::From(aWindow);
   NS_ADDREF(*aCursor = new DOMCursor(win, aCallback));
 
   return NS_OK;
@@ -296,11 +298,10 @@ DOMRequestService::FireDetailedError(nsIDOMDOMRequest* aRequest,
 class FireSuccessAsyncTask : public nsRunnable
 {
 
-  FireSuccessAsyncTask(JSContext* aCx,
-                       DOMRequest* aRequest,
+  FireSuccessAsyncTask(DOMRequest* aRequest,
                        const JS::Value& aResult) :
     mReq(aRequest),
-    mResult(aCx, aResult)
+    mResult(nsContentUtils::RootingCxForThread(), aResult)
   {
   }
 
@@ -313,9 +314,9 @@ public:
   Dispatch(DOMRequest* aRequest,
            const JS::Value& aResult)
   {
-    mozilla::ThreadsafeAutoSafeJSContext cx;
-    RefPtr<FireSuccessAsyncTask> asyncTask = new FireSuccessAsyncTask(cx, aRequest, aResult);
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(asyncTask)));
+    RefPtr<FireSuccessAsyncTask> asyncTask =
+      new FireSuccessAsyncTask(aRequest, aResult);
+    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(asyncTask));
     return NS_OK;
   }
 
@@ -367,7 +368,7 @@ DOMRequestService::FireErrorAsync(nsIDOMDOMRequest* aRequest,
   NS_ENSURE_STATE(aRequest);
   nsCOMPtr<nsIRunnable> asyncTask =
     new FireErrorAsyncTask(static_cast<DOMRequest*>(aRequest), aError);
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(asyncTask)));
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(asyncTask));
   return NS_OK;
 }
 

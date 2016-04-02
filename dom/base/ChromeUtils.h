@@ -25,23 +25,31 @@ class ThreadSafeChromeUtils
 public:
   // Implemented in devtools/shared/heapsnapshot/HeapSnapshot.cpp
   static void SaveHeapSnapshot(GlobalObject& global,
-                               JSContext* cx,
                                const HeapSnapshotBoundaries& boundaries,
                                nsAString& filePath,
                                ErrorResult& rv);
 
   // Implemented in devtools/shared/heapsnapshot/HeapSnapshot.cpp
   static already_AddRefed<devtools::HeapSnapshot> ReadHeapSnapshot(GlobalObject& global,
-                                                                   JSContext* cx,
                                                                    const nsAString& filePath,
                                                                    ErrorResult& rv);
+
+  static void NondeterministicGetWeakMapKeys(GlobalObject& aGlobal,
+                                             JS::Handle<JS::Value> aMap,
+                                             JS::MutableHandle<JS::Value> aRetval,
+                                             ErrorResult& aRv);
+
+  static void NondeterministicGetWeakSetKeys(GlobalObject& aGlobal,
+                                             JS::Handle<JS::Value> aSet,
+                                             JS::MutableHandle<JS::Value> aRetval,
+                                             ErrorResult& aRv);
 };
 
 class ChromeUtils : public ThreadSafeChromeUtils
 {
 public:
   static void
-  OriginAttributesToSuffix(dom::GlobalObject& aGlobal,
+  OriginAttributesToSuffix(GlobalObject& aGlobal,
                            const dom::OriginAttributesDictionary& aAttrs,
                            nsCString& aSuffix);
 
@@ -49,6 +57,26 @@ public:
   OriginAttributesMatchPattern(dom::GlobalObject& aGlobal,
                                const dom::OriginAttributesDictionary& aAttrs,
                                const dom::OriginAttributesPatternDictionary& aPattern);
+
+  static void
+  CreateDefaultOriginAttributes(dom::GlobalObject& aGlobal,
+                                dom::OriginAttributesDictionary& aAttrs);
+
+  static void
+  CreateOriginAttributesFromOrigin(dom::GlobalObject& aGlobal,
+                                   const nsAString& aOrigin,
+                                   dom::OriginAttributesDictionary& aAttrs,
+                                   ErrorResult& aRv);
+
+  static void
+  CreateOriginAttributesFromDict(dom::GlobalObject& aGlobal,
+                                 const dom::OriginAttributesDictionary& aAttrs,
+                                 dom::OriginAttributesDictionary& aNewAttrs);
+
+  static bool
+  IsOriginAttributesEqual(dom::GlobalObject& aGlobal,
+                          const dom::OriginAttributesDictionary& aA,
+                          const dom::OriginAttributesDictionary& aB);
 };
 
 } // namespace dom

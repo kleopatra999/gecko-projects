@@ -1,4 +1,6 @@
-var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+"use strict";
+
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -16,8 +18,7 @@ var {
 // EventManager-like class specifically for WebRequest. Inherits from
 // SingletonEventManager. Takes care of converting |details| parameter
 // when invoking listeners.
-function WebRequestEventManager(context, eventName)
-{
+function WebRequestEventManager(context, eventName) {
   let name = `webRequest.${eventName}`;
   let register = (callback, filter, info) => {
     let listener = data => {
@@ -31,6 +32,7 @@ function WebRequestEventManager(context, eventName)
       }
 
       let data2 = {
+        requestId: data.requestId,
         url: data.url,
         method: data.method,
         type: data.type,
@@ -39,6 +41,10 @@ function WebRequestEventManager(context, eventName)
         parentFrameId: ExtensionManagement.getParentFrameId(data.parentWindowId, data.windowId),
       };
 
+      if ("ip" in data) {
+        data2.ip = data.ip;
+      }
+
       // Fills in tabId typically.
       let result = {};
       extensions.emit("fill-browser-data", data.browser, data2, result);
@@ -46,7 +52,7 @@ function WebRequestEventManager(context, eventName)
         return;
       }
 
-      let optional = ["requestHeaders", "responseHeaders", "statusCode"];
+      let optional = ["requestHeaders", "responseHeaders", "statusCode", "statusLine", "error", "redirectUrl"];
       for (let opt of optional) {
         if (opt in data) {
           data2[opt] = data[opt];
@@ -91,37 +97,16 @@ function WebRequestEventManager(context, eventName)
 
 WebRequestEventManager.prototype = Object.create(SingletonEventManager.prototype);
 
-extensions.registerPrivilegedAPI("webRequest", (extension, context) => {
+extensions.registerSchemaAPI("webRequest", "webRequest", (extension, context) => {
   return {
     webRequest: {
-      ResourceType: {
-        MAIN_FRAME: "main_frame",
-        SUB_FRAME: "sub_frame",
-        STYLESHEET: "stylesheet",
-        SCRIPT: "script",
-        IMAGE: "image",
-        OBJECT: "object",
-        OBJECT_SUBREQUEST: "object_subrequest",
-        XMLHTTPREQUEST: "xmlhttprequest",
-        XBL: "xbl",
-        XSLT: "xslt",
-        PING: "ping",
-        BEACON: "beacon",
-        XML_DTD: "xml_dtd",
-        FONT: "font",
-        MEDIA: "media",
-        WEBSOCKET: "websocket",
-        CSP_REPORT: "csp_report",
-        IMAGESET: "imageset",
-        WEB_MANIFEST: "web_manifest",
-        OTHER: "other",
-      },
-
       onBeforeRequest: new WebRequestEventManager(context, "onBeforeRequest").api(),
       onBeforeSendHeaders: new WebRequestEventManager(context, "onBeforeSendHeaders").api(),
       onSendHeaders: new WebRequestEventManager(context, "onSendHeaders").api(),
       onHeadersReceived: new WebRequestEventManager(context, "onHeadersReceived").api(),
+      onBeforeRedirect: new WebRequestEventManager(context, "onBeforeRedirect").api(),
       onResponseStarted: new WebRequestEventManager(context, "onResponseStarted").api(),
+      onErrorOccurred: new WebRequestEventManager(context, "onErrorOccurred").api(),
       onCompleted: new WebRequestEventManager(context, "onCompleted").api(),
       handlerBehaviorChanged: function() {
         // TODO: Flush all caches.

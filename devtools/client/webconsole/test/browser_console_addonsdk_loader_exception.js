@@ -1,7 +1,7 @@
-/*
- * Any copyright is dedicated to the Public Domain.
- * http://creativecommons.org/publicdomain/zero/1.0/
- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 // Check that exceptions from scripts loaded with the addon-sdk loader are
 // opened correctly in View Source from the Browser Console.
@@ -57,12 +57,12 @@ function test() {
 
     let msg = [...result.matched][0];
     ok(msg, "message element found");
-    let locationNode = msg.querySelector(".message > .message-location");
+    let locationNode = msg.querySelector(".message > .message-location > .frame-link");
     ok(locationNode, "message location element found");
 
-    let title = locationNode.getAttribute("title");
-    info("location node title: " + title);
-    isnot(title.indexOf(" -> "), -1, "error comes from a subscript");
+    let url = locationNode.getAttribute("data-url");
+    info("location node url: " + url);
+    ok(url.indexOf("resource://") === 0, "error comes from a subscript");
 
     let viewSource = browserconsole.viewSource;
     let URL = null;

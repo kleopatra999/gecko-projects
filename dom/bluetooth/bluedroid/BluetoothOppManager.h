@@ -12,6 +12,7 @@
 #include "BluetoothSocketObserver.h"
 #include "DeviceStorage.h"
 #include "mozilla/ipc/SocketBase.h"
+#include "mozilla/UniquePtr.h"
 #include "nsCOMArray.h"
 
 class nsIOutputStream;
@@ -39,6 +40,7 @@ class BluetoothOppManager : public BluetoothSocketObserver
   class SendSocketDataTask;
 
 public:
+
   BT_DECL_PROFILE_MGR_BASE
   BT_DECL_SOCKET_OBSERVER
   virtual void GetName(nsACString& aName)
@@ -48,7 +50,10 @@ public:
 
   static const int MAX_PACKET_LENGTH = 0xFFFE;
 
+  static void InitOppInterface(BluetoothProfileResultHandler* aRes);
+  static void DeinitOppInterface(BluetoothProfileResultHandler* aRes);
   static BluetoothOppManager* Get();
+
   void ClientDataHandler(mozilla::ipc::UnixSocketBuffer* aMessage);
   void ServerDataHandler(mozilla::ipc::UnixSocketBuffer* aMessage);
 
@@ -74,7 +79,8 @@ protected:
 
 private:
   BluetoothOppManager();
-  bool Init();
+  nsresult Init();
+  void Uninit();
   void HandleShutdown();
   void HandleVolumeStateChanged(nsISupports* aSubject);
 
@@ -101,6 +107,7 @@ private:
   void NotifyAboutFileChange();
   bool AcquireSdcardMountLock();
   void SendObexData(uint8_t* aData, uint8_t aOpcode, int aSize);
+  void SendObexData(UniquePtr<uint8_t[]> aData, uint8_t aOpcode, int aSize);
   void AppendBlobToSend(const BluetoothAddress& aDeviceAddress, Blob* aBlob);
   void DiscardBlobsToSend();
   bool ProcessNextBatch();
@@ -200,8 +207,8 @@ private:
   uint32_t mSentFileLength;
   bool mWaitingToSendPutFinal;
 
-  nsAutoArrayPtr<uint8_t> mBodySegment;
-  nsAutoArrayPtr<uint8_t> mReceivedDataBuffer;
+  UniquePtr<uint8_t[]> mBodySegment;
+  UniquePtr<uint8_t[]> mReceivedDataBuffer;
 
   int mCurrentBlobIndex;
   RefPtr<Blob> mBlob;

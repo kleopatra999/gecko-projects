@@ -13,7 +13,7 @@
 #include "nsRect.h"
 #include "nsString.h"
 #include "nsBoundingMetrics.h"
-#include "gfxFont.h"
+#include "gfxTextRun.h"
 
 class nsGlyphTable;
 class nsIFrame;
@@ -85,6 +85,9 @@ struct nsGlyphCode {
 class nsMathMLChar
 {
 public:
+  typedef gfxTextRun::Range Range;
+  typedef mozilla::gfx::DrawTarget DrawTarget;
+
   // constructor and destructor
   nsMathMLChar() {
     MOZ_COUNT_CTOR(nsMathMLChar);
@@ -114,7 +117,7 @@ public:
   // @param aDesiredStretchSize - OUT - the size that the char wants
   nsresult
   Stretch(nsPresContext*           aPresContext,
-          nsRenderingContext&     aRenderingContext,
+          DrawTarget*              aDrawTarget,
           float                    aFontSizeInflation,
           nsStretchDirection       aStretchDirection,
           const nsBoundingMetrics& aContainerSize,
@@ -123,8 +126,7 @@ public:
           bool                     aRTL);
 
   void
-  SetData(nsPresContext* aPresContext,
-          nsString&       aData);
+  SetData(nsString& aData);
 
   void
   GetData(nsString& aData) {
@@ -165,7 +167,7 @@ public:
   // It is used to determine whether the operator is stretchy or a largeop.
   nscoord
   GetMaxWidth(nsPresContext* aPresContext,
-              nsRenderingContext& aRenderingContext,
+              DrawTarget* aDrawTarget,
               float aFontSizeInflation,
               uint32_t aStretchHint = NS_STRETCH_NORMAL);
 
@@ -239,7 +241,7 @@ private:
 
   nsresult
   StretchInternal(nsPresContext*           aPresContext,
-                  gfxContext*              aThebesContext,
+                  DrawTarget*              aDrawTarget,
                   float                    aFontSizeInflation,
                   nsStretchDirection&      aStretchDirection,
                   const nsBoundingMetrics& aContainerSize,

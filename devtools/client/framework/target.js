@@ -1,3 +1,5 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +9,7 @@
 const { Ci, Cu } = require("chrome");
 const promise = require("promise");
 const EventEmitter = require("devtools/shared/event-emitter");
+const Services = require("Services");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
@@ -117,9 +120,6 @@ exports.TargetFactory = {
 function TabTarget(tab) {
   EventEmitter.decorate(this);
   this.destroy = this.destroy.bind(this);
-  this._handleThreadState = this._handleThreadState.bind(this);
-  this.on("thread-resumed", this._handleThreadState);
-  this.on("thread-paused", this._handleThreadState);
   this.activeTab = this.activeConsole = null;
   // Only real tabs need initialization here. Placeholder objects for remote
   // targets will be initialized after a makeRemote method call.
@@ -128,6 +128,9 @@ function TabTarget(tab) {
     this._setupListeners();
   } else {
     this._form = tab.form;
+    this._url = this._form.url;
+    this._title = this._form.title;
+
     this._client = tab.client;
     this._chrome = tab.chrome;
   }
@@ -331,18 +334,14 @@ TabTarget.prototype = {
   },
 
   get name() {
-    if (this._tab && this._tab.linkedBrowser.contentDocument) {
-      return this._tab.linkedBrowser.contentDocument.title;
-    }
     if (this.isAddon) {
       return this._form.name;
     }
-    return this._form.title;
+    return this._title;
   },
 
   get url() {
-    return this._tab ? this._tab.linkedBrowser.currentURI.spec :
-                       this._form.url;
+    return this._url;
   },
 
   get isRemote() {
@@ -360,10 +359,6 @@ TabTarget.prototype = {
 
   get isMultiProcess() {
     return !this.window;
-  },
-
-  get isThreadPaused() {
-    return !!this._isThreadPaused;
   },
 
   /**
@@ -401,6 +396,7 @@ TabTarget.prototype = {
         }
         this.activeTab = tabClient;
         this.threadActor = response.threadActor;
+
         attachConsole();
       });
     };
@@ -421,12 +417,15 @@ TabTarget.prototype = {
     };
 
     if (this.isLocalTab) {
-      this._client.connect(() => {
-        this._client.getTab({ tab: this.tab }).then(response => {
+      this._client.connect()
+        .then(() => this._client.getTab({ tab: this.tab }))
+        .then(response => {
           this._form = response.tab;
+          this._url = this._form.url;
+          this._title = this._form.title;
+
           attachTab();
         });
-      });
     } else if (this.isTabActor) {
       // In the remote debugging case, the protocol connection will have been
       // already initialized in the connection screen code.
@@ -479,11 +478,16 @@ TabTarget.prototype = {
     this.client.addListener("tabDetached", this._onTabDetached);
 
     this._onTabNavigated = (aType, aPacket) => {
+      // Update the title and url on tabNavigated event.
+      this._url = aPacket.url;
+      this._title = aPacket.title;
+
       let event = Object.create(null);
       event.url = aPacket.url;
       event.title = aPacket.title;
       event.nativeConsoleAPI = aPacket.nativeConsoleAPI;
       event.isFrameSwitching = aPacket.isFrameSwitching;
+
       // Send any stored event payload (DOMWindow or nsIRequest) for backwards
       // compatibility with non-remotable tools.
       if (aPacket.state == "start") {
@@ -502,6 +506,10 @@ TabTarget.prototype = {
       this.emit("frame-update", aPacket);
     };
     this.client.addListener("frameUpdate", this._onFrameUpdate);
+
+    this._onSourceUpdated = (event, packet) => this.emit("source-updated", packet);
+    this.client.addListener("newSource", this._onSourceUpdated);
+    this.client.addListener("updatedSource", this._onSourceUpdated);
   },
 
   /**
@@ -512,6 +520,8 @@ TabTarget.prototype = {
     this.client.removeListener("tabNavigated", this._onTabNavigated);
     this.client.removeListener("tabDetached", this._onTabDetached);
     this.client.removeListener("frameUpdate", this._onFrameUpdate);
+    this.client.removeListener("newSource", this._onSourceUpdated);
+    this.client.removeListener("updatedSource", this._onSourceUpdated);
   },
 
   /**
@@ -534,20 +544,6 @@ TabTarget.prototype = {
   },
 
   /**
-   * Handle script status.
-   */
-  _handleThreadState: function(event) {
-    switch (event) {
-      case "thread-resumed":
-        this._isThreadPaused = false;
-        break;
-      case "thread-paused":
-        this._isThreadPaused = true;
-        break;
-    }
-  },
-
-  /**
    * Target is not alive anymore.
    */
   destroy: function() {
@@ -561,11 +557,6 @@ TabTarget.prototype = {
 
     // Before taking any action, notify listeners that destruction is imminent.
     this.emit("close");
-
-    // First of all, do cleanup tasks that pertain to both remoted and
-    // non-remoted targets.
-    this.off("thread-resumed", this._handleThreadState);
-    this.off("thread-paused", this._handleThreadState);
 
     if (this._tab) {
       this._teardownListeners();
@@ -612,17 +603,33 @@ TabTarget.prototype = {
     } else {
       promiseTargets.delete(this._form);
     }
+
     this.activeTab = null;
     this.activeConsole = null;
     this._client = null;
     this._tab = null;
     this._form = null;
     this._remote = null;
+    this._root = null;
   },
 
   toString: function() {
     let id = this._tab ? this._tab : (this._form && this._form.actor);
     return `TabTarget:${id}`;
+  },
+
+  /**
+   * @see TabActor.prototype.onResolveLocation
+   */
+  resolveLocation(loc) {
+    let deferred = promise.defer();
+
+    this.client.request(Object.assign({
+      to: this._form.actor,
+      type: "resolveLocation",
+    }, loc), deferred.resolve);
+
+    return deferred.promise;
   },
 };
 
@@ -718,8 +725,6 @@ function WorkerTarget(workerClient) {
  * requiring only minimal changes to the rest of the frontend.
  */
 WorkerTarget.prototype = {
-  destroy: function () {},
-
   get isRemote() {
     return true;
   },
@@ -753,6 +758,10 @@ WorkerTarget.prototype = {
   destroy: function() {},
 
   hasActor: function (name) {
+    // console is the only one actor implemented by WorkerActor
+    if (name == "console") {
+      return true;
+    }
     return false;
   },
 

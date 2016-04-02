@@ -141,7 +141,7 @@ JSObject::getGroup(JSContext* cx)
 inline void
 JSObject::setGroup(js::ObjectGroup* group)
 {
-    MOZ_ASSERT(group);
+    MOZ_RELEASE_ASSERT(group);
     MOZ_ASSERT(!isSingleton());
     group_ = group;
 }
@@ -202,7 +202,7 @@ js::GetElement(JSContext* cx, HandleObject obj, HandleObject receiver, uint32_t 
 inline bool
 js::GetElementNoGC(JSContext* cx, JSObject* obj, const Value& receiver, uint32_t index, Value* vp)
 {
-    if (obj->getOps()->getProperty)
+    if (obj->getOpsGetProperty())
         return false;
 
     if (index > JSID_INT_MAX)
@@ -220,7 +220,7 @@ inline bool
 js::DeleteProperty(JSContext* cx, HandleObject obj, HandleId id, ObjectOpResult& result)
 {
     MarkTypePropertyNonData(cx, obj, id);
-    if (DeletePropertyOp op = obj->getOps()->deleteProperty)
+    if (DeletePropertyOp op = obj->getOpsDeleteProperty())
         return op(cx, obj, id, result);
     return NativeDeleteProperty(cx, obj.as<NativeObject>(), id, result);
 }
@@ -275,7 +275,17 @@ ClassCanHaveFixedData(const Class* clasp)
         || js::IsTypedArrayClass(clasp);
 }
 
-static MOZ_ALWAYS_INLINE void
+// This function is meant to be called from allocation fast paths.
+//
+// If we do have an allocation metadata hook, it can cause a GC, so the object
+// must be rooted. The usual way to do this would be to make our callers pass a
+// HandleObject, but that would require them to pay the cost of rooting the
+// object unconditionally, even though collecting metadata is rare. Instead,
+// SetNewObjectMetadata's contract is that the caller must use the pointer
+// returned in place of the pointer passed. If a GC occurs, the returned pointer
+// may be the passed pointer, relocated by GC. If no GC could occur, it's just
+// passed through. We root nothing unless necessary.
+static MOZ_ALWAYS_INLINE MOZ_WARN_UNUSED_RESULT JSObject*
 SetNewObjectMetadata(ExclusiveContext* cxArg, JSObject* obj)
 {
     MOZ_ASSERT(!cxArg->compartment()->hasObjectPendingMetadata());
@@ -284,16 +294,18 @@ SetNewObjectMetadata(ExclusiveContext* cxArg, JSObject* obj)
     // thread, except when analysis/compilation is active, to avoid recursion.
     if (JSContext* cx = cxArg->maybeJSContext()) {
         if (MOZ_UNLIKELY((size_t)cx->compartment()->hasObjectMetadataCallback()) &&
-            !cx->zone()->types.activeAnalysis)
+            !cx->zone()->suppressObjectMetadataCallback)
         {
-            // Use AutoEnterAnalysis to prohibit both any GC activity under the
-            // callback, and any reentering of JS via Invoke() etc.
-            AutoEnterAnalysis enter(cx);
+            // Don't collect metadata on objects that represent metadata.
+            AutoSuppressObjectMetadataCallback suppressMetadata(cx);
 
-            RootedObject hobj(cx, obj);
-            cx->compartment()->setNewObjectMetadata(cx, hobj);
+            RootedObject rooted(cx, obj);
+            cx->compartment()->setNewObjectMetadata(cx, rooted);
+            return rooted;
         }
     }
+
+    return obj;
 }
 
 } // namespace js
@@ -352,12 +364,17 @@ JSObject::create(js::ExclusiveContext* cx, js::gc::AllocKind kind, js::gc::Initi
         size_t size =
             kind == js::gc::AllocKind::FUNCTION ? sizeof(JSFunction) : sizeof(js::FunctionExtended);
         memset(obj->as<JSFunction>().fixedSlots(), 0, size - sizeof(js::NativeObject));
+        if (kind == js::gc::AllocKind::FUNCTION_EXTENDED) {
+            // SetNewObjectMetadata may gc, which will be unhappy if flags &
+            // EXTENDED doesn't match the arena's AllocKind.
+            obj->as<JSFunction>().setFlags(JSFunction::EXTENDED);
+        }
     }
 
     if (group->clasp()->shouldDelayMetadataCallback())
         cx->compartment()->setObjectPendingMetadata(cx, obj);
     else
-        SetNewObjectMetadata(cx, obj);
+        obj = SetNewObjectMetadata(cx, obj);
 
     js::gc::TraceCreateObject(obj);
 
@@ -428,7 +445,7 @@ JSObject::nonProxyIsExtensible() const
 inline bool
 JSObject::isBoundFunction() const
 {
-    return hasAllFlags(js::BaseShape::BOUND_FUNCTION);
+    return is<JSFunction>() && as<JSFunction>().isBoundFunction();
 }
 
 inline bool
@@ -590,9 +607,7 @@ inline bool
 IsInternalFunctionObject(JSObject& funobj)
 {
     JSFunction& fun = funobj.as<JSFunction>();
-    MOZ_ASSERT_IF(fun.isLambda(),
-                  fun.isInterpreted() || fun.isAsmJSNative());
-    return fun.isLambda() && fun.isInterpreted() && !fun.environment();
+    return fun.isInterpreted() && !fun.environment();
 }
 
 /*
@@ -685,6 +700,24 @@ NewObjectWithClassProto(ExclusiveContext* cx, const Class* clasp, HandleObject p
 {
     gc::AllocKind allocKind = gc::GetGCObjectKind(clasp);
     return NewObjectWithClassProto(cx, clasp, proto, allocKind, newKind);
+}
+
+template<class T>
+inline T*
+NewObjectWithClassProto(ExclusiveContext* cx, HandleObject proto,
+                        NewObjectKind newKind = GenericObject)
+{
+    JSObject* obj = NewObjectWithClassProto(cx, &T::class_, proto, newKind);
+    return obj ? &obj->as<T>() : nullptr;
+}
+
+template <class T>
+inline T*
+NewObjectWithClassProto(ExclusiveContext* cx, HandleObject proto, gc::AllocKind allocKind,
+                        NewObjectKind newKind = GenericObject)
+{
+    JSObject* obj = NewObjectWithClassProto(cx, &T::class_, proto, allocKind, newKind);
+    return obj ? &obj->as<T>() : nullptr;
 }
 
 /*

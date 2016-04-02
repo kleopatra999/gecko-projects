@@ -109,9 +109,11 @@ UNIFIED_SOURCES += [
     'HoldDropJSObjects.cpp',
     'JSObjectHolder.cpp',
     'Logging.cpp',
+    'LogModulePrefWatcher.cpp',
     'nsConsoleMessage.cpp',
     'nsConsoleService.cpp',
     'nsCycleCollector.cpp',
+    'nsCycleCollectorTraceJSHelpers.cpp',
     'nsDumpUtils.cpp',
     'nsErrorService.cpp',
     'nsGZFileWriter.cpp',
@@ -120,6 +122,7 @@ UNIFIED_SOURCES += [
     'nsMemoryInfoDumper.cpp',
     'nsMemoryReporterManager.cpp',
     'nsMessageLoop.cpp',
+    'NSPRLogModulesParser.cpp',
     'nsSecurityConsoleMessage.cpp',
     'nsStatusReporterManager.cpp',
     'nsSystemInfo.cpp',
@@ -152,7 +155,7 @@ LOCAL_INCLUDES += [
     '/xpcom/ds',
 ]
 
-if CONFIG['MOZ_WIDGET_GTK']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     CXXFLAGS += CONFIG['TK_CFLAGS']
 
 if CONFIG['GNU_CXX']:

@@ -9,6 +9,7 @@
 #include "nsICacheEntry.h"
 #include "nsICachingChannel.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
+#include "nsIPrincipal.h"
 
 #include "nsNavHistory.h"
 #include "nsFaviconService.h"
@@ -356,10 +357,8 @@ AsyncFaviconHelperBase::AsyncFaviconHelperBase(
 
 AsyncFaviconHelperBase::~AsyncFaviconHelperBase()
 {
-  nsCOMPtr<nsIThread> thread;
-  (void)NS_GetMainThread(getter_AddRefs(thread));
   if (mCallback) {
-    (void)NS_ProxyRelease(thread, mCallback, true);
+    NS_ReleaseOnMainThread(mCallback.forget(), true);
   }
 }
 
@@ -372,8 +371,10 @@ AsyncFetchAndSetIconForPage::start(nsIURI* aFaviconURI,
                                    nsIURI* aPageURI,
                                    enum AsyncFaviconFetchMode aFetchMode,
                                    uint32_t aFaviconLoadType,
-                                   nsIFaviconDataCallback* aCallback)
+                                   nsIFaviconDataCallback* aCallback,
+                                   nsIPrincipal* aLoadingPrincipal)
 {
+  NS_ENSURE_ARG(aLoadingPrincipal);
   NS_PRECONDITION(NS_IsMainThread(),
                   "This should be called on the main thread");
 
@@ -418,7 +419,8 @@ AsyncFetchAndSetIconForPage::start(nsIURI* aFaviconURI,
   // The event will swap owning pointers, thus we need a new pointer.
   nsCOMPtr<nsIFaviconDataCallback> callback(aCallback);
   RefPtr<AsyncFetchAndSetIconForPage> event =
-    new AsyncFetchAndSetIconForPage(icon, page, aFaviconLoadType, callback);
+    new AsyncFetchAndSetIconForPage(icon, page, aFaviconLoadType,
+                                    callback, aLoadingPrincipal);
 
   // Get the target thread and start the work.
   RefPtr<Database> DB = Database::GetDatabase();
@@ -433,10 +435,12 @@ AsyncFetchAndSetIconForPage::AsyncFetchAndSetIconForPage(
 , PageData& aPage
 , uint32_t aFaviconLoadType
 , nsCOMPtr<nsIFaviconDataCallback>& aCallback
+, nsIPrincipal* aLoadingPrincipal
 ) : AsyncFaviconHelperBase(aCallback)
   , mIcon(aIcon)
   , mPage(aPage)
   , mFaviconLoadPrivate(aFaviconLoadType == nsIFaviconService::FAVICON_LOAD_PRIVATE)
+  , mLoadingPrincipal(new nsMainThreadPtrHolder<nsIPrincipal>(aLoadingPrincipal))
 {
 }
 
@@ -474,7 +478,8 @@ AsyncFetchAndSetIconForPage::Run()
     // Fetch the icon from network.  When done this will associate the
     // icon to the page and notify.
     RefPtr<AsyncFetchAndSetIconFromNetwork> event =
-      new AsyncFetchAndSetIconFromNetwork(mIcon, mPage, mFaviconLoadPrivate, mCallback);
+      new AsyncFetchAndSetIconFromNetwork(mIcon, mPage, mFaviconLoadPrivate,
+                                          mCallback, mLoadingPrincipal);
 
     // Start the work on the main thread.
     rv = NS_DispatchToMainThread(event);
@@ -500,11 +505,13 @@ AsyncFetchAndSetIconFromNetwork::AsyncFetchAndSetIconFromNetwork(
 , PageData& aPage
 , bool aFaviconLoadPrivate
 , nsCOMPtr<nsIFaviconDataCallback>& aCallback
+, const nsMainThreadPtrHandle<nsIPrincipal>& aLoadingPrincipal
 )
 : AsyncFaviconHelperBase(aCallback)
 , mIcon(aIcon)
 , mPage(aPage)
 , mFaviconLoadPrivate(aFaviconLoadPrivate)
+, mLoadingPrincipal(aLoadingPrincipal)
 {
 }
 
@@ -530,7 +537,7 @@ AsyncFetchAndSetIconFromNetwork::Run()
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel),
                      iconURI,
-                     nsContentUtils::GetSystemPrincipal(),
+                     mLoadingPrincipal,
                      nsILoadInfo::SEC_NORMAL,
                      nsIContentPolicy::TYPE_INTERNAL_IMAGE);
 
@@ -1068,7 +1075,7 @@ NotifyIconObservers::Run()
 
   nsCOMPtr<nsIURI> iconURI;
   if (!mIcon.spec.IsEmpty()) {
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_NewURI(getter_AddRefs(iconURI), mIcon.spec)));
+    MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(iconURI), mIcon.spec));
     if (iconURI)
     {
       // Notify observers only if something changed.
@@ -1091,7 +1098,7 @@ void
 NotifyIconObservers::SendGlobalNotifications(nsIURI* aIconURI)
 {
   nsCOMPtr<nsIURI> pageURI;
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_NewURI(getter_AddRefs(pageURI), mPage.spec)));
+  MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(pageURI), mPage.spec));
   if (pageURI) {
     nsFaviconService* favicons = nsFaviconService::GetFaviconService();
     MOZ_ASSERT(favicons);

@@ -95,7 +95,8 @@ RilConsumer::ConnectWorkerToRIL(JSContext* aCx)
   // should ever define |postRILMessage| in a RIL worker.
   Rooted<Value> val(aCx);
   if (!JS_GetProperty(aCx, workerGlobal, "postRILMessage", &val)) {
-    JS_ReportPendingException(aCx);
+    // Just returning failure here will cause the exception on the JSContext to
+    // be reported as needed.
     return NS_ERROR_FAILURE;
   }
 
@@ -108,6 +109,8 @@ RilConsumer::ConnectWorkerToRIL(JSContext* aCx)
                                                  "postRILMessage",
                                                  PostRILMessage, 2, 0);
   if (NS_WARN_IF(!postRILMessage)) {
+    // Just returning failure here will cause the exception on the JSContext to
+    // be reported as needed.
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
@@ -206,9 +209,18 @@ RilConsumer::Send(JSContext* aCx, const CallArgs& aArgs)
       return NS_ERROR_FAILURE;
     }
 
-    AutoCheckCannotGC nogc;
     size_t size = JS_GetTypedArrayByteLength(obj);
-    void* data = JS_GetArrayBufferViewData(obj, nogc);
+    bool isShared;
+    void* data;
+    {
+      AutoCheckCannotGC nogc;
+      data = JS_GetArrayBufferViewData(obj, &isShared, nogc);
+    }
+    if (isShared) {
+      JS_ReportError(
+        aCx, "Incorrect argument.  Shared memory not supported");
+      return NS_ERROR_FAILURE;
+    }
     raw = new UnixSocketRawData(data, size);
   } else {
     JS_ReportError(
@@ -237,12 +249,17 @@ RilConsumer::Receive(JSContext* aCx,
 
   Rooted<JSObject*> array(aCx, JS_NewUint8Array(aCx, aBuffer->GetSize()));
   if (NS_WARN_IF(!array)) {
+    // Just suppress the exception, since our callers don't have a way to
+    // indicate they failed.
+    JS_ClearPendingException(aCx);
     return NS_ERROR_FAILURE;
   }
   {
     AutoCheckCannotGC nogc;
-    memcpy(JS_GetArrayBufferViewData(array, nogc),
+    bool isShared;
+    memcpy(JS_GetArrayBufferViewData(array, &isShared, nogc),
            aBuffer->GetData(), aBuffer->GetSize());
+    MOZ_ASSERT(!isShared);      // Array was constructed above.
   }
 
   AutoValueArray<2> args(aCx);
@@ -251,6 +268,9 @@ RilConsumer::Receive(JSContext* aCx,
 
   Rooted<Value> rval(aCx);
   JS_CallFunctionName(aCx, obj, "onRILMessage", args, &rval);
+  // Just suppress the exception, since our callers don't have a way to
+  // indicate they failed.
+  JS_ClearPendingException(aCx);
 
   return NS_OK;
 }

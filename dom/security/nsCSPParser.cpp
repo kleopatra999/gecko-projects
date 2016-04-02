@@ -19,12 +19,10 @@
 
 using namespace mozilla;
 
-static PRLogModuleInfo*
+static LogModule*
 GetCspParserLog()
 {
-  static PRLogModuleInfo* gCspParserPRLog;
-  if (!gCspParserPRLog)
-    gCspParserPRLog = PR_NewLogModule("CSPParser");
+  static LazyLogModule gCspParserPRLog("CSPParser");
   return gCspParserPRLog;
 }
 
@@ -122,14 +120,19 @@ nsCSPTokenizer::tokenizeCSPPolicy(const nsAString &aPolicyString,
 
 nsCSPParser::nsCSPParser(cspTokens& aTokens,
                          nsIURI* aSelfURI,
-                         nsCSPContext* aCSPContext)
- : mHasHashOrNonce(false)
+                         nsCSPContext* aCSPContext,
+                         bool aDeliveredViaMetaTag)
+ : mCurChar(nullptr)
+ , mEndChar(nullptr)
+ , mHasHashOrNonce(false)
  , mUnsafeInlineKeywordSrc(nullptr)
  , mChildSrc(nullptr)
  , mFrameSrc(nullptr)
  , mTokens(aTokens)
  , mSelfURI(aSelfURI)
+ , mPolicy(nullptr)
  , mCSPContext(aCSPContext)
+ , mDeliveredViaMetaTag(aDeliveredViaMetaTag)
 {
   CSPPARSERLOG(("nsCSPParser::nsCSPParser"));
 }
@@ -575,6 +578,10 @@ nsCSPParser::keywordSource()
   }
 
   if (CSP_IsKeyword(mCurToken, CSP_UNSAFE_INLINE)) {
+      nsCOMPtr<nsIDocument> doc = do_QueryReferent(mCSPContext->GetLoadingContext());
+      if (doc) {
+        doc->SetHasUnsafeInlineCSP(true);
+      }
     // make sure script-src only contains 'unsafe-inline' once;
     // ignore duplicates and log warning
     if (mUnsafeInlineKeywordSrc) {
@@ -590,6 +597,10 @@ nsCSPParser::keywordSource()
   }
 
   if (CSP_IsKeyword(mCurToken, CSP_UNSAFE_EVAL)) {
+    nsCOMPtr<nsIDocument> doc = do_QueryReferent(mCSPContext->GetLoadingContext());
+    if (doc) {
+      doc->SetHasUnsafeEvalCSP(true);
+    }
     return new nsCSPKeywordSrc(CSP_KeywordToEnum(mCurToken));
   }
   return nullptr;
@@ -991,6 +1002,25 @@ nsCSPParser::directiveName()
     return nullptr;
   }
 
+  // CSP delivered via meta tag should ignore the following directives:
+  // report-uri, frame-ancestors, and sandbox, see:
+  // http://www.w3.org/TR/CSP11/#delivery-html-meta-element
+  if (mDeliveredViaMetaTag &&
+       ((CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::REPORT_URI_DIRECTIVE)) ||
+        (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::FRAME_ANCESTORS_DIRECTIVE)))) {
+    // log to the console to indicate that meta CSP is ignoring the directive
+    const char16_t* params[] = { mCurToken.get() };
+    logWarningErrorToConsole(nsIScriptError::warningFlag,
+                             "ignoringSrcFromMetaCSP",
+                             params, ArrayLength(params));
+    return nullptr;
+  }
+
+  // special case handling for block-all-mixed-content
+  if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::BLOCK_ALL_MIXED_CONTENT)) {
+    return new nsBlockAllMixedContentDirective(CSP_StringToCSPDirective(mCurToken));
+  }
+
   // special case handling for upgrade-insecure-requests
   if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::UPGRADE_IF_INSECURE_DIRECTIVE)) {
     return new nsUpgradeInsecureDirective(CSP_StringToCSPDirective(mCurToken));
@@ -1042,6 +1072,20 @@ nsCSPParser::directive()
     return;
   }
 
+  // special case handling for block-all-mixed-content, which is only specified
+  // by a directive name but does not include any srcs.
+  if (cspDir->equals(nsIContentSecurityPolicy::BLOCK_ALL_MIXED_CONTENT)) {
+    if (mCurDir.Length() > 1) {
+      const char16_t* params[] = { MOZ_UTF16("block-all-mixed-content") };
+      logWarningErrorToConsole(nsIScriptError::warningFlag,
+                               "ignoreSrcForDirective",
+                               params, ArrayLength(params));
+    }
+    // add the directive and return
+    mPolicy->addDirective(cspDir);
+    return;
+  }
+
   // special case handling for upgrade-insecure-requests, which is only specified
   // by a directive name but does not include any srcs.
   if (cspDir->equals(nsIContentSecurityPolicy::UPGRADE_IF_INSECURE_DIRECTIVE)) {
@@ -1072,15 +1116,16 @@ nsCSPParser::directive()
     srcs.AppendElement(keyword);
   }
 
-  // if a hash or nonce is specified within script-src, then
-  // unsafe-inline should be ignored, see:
+  // Ignore unsafe-inline within script-src or style-src if nonce
+  // or hash is specified, see:
   // http://www.w3.org/TR/CSP2/#directive-script-src
-  if (cspDir->equals(nsIContentSecurityPolicy::SCRIPT_SRC_DIRECTIVE) &&
+  if ((cspDir->equals(nsIContentSecurityPolicy::SCRIPT_SRC_DIRECTIVE) ||
+       cspDir->equals(nsIContentSecurityPolicy::STYLE_SRC_DIRECTIVE)) &&
       mHasHashOrNonce && mUnsafeInlineKeywordSrc) {
     mUnsafeInlineKeywordSrc->invalidate();
     // log to the console that unsafe-inline will be ignored
     const char16_t* params[] = { MOZ_UTF16("'unsafe-inline'") };
-    logWarningErrorToConsole(nsIScriptError::warningFlag, "ignoringSrcWithinScriptSrc",
+    logWarningErrorToConsole(nsIScriptError::warningFlag, "ignoringSrcWithinScriptStyleSrc",
                              params, ArrayLength(params));
   }
 
@@ -1116,7 +1161,8 @@ nsCSPPolicy*
 nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
                                         nsIURI *aSelfURI,
                                         bool aReportOnly,
-                                        nsCSPContext* aCSPContext)
+                                        nsCSPContext* aCSPContext,
+                                        bool aDeliveredViaMetaTag)
 {
   if (CSPPARSERLOGENABLED()) {
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, policy: %s",
@@ -1126,6 +1172,8 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, selfURI: %s", spec.get()));
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, reportOnly: %s",
                  (aReportOnly ? "true" : "false")));
+    CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, deliveredViaMetaTag: %s",
+                 (aDeliveredViaMetaTag ? "true" : "false")));
   }
 
   NS_ASSERTION(aSelfURI, "Can not parseContentSecurityPolicy without aSelfURI");
@@ -1138,7 +1186,7 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
   nsTArray< nsTArray<nsString> > tokens;
   nsCSPTokenizer::tokenizeCSPPolicy(aPolicyString, tokens);
 
-  nsCSPParser parser(tokens, aSelfURI, aCSPContext);
+  nsCSPParser parser(tokens, aSelfURI, aCSPContext, aDeliveredViaMetaTag);
 
   // Start the parser to generate a new CSPPolicy using the generated tokens.
   nsCSPPolicy* policy = parser.policy();

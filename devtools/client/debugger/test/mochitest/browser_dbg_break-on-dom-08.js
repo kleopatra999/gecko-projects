@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that breaking on an event selects the variables view tab.
@@ -13,15 +15,14 @@ function test() {
     let gDebugger = aPanel.panelWin;
     let gView = gDebugger.DebuggerView;
     let gEvents = gView.EventListeners;
-    let gStore = gDebugger.store;
-    let getState = gStore.getState;
+    let gController = gDebugger.DebuggerController;
     let constants = gDebugger.require('./content/constants');
 
     Task.spawn(function*() {
       yield waitForSourceShown(aPanel, ".html");
       yield callInTab(gTab, "addBodyClickEventListener");
 
-      let fetched = afterDispatch(gStore, constants.FETCH_EVENT_LISTENERS);
+      let fetched = waitForDispatch(aPanel, constants.FETCH_EVENT_LISTENERS);
       gView.toggleInstrumentsPane({ visible: true, animated: false }, 1);
       yield fetched;
       yield ensureThreadClientState(aPanel, "attached");
@@ -31,7 +32,7 @@ function test() {
       is(gView.instrumentsPaneTab, "events-tab",
         "The events tab should be selected.");
 
-      let updated = afterDispatch(gStore, constants.UPDATE_EVENT_BREAKPOINTS);
+      let updated = waitForDispatch(aPanel, constants.UPDATE_EVENT_BREAKPOINTS);
       EventUtils.sendMouseEvent({ type: "click" }, getItemCheckboxNode(1), gDebugger);
       yield updated;
       yield ensureThreadClientState(aPanel, "attached");

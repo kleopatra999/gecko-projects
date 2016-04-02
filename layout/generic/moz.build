@@ -96,6 +96,7 @@ EXPORTS += [
     'nsTextRunTransformations.h',
     'RubyUtils.h',
     'ScrollbarActivity.h',
+    'Visibility.h',
 ]
 
 EXPORTS.mozilla += [
@@ -112,9 +113,11 @@ EXPORTS.mozilla.layout += [
 
 UNIFIED_SOURCES += [
     'AsyncScrollBase.cpp',
+    'DetailsFrame.cpp',
     'FrameChildList.cpp',
     'MathMLTextRunFactory.cpp',
     'nsAbsoluteContainingBlock.cpp',
+    'nsBackdropFrame.cpp',
     'nsBlockFrame.cpp',
     'nsBlockReflowContext.cpp',
     'nsBlockReflowState.cpp',
@@ -165,6 +168,7 @@ UNIFIED_SOURCES += [
     'ScrollbarActivity.cpp',
     'ScrollVelocityQueue.cpp',
     'StickyScrollContainer.cpp',
+    'SummaryFrame.cpp',
     'TextOverflow.cpp',
 ]
 
@@ -190,6 +194,7 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/dom/html',
     '/dom/xul',
+    '/editor/libeditor'
 ]
 
 JAR_MANIFESTS += ['jar.mn']
@@ -203,7 +208,7 @@ MOCHITEST_CHROME_MANIFESTS += ['test/chrome.ini']
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
 
-if CONFIG['MOZ_WIDGET_GTK']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     CXXFLAGS += CONFIG['TK_CFLAGS']
 
 if CONFIG['MOZ_ENABLE_QT']:

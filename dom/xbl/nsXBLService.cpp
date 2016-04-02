@@ -188,7 +188,7 @@ private:
   ~nsXBLStreamListener();
 
   nsCOMPtr<nsIStreamListener> mInner;
-  nsAutoTArray<nsXBLBindingRequest*, 8> mBindingRequests;
+  AutoTArray<nsXBLBindingRequest*, 8> mBindingRequests;
 
   nsCOMPtr<nsIWeakReference> mBoundDocument;
   nsCOMPtr<nsIXMLContentSink> mSink; // Only set until OnStartRequest
@@ -556,22 +556,7 @@ nsXBLService::AttachGlobalKeyHandler(EventTarget* aTarget)
   RefPtr<nsXBLWindowKeyHandler> handler =
     NS_NewXBLWindowKeyHandler(elt, piTarget);
 
-  // listen to these events
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                  TrustedEventsAtSystemGroupBubble());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                  TrustedEventsAtSystemGroupBubble());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                  TrustedEventsAtSystemGroupBubble());
-
-  // The capturing listener is only used for XUL keysets to properly handle
-  // shortcut keys in a multi-process environment.
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                  TrustedEventsAtSystemGroupCapture());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                  TrustedEventsAtSystemGroupCapture());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                  TrustedEventsAtSystemGroupCapture());
+  handler->InstallKeyboardEventListenersTo(manager);
 
   if (contentNode)
     return contentNode->SetProperty(nsGkAtoms::listener,
@@ -611,19 +596,8 @@ nsXBLService::DetachGlobalKeyHandler(EventTarget* aTarget)
   if (!handler)
     return NS_ERROR_FAILURE;
 
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                     TrustedEventsAtSystemGroupBubble());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                     TrustedEventsAtSystemGroupBubble());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                     TrustedEventsAtSystemGroupBubble());
-
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                     TrustedEventsAtSystemGroupCapture());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                     TrustedEventsAtSystemGroupCapture());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                     TrustedEventsAtSystemGroupCapture());
+  static_cast<nsXBLWindowKeyHandler*>(handler)->
+    RemoveKeyboardEventListenersFrom(manager);
 
   contentNode->DeleteProperty(nsGkAtoms::listener);
 
@@ -647,7 +621,7 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
                          bool* aIsReady, nsXBLBinding** aResult)
 {
   // More than 6 binding URIs are rare, see bug 55070 comment 18.
-  nsAutoTArray<nsCOMPtr<nsIURI>, 6> uris;
+  AutoTArray<nsCOMPtr<nsIURI>, 6> uris;
   return GetBinding(aBoundElement, aURI, aPeekOnly, aOriginPrincipal, aIsReady,
                     aResult, uris);
 }

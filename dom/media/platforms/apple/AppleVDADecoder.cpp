@@ -27,7 +27,7 @@
 #include "MacIOSurfaceImage.h"
 #endif
 
-extern PRLogModuleInfo* GetPDMLog();
+extern mozilla::LogModule* GetPDMLog();
 #define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 //#define LOG_MEDIA_SHA1
 
@@ -397,11 +397,7 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
 
     RefPtr<MacIOSurface> macSurface = new MacIOSurface(surface);
 
-    RefPtr<layers::Image> image =
-      mImageContainer->CreateImage(ImageFormat::MAC_IOSURFACE);
-    layers::MacIOSurfaceImage* videoImage =
-      static_cast<layers::MacIOSurfaceImage*>(image.get());
-    videoImage->SetSurface(macSurface);
+    RefPtr<layers::Image> image = new MacIOSurfaceImage(macSurface);
 
     data =
       VideoData::CreateFromImage(info,
@@ -599,14 +595,14 @@ AppleVDADecoder::CreateDecoderSpecification()
 CFDictionaryRef
 AppleVDADecoder::CreateOutputConfiguration()
 {
-  // Output format type:
-  SInt32 PixelFormatTypeValue = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-  AutoCFRelease<CFNumberRef> PixelFormatTypeNumber =
-    CFNumberCreate(kCFAllocatorDefault,
-                   kCFNumberSInt32Type,
-                   &PixelFormatTypeValue);
-
   if (mUseSoftwareImages) {
+    // Output format type:
+    SInt32 PixelFormatTypeValue =
+      kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    AutoCFRelease<CFNumberRef> PixelFormatTypeNumber =
+      CFNumberCreate(kCFAllocatorDefault,
+                     kCFNumberSInt32Type,
+                     &PixelFormatTypeValue);
     const void* outputKeys[] = { kCVPixelBufferPixelFormatTypeKey };
     const void* outputValues[] = { PixelFormatTypeNumber };
     static_assert(ArrayLength(outputKeys) == ArrayLength(outputValues),
@@ -621,6 +617,12 @@ AppleVDADecoder::CreateOutputConfiguration()
   }
 
 #ifndef MOZ_WIDGET_UIKIT
+  // Output format type:
+  SInt32 PixelFormatTypeValue = kCVPixelFormatType_422YpCbCr8;
+  AutoCFRelease<CFNumberRef> PixelFormatTypeNumber =
+    CFNumberCreate(kCFAllocatorDefault,
+                   kCFNumberSInt32Type,
+                   &PixelFormatTypeValue);
   // Construct IOSurface Properties
   const void* IOSurfaceKeys[] = { MacIOSurfaceLib::kPropIsGlobal };
   const void* IOSurfaceValues[] = { kCFBooleanTrue };

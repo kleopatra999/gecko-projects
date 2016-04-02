@@ -15,6 +15,7 @@
 
 using namespace JS;
 using namespace mozilla::scache;
+using mozilla::UniquePtr;
 
 // We only serialize scripts with system principals. So we don't serialize the
 // principals when writing a script. Instead, when reading it back, we set the
@@ -23,14 +24,13 @@ nsresult
 ReadCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
                  nsIPrincipal* systemPrincipal, MutableHandleScript scriptp)
 {
-    nsAutoArrayPtr<char> buf;
+    UniquePtr<char[]> buf;
     uint32_t len;
-    nsresult rv = cache->GetBuffer(PromiseFlatCString(uri).get(),
-                                   getter_Transfers(buf), &len);
+    nsresult rv = cache->GetBuffer(PromiseFlatCString(uri).get(), &buf, &len);
     if (NS_FAILED(rv))
         return rv; // don't warn since NOT_AVAILABLE is an ok error
 
-    scriptp.set(JS_DecodeScript(cx, buf, len));
+    scriptp.set(JS_DecodeScript(cx, buf.get(), len));
     if (!scriptp)
         return NS_ERROR_OUT_OF_MEMORY;
     return NS_OK;
@@ -65,8 +65,11 @@ WriteCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
 
     uint32_t size;
     void* data = JS_EncodeScript(cx, script, &size);
-    if (!data)
-        return NS_ERROR_OUT_OF_MEMORY;
+    if (!data) {
+        // JS_EncodeScript may have set a pending exception.
+        JS_ClearPendingException(cx);
+        return NS_ERROR_FAILURE;
+    }
 
     MOZ_ASSERT(size);
     nsresult rv = cache->PutBuffer(PromiseFlatCString(uri).get(), static_cast<char*>(data), size);
@@ -83,8 +86,11 @@ WriteCachedFunction(StartupCache* cache, nsACString& uri, JSContext* cx,
     uint32_t size;
     void* data =
       JS_EncodeInterpretedFunction(cx, JS_GetFunctionObject(function), &size);
-    if (!data)
-        return NS_ERROR_OUT_OF_MEMORY;
+    if (!data) {
+        // JS_EncodeInterpretedFunction may have set a pending exception.
+        JS_ClearPendingException(cx);
+        return NS_ERROR_FAILURE;
+    }
 
     MOZ_ASSERT(size);
     nsresult rv = cache->PutBuffer(PromiseFlatCString(uri).get(), static_cast<char*>(data), size);

@@ -9,6 +9,7 @@ UNIFIED_SOURCES += [
     # Disabled on suspicion of causing bug 904227
     #'gfxWordCacheTest.cpp',
     'TestArena.cpp',
+    'TestArrayView.cpp',
     'TestBufferRotation.cpp',
     'TestColorNames.cpp',
     'TestCompositor.cpp',
@@ -24,6 +25,7 @@ UNIFIED_SOURCES += [
     # Hangs on linux in ApplyGdkScreenFontOptions
     #'gfxFontSelectionTest.cpp',
     'TestTextures.cpp',
+    'TestTreeTraversal.cpp',
     # Test works but it doesn't assert anything
     #'gfxTextRunPerfTest.cpp',
     # Bug 1179287 - PGO bustage on Linux

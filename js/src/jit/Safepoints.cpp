@@ -165,7 +165,7 @@ SafepointWriter::writeGcSlots(LSafepoint* safepoint)
 
 #ifdef JS_JITSPEW
     for (uint32_t i = 0; i < slots.length(); i++)
-        JitSpew(JitSpew_Safepoints, "    gc slot: %d", slots[i]);
+        JitSpew(JitSpew_Safepoints, "    gc slot: %u", slots[i].slot);
 #endif
 
     MapSlotsToBitset(frameSlots_, argumentSlots_, stream_, slots);
@@ -195,13 +195,13 @@ SafepointWriter::writeValueSlots(LSafepoint* safepoint)
 
 #ifdef JS_JITSPEW
     for (uint32_t i = 0; i < slots.length(); i++)
-        JitSpew(JitSpew_Safepoints, "    gc value: %d", slots[i]);
+        JitSpew(JitSpew_Safepoints, "    gc value: %u", slots[i].slot);
 #endif
 
     MapSlotsToBitset(frameSlots_, argumentSlots_, stream_, slots);
 }
 
-#if defined(DEBUG) && defined(JS_NUNBOX32)
+#if defined(JS_JITSPEW) && defined(JS_NUNBOX32)
 static void
 DumpNunboxPart(const LAllocation& a)
 {
@@ -428,7 +428,7 @@ SafepointReader::InvalidationPatchPoint(IonScript* script, const SafepointIndex*
 {
     SafepointReader reader(script, si);
 
-    return CodeLocationLabel(script->method(), CodeOffsetLabel(reader.osiCallPointOffset()));
+    return CodeLocationLabel(script->method(), CodeOffset(reader.osiCallPointOffset()));
 }
 
 void

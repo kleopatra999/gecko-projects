@@ -14,8 +14,11 @@ import os
 import sys
 import traceback
 
-from mozbuild.util import FileAvoidWrite
+from mozbuild.pythonutil import iter_modules_in_path
 from mozbuild.makeutil import Makefile
+from mozbuild.util import FileAvoidWrite
+import buildconfig
+
 
 def main(argv):
     parser = argparse.ArgumentParser('Generate a file from a Python script',
@@ -28,7 +31,8 @@ def main(argv):
                         help='The file to generate')
     parser.add_argument('dep_file', metavar='dep-file', type=str,
                         help='File to write any additional make dependencies to')
-    parser.add_argument('additional_arguments', metavar='arg', nargs='*',
+    parser.add_argument('additional_arguments', metavar='arg',
+                        nargs=argparse.REMAINDER,
                         help="Additional arguments to the script's main() method")
 
     args = parser.parse_args(argv)
@@ -61,6 +65,8 @@ def main(argv):
             # is an error (so scripts can conveniently |return 1| or
             # similar).
             if isinstance(ret, set) and ret:
+                ret |= set(iter_modules_in_path(buildconfig.topsrcdir,
+                                                buildconfig.topobjdir))
                 mk = Makefile()
                 mk.create_rule([args.output_file]).add_dependencies(ret)
                 with FileAvoidWrite(args.dep_file) as dep_file:

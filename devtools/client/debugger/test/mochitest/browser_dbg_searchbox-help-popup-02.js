@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure that the searchbox popup isn't displayed when there's some text
@@ -63,11 +65,11 @@ function focusEditor() {
 }
 
 function testFocusLost() {
-  ok(isCaretPos(gPanel, 6, 1),
+  ok(isCaretPos(gPanel, 4, 22),
     "The editor caret position appears to be correct after gaining focus.");
-  ok(isEditorSel(gPanel, [165, 165]),
+  ok(isEditorSel(gPanel, [125, 131]),
     "The editor selection appears to be correct after gaining focus.");
-  is(gEditor.getSelection(), "",
+  is(gEditor.getSelection(), "Call()",
     "The editor selected text appears to be correct after gaining focus.");
 
   is(gSearchBoxPanel.state, "closed",

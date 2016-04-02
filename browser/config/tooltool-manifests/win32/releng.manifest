@@ -6,10 +6,25 @@
 "filename": "mozmake.exe"
 },
 {
+"size": 78886322,
+"digest": "9c2c40637de27a0852aa1166f2a08159908b23f7a55855c933087c541461bbb2a1ec9e0522df0d2b9da2b2c343b673dbb5a2fa8d30216fe8acee1eb1383336ea",
+"algorithm": "sha512",
+"filename": "rustc-beta-i686-pc-windows-msvc.tar.bz2",
+"unpack": true
+},
+{
 "size": 167175,
 "digest": "0b71a936edf5bd70cf274aaa5d7abc8f77fe8e7b5593a208f805cc9436fac646b9c4f0b43c2b10de63ff3da671497d35536077ecbc72dba7f8159a38b580f831",
 "algorithm": "sha512",
 "filename": "sccache.tar.bz2",
+"unpack": true
+},
+{
+"version": "Visual Studio 2015 Update 1 / SDK 10.0.10586.0",
+"size": 330570496,
+"digest": "0379fd087705f54aeb335449e6c623cd550b656d7110acafd1e5b315e1fc9272b7cdd1e37f99d575b16ecba4e8e4fe3af965967a3944c023b83caf68fa684888",
+"algorithm": "sha512",
+"filename": "vs2015u1.zip",
 "unpack": true
 }
 ]

@@ -40,6 +40,7 @@
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "nsIAppShell.h"
 #include "nsIXULRuntime.h"
+#include "nsIScriptError.h"
 
 #include "nsError.h"
 
@@ -103,16 +104,15 @@
 static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
 static const char *kPrefJavaMIME = "plugin.java.mime";
+static const char *kPrefYoutubeRewrite = "plugins.rewrite_youtube_embeds";
 
 using namespace mozilla;
 using namespace mozilla::dom;
 
-static PRLogModuleInfo*
+static LogModule*
 GetObjectLog()
 {
-  static PRLogModuleInfo *sLog;
-  if (!sLog)
-    sLog = PR_NewLogModule("objlc");
+  static LazyLogModule sLog("objlc");
   return sLog;
 }
 
@@ -354,7 +354,7 @@ nsPluginCrashedEvent::Run()
     PluginCrashedEvent::Constructor(doc, NS_LITERAL_STRING("PluginCrashed"), init);
 
   event->SetTrusted(true);
-  event->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
+  event->WidgetEventPtr()->mFlags.mOnlyChromeDispatch = true;
 
   EventDispatcher::DispatchDOMEvent(mContent, nullptr, event, nullptr, nullptr);
   return NS_OK;
@@ -1153,6 +1153,20 @@ nsObjectLoadingContent::OnStopRequest(nsIRequest *aRequest,
     if (thisNode && thisNode->IsInComposedDoc()) {
       thisNode->GetComposedDoc()->AddBlockedTrackingNode(thisNode);
     }
+  } else if (aStatusCode == NS_ERROR_BLOCKED_URI) {
+    // Logging is temporarily disabled until after experiment phase.
+    //
+    // nsAutoCString uri;
+    // mURI->GetSpec(uri);
+    // nsCOMPtr<nsIConsoleService> console(
+    //   do_GetService("@mozilla.org/consoleservice;1"));
+    // if (console) {
+    //   nsString message = NS_LITERAL_STRING("Blocking ") +
+    //     NS_ConvertASCIItoUTF16(uri) +
+    //     NS_LITERAL_STRING(" since it was found on an internal Firefox blocklist.");
+    //   console->LogStringMessage(message.get());
+    // }
+    Telemetry::Accumulate(Telemetry::PLUGIN_BLOCKED_FOR_STABILITY, 1);
   }
 
   NS_ENSURE_TRUE(nsContentUtils::LegacyIsCallerChromeOrNativeCode(), NS_ERROR_NOT_AVAILABLE);
@@ -1218,13 +1232,18 @@ nsObjectLoadingContent::GetFrameLoader()
 }
 
 NS_IMETHODIMP
-nsObjectLoadingContent::SetIsPrerendered()
+nsObjectLoadingContent::GetParentApplication(mozIApplication** aApplication)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  if (!aApplication) {
+    return NS_ERROR_FAILURE;
+  }
+
+  *aApplication = nullptr;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
-nsObjectLoadingContent::SwapFrameLoaders(nsIFrameLoaderOwner* aOtherLoader)
+nsObjectLoadingContent::SetIsPrerendered()
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -1427,7 +1446,7 @@ nsObjectLoadingContent::ObjectState() const
         case eFallbackVulnerableNoUpdate:
           return NS_EVENT_STATE_VULNERABLE_NO_UPDATE;
       }
-  };
+  }
   NS_NOTREACHED("unknown type?");
   return NS_EVENT_STATE_LOADING;
 }
@@ -1472,8 +1491,8 @@ nsObjectLoadingContent::CheckJavaCodebase()
   return true;
 }
 
-bool
-nsObjectLoadingContent::IsYoutubeEmbed()
+void
+nsObjectLoadingContent::MaybeRewriteYoutubeEmbed(nsIURI* aURI, nsIURI* aBaseURI, nsIURI** aOutURI)
 {
   nsCOMPtr<nsIContent> thisContent =
     do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
@@ -1482,33 +1501,110 @@ nsObjectLoadingContent::IsYoutubeEmbed()
   // We're only interested in switching out embed and object tags
   if (!thisContent->NodeInfo()->Equals(nsGkAtoms::embed) &&
       !thisContent->NodeInfo()->Equals(nsGkAtoms::object)) {
-    return false;
+    return;
   }
+
   nsCOMPtr<nsIEffectiveTLDService> tldService =
     do_GetService(NS_EFFECTIVETLDSERVICE_CONTRACTID);
   // If we can't analyze the URL, just pass on through.
   if(!tldService) {
     NS_WARNING("Could not get TLD service!");
-    return false;
+    return;
   }
+
   nsAutoCString currentBaseDomain;
-  bool ok = NS_SUCCEEDED(tldService->GetBaseDomain(mURI, 0, currentBaseDomain));
+  bool ok = NS_SUCCEEDED(tldService->GetBaseDomain(aURI, 0, currentBaseDomain));
   if (!ok) {
-    // Data URIs won't parse correctly, so just fail silently here.
-    return false;
+    // Data URIs (commonly used for things like svg embeds) won't parse
+    // correctly, so just fail silently here.
+    return;
   }
+
   // See if URL is referencing youtube
-  nsAutoCString domain("youtube.com");
-  if (!StringEndsWith(domain, currentBaseDomain)) {
-    return false;
+  if (!currentBaseDomain.EqualsLiteral("youtube.com")) {
+    return;
   }
+
+  // We should only rewrite URLs with paths starting with "/v/", as we shouldn't
+  // touch object nodes with "/embed/" urls that already do that right thing.
+  nsAutoCString path;
+  aURI->GetPath(path);
+  if (!StringBeginsWith(path, NS_LITERAL_CSTRING("/v/"))) {
+    return;
+  }
+
   // See if requester is planning on using the JS API.
   nsAutoCString uri;
-  mURI->GetSpec(uri);
-  if (uri.Find("enablejsapi=1", true, 0, -1) == kNotFound) {
-    return false;
+  aURI->GetSpec(uri);
+  if (uri.Find("enablejsapi=1", true, 0, -1) != kNotFound) {
+    Telemetry::Accumulate(Telemetry::YOUTUBE_NONREWRITABLE_EMBED_SEEN, 1);
+    return;
   }
-  return true;
+
+  // Some youtube urls have invalid query strings attached, e.g.
+  // http://youtube.com/embed/7LcUOEP7Brc&start=35. These URLs work with flash,
+  // but break iframe/object embedding. If this situation occurs with rewritten
+  // URLs, and the user has flash installed, just use flash. If the user does
+  // not have flash installed or activated, chop off the query in order to make
+  // the video load correctly as an iframe. In either case, warn about it in the
+  // developer console.
+  int32_t ampIndex = uri.FindChar('&', 0);
+  bool trimQuery = false;
+  if (ampIndex != -1) {
+    int32_t qmIndex = uri.FindChar('?', 0);
+    if (qmIndex == -1 ||
+        qmIndex > ampIndex) {
+      if (!nsContentUtils::IsSWFPlayerEnabled()) {
+        trimQuery = true;
+      } else {
+        // Flash is enabled, just use it in this case.
+        return;
+      }
+    }
+  }
+
+  // If we've made it this far, we've got a rewritable embed. Log it in
+  // telemetry.
+  Telemetry::Accumulate(Telemetry::YOUTUBE_REWRITABLE_EMBED_SEEN, 1);
+
+  // If we're pref'd off, return after telemetry has been logged.
+  if (!Preferences::GetBool(kPrefYoutubeRewrite)) {
+    return;
+  }
+
+  nsAutoString utf16OldURI = NS_ConvertUTF8toUTF16(uri);
+  // If we need to trim the query off the URL, it means it's malformed, and an
+  // ampersand comes first. Use the index we found earlier.
+  if (trimQuery) {
+    uri.Truncate(ampIndex);
+  }
+  // Switch out video access url formats, which should possibly allow HTML5
+  // video loading.
+  uri.ReplaceSubstring(NS_LITERAL_CSTRING("/v/"),
+                       NS_LITERAL_CSTRING("/embed/"));
+  nsAutoString utf16URI = NS_ConvertUTF8toUTF16(uri);
+  nsresult rv = nsContentUtils::NewURIWithDocumentCharset(aOutURI,
+                                                          utf16URI,
+                                                          thisContent->OwnerDoc(),
+                                                          aBaseURI);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+  const char16_t* params[] = { utf16OldURI.get(), utf16URI.get() };
+  const char* msgName;
+  // If there's no query to rewrite, just notify in the developer console
+  // that we're changing the embed.
+  if (!trimQuery) {
+    msgName = "RewriteYoutubeEmbed";
+  } else {
+    msgName = "RewriteYoutubeEmbedInvalidQuery";
+  }
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  NS_LITERAL_CSTRING("Plugins"),
+                                  thisContent->OwnerDoc(),
+                                  nsContentUtils::eDOM_PROPERTIES,
+                                  msgName,
+                                  params, ArrayLength(params));
 }
 
 bool
@@ -1564,7 +1660,7 @@ nsObjectLoadingContent::CheckProcessPolicy(int16_t *aContentPolicy)
   NS_ASSERTION(thisContent, "Must be an instance of content");
 
   nsIDocument* doc = thisContent->OwnerDoc();
-  
+
   int32_t objectType;
   switch (mType) {
     case eType_Image:
@@ -1766,6 +1862,15 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
                                                    uriStr,
                                                    thisContent->OwnerDoc(),
                                                    newBaseURI);
+    nsCOMPtr<nsIURI> rewrittenURI;
+    MaybeRewriteYoutubeEmbed(newURI,
+                             newBaseURI,
+                             getter_AddRefs(rewrittenURI));
+    if (rewrittenURI) {
+      newURI = rewrittenURI;
+      newMime = NS_LITERAL_CSTRING("text/html");
+    }
+
     if (NS_SUCCEEDED(rv)) {
       NS_TryToSetImmutable(newURI);
     } else {
@@ -1929,9 +2034,9 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     newType = eType_Null;
     newMime.Truncate();
   } else if (newChannel) {
-      // If newChannel is set above, we considered it in setting newMime
-      newType = GetTypeOfContent(newMime);
-      LOG(("OBJLC [%p]: Using channel type", this));
+    // If newChannel is set above, we considered it in setting newMime
+    newType = GetTypeOfContent(newMime);
+    LOG(("OBJLC [%p]: Using channel type", this));
   } else if (((caps & eAllowPluginSkipChannel) || !newURI) &&
              GetTypeOfContent(newMime) == eType_Plugin) {
     newType = eType_Plugin;
@@ -2160,11 +2265,6 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
     return NS_OK;
   }
 
-  // Check whether this is a youtube embed.
-  if (IsYoutubeEmbed()) {
-    Telemetry::Accumulate(Telemetry::YOUTUBE_EMBED_SEEN, 1);
-  }
-
   //
   // Security checks
   //
@@ -2388,7 +2488,7 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
     case eType_Null:
       // Handled below, silence compiler warnings
     break;
-  };
+  }
 
   //
   // Loaded, handle notifications and fallback
@@ -2579,8 +2679,7 @@ nsObjectLoadingContent::GetCapabilities() const
 {
   return eSupportImages |
          eSupportPlugins |
-         eSupportDocuments |
-         eSupportSVG;
+         eSupportDocuments;
 }
 
 void
@@ -2686,8 +2785,8 @@ nsObjectLoadingContent::NotifyStateChanged(ObjectType aOldType,
   EventStates newState = ObjectState();
 
   if (newState != aOldState) {
+    NS_ASSERTION(thisContent->IsInComposedDoc(), "Something is confused");
     // This will trigger frame construction
-    NS_ASSERTION(InActiveDocument(thisContent), "Something is confused");
     EventStates changedBits = aOldState ^ newState;
 
     {
@@ -2695,6 +2794,7 @@ nsObjectLoadingContent::NotifyStateChanged(ObjectType aOldType,
       doc->ContentStateChanged(thisContent, changedBits);
     }
     if (aSync) {
+      NS_ASSERTION(InActiveDocument(thisContent), "Something is confused");
       // Make sure that frames are actually constructed immediately.
       doc->FlushPendingNotifications(Flush_Frames);
     }
@@ -2735,10 +2835,7 @@ nsObjectLoadingContent::GetTypeOfContent(const nsCString& aMIMEType)
     return eType_Document;
   }
 
-  // SVGs load as documents, but are their own capability
-  bool isSVG = aMIMEType.LowerCaseEqualsLiteral("image/svg+xml");
-  Capabilities supportType = isSVG ? eSupportSVG : eSupportDocuments;
-  if ((caps & supportType) && IsSupportedDocument(aMIMEType)) {
+  if ((caps & eSupportDocuments) && IsSupportedDocument(aMIMEType)) {
     return eType_Document;
   }
 
@@ -2830,7 +2927,7 @@ nsObjectLoadingContent::PluginCrashed(nsIPluginTag* aPluginTag,
 
   // send nsPluginCrashedEvent
 
-  // Note that aPluginTag in invalidated after we're called, so copy 
+  // Note that aPluginTag in invalidated after we're called, so copy
   // out any data we need now.
   nsAutoCString pluginName;
   aPluginTag->GetName(pluginName);
@@ -2936,9 +3033,6 @@ nsObjectLoadingContent::AsyncStartPluginInstance()
   }
 
   nsCOMPtr<nsIRunnable> event = new nsAsyncInstantiateEvent(this);
-  if (!event) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
   nsresult rv = NS_DispatchToCurrentThread(event);
   if (NS_SUCCEEDED(rv)) {
     // Track pending events
@@ -3075,6 +3169,7 @@ nsObjectLoadingContent::DoStopPlugin(nsPluginInstanceOwner* aInstanceOwner,
 NS_IMETHODIMP
 nsObjectLoadingContent::StopPluginInstance()
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   // Clear any pending events
   mPendingInstantiateEvent = nullptr;
   mPendingCheckPluginStopEvent = nullptr;
@@ -3246,12 +3341,17 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
     sPrefsInitialized = true;
   }
 
-  if (XRE_IsParentProcess() &&
-      BrowserTabsRemoteAutostart()) {
-    // Plugins running OOP from the chrome process along with plugins running
-    // OOP from the content process will hang. Let's prevent that situation.
-    aReason = eFallbackDisabled;
-    return false;
+  if (BrowserTabsRemoteAutostart()) {
+    bool shouldLoadInParent = nsPluginHost::ShouldLoadTypeInParent(mContentType);
+    bool inParent = XRE_IsParentProcess();
+
+    if (shouldLoadInParent != inParent) {
+      // Plugins need to be locked to either the parent process or the content
+      // process. If a plugin is locked to one process type, it can't be used in
+      // the other. Otherwise we'll get hangs.
+      aReason = eFallbackDisabled;
+      return false;
+    }
   }
 
   RefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
@@ -3307,11 +3407,11 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
   MOZ_ASSERT(thisContent);
   nsIDocument* ownerDoc = thisContent->OwnerDoc();
 
-  nsCOMPtr<nsPIDOMWindow> window = ownerDoc->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = ownerDoc->GetWindow();
   if (!window) {
     return false;
   }
-  nsCOMPtr<nsPIDOMWindow> topWindow = window->GetTop();
+  nsCOMPtr<nsPIDOMWindowOuter> topWindow = window->GetTop();
   NS_ENSURE_TRUE(topWindow, false);
   nsCOMPtr<nsIDocument> topDoc = topWindow->GetDoc();
   NS_ENSURE_TRUE(topDoc, false);
@@ -3628,11 +3728,15 @@ nsObjectLoadingContent::TeardownProtoChain()
   nsCOMPtr<nsIContent> thisContent =
     do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
 
-  // Use the safe JSContext here as we're not always able to find the
-  // JSContext associated with the NPP any more.
-  AutoSafeJSContext cx;
+  NS_ENSURE_TRUE_VOID(thisContent->GetWrapper());
+
+  // We don't init the AutoJSAPI with our wrapper because we don't want it
+  // reporting errors to our window's onerror listeners.
+  AutoJSAPI jsapi;
+  jsapi.Init();
+  JSContext* cx = jsapi.cx();
   JS::Rooted<JSObject*> obj(cx, thisContent->GetWrapper());
-  NS_ENSURE_TRUE(obj, /* void */);
+  MOZ_ASSERT(obj);
 
   JS::Rooted<JSObject*> proto(cx);
   JSAutoCompartment ac(cx, obj);
@@ -3669,7 +3773,7 @@ nsObjectLoadingContent::TeardownProtoChain()
 bool
 nsObjectLoadingContent::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
                                   JS::Handle<jsid> aId,
-                                  JS::MutableHandle<JSPropertyDescriptor> aDesc)
+                                  JS::MutableHandle<JS::PropertyDescriptor> aDesc)
 {
   // We don't resolve anything; we just try to make sure we're instantiated.
   // This purposefully does not fire for chrome/xray resolves, see bug 967694
@@ -3735,4 +3839,3 @@ nsObjectLoadingContent::SetupProtoChainRunner::Run()
 }
 
 NS_IMPL_ISUPPORTS(nsObjectLoadingContent::SetupProtoChainRunner, nsIRunnable)
-

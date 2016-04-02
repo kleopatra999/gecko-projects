@@ -1,3 +1,5 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,19 +18,18 @@ const SCREENSIZE_HISTOGRAM = "DEVTOOLS_SCREEN_RESOLUTION_ENUMERATED_PER_USER";
 
 var {Cc, Ci, Cu} = require("chrome");
 var promise = require("promise");
+var Services = require("Services");
+var {gDevTools} = require("devtools/client/framework/devtools");
 var EventEmitter = require("devtools/shared/event-emitter");
 var Telemetry = require("devtools/client/shared/telemetry");
 var HUDService = require("devtools/client/webconsole/hudservice");
-var sourceUtils = require("devtools/client/shared/source-utils");
+var viewSource = require("devtools/client/shared/view-source");
+var { attachThread, detachThread } = require("./attach-thread");
 
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://devtools/client/framework/gDevTools.jsm");
 Cu.import("resource://devtools/client/scratchpad/scratchpad-manager.jsm");
 Cu.import("resource://devtools/client/shared/DOMHelpers.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 
-loader.lazyImporter(this, "CommandUtils",
-  "resource://devtools/client/shared/DeveloperToolbar.jsm");
 loader.lazyGetter(this, "toolboxStrings", () => {
   const properties = "chrome://devtools/locale/toolbox.properties";
   const bundle = Services.strings.createBundle(properties);
@@ -44,6 +45,8 @@ loader.lazyGetter(this, "toolboxStrings", () => {
     }
   };
 });
+loader.lazyRequireGetter(this, "CommandUtils",
+  "devtools/client/shared/developer-toolbar", true);
 loader.lazyRequireGetter(this, "getHighlighterUtils",
   "devtools/client/framework/toolbox-highlighter-utils", true);
 loader.lazyRequireGetter(this, "Hosts",
@@ -60,6 +63,8 @@ loader.lazyRequireGetter(this, "createPerformanceFront",
   "devtools/server/actors/performance", true);
 loader.lazyRequireGetter(this, "system",
   "devtools/shared/system");
+loader.lazyRequireGetter(this, "getPreferenceFront",
+  "devtools/server/actors/preference", true);
 loader.lazyGetter(this, "osString", () => {
   return Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
 });
@@ -84,13 +89,13 @@ const ToolboxButtons = exports.ToolboxButtons = [
     isTargetSupported: target => !target.isAddon },
   { id: "command-button-responsive" },
   { id: "command-button-paintflashing" },
-  { id: "command-button-tilt",
-    commands: "devtools/client/tilt/tilt-commands" },
   { id: "command-button-scratchpad" },
   { id: "command-button-eyedropper" },
   { id: "command-button-screenshot" },
   { id: "command-button-rulers" },
-  { id: "command-button-measure" }
+  { id: "command-button-measure" },
+  { id: "command-button-noautohide",
+    isTargetSupported: target => target.chrome },
 ];
 
 /**
@@ -118,6 +123,7 @@ function Toolbox(target, selectedTool, hostType, hostOptions) {
   this._toolRegistered = this._toolRegistered.bind(this);
   this._toolUnregistered = this._toolUnregistered.bind(this);
   this._refreshHostTitle = this._refreshHostTitle.bind(this);
+  this._toggleAutohide = this._toggleAutohide.bind(this);
   this.selectFrame = this.selectFrame.bind(this);
   this._updateFrames = this._updateFrames.bind(this);
   this._splitConsoleOnKeypress = this._splitConsoleOnKeypress.bind(this);
@@ -177,7 +183,7 @@ Toolbox.HostType = {
 };
 
 Toolbox.prototype = {
-  _URL: "chrome://devtools/content/framework/toolbox.xul",
+  _URL: "about:devtools-toolbox",
 
   _prefs: {
     LAST_HOST: "devtools.toolbox.host",
@@ -249,6 +255,10 @@ Toolbox.prototype = {
    */
   get target() {
     return this._target;
+  },
+
+  get threadClient() {
+    return this._threadClient;
   },
 
   /**
@@ -348,13 +358,25 @@ Toolbox.prototype = {
       let iframe = yield this._host.create();
       let domReady = promise.defer();
 
-      // Load the toolbox-level actor fronts and utilities now
-      yield this._target.makeRemote();
-      iframe.setAttribute("src", this._URL);
+      // Prevent reloading the document when the toolbox is opened in a tab
+      let location = iframe.contentWindow.location.href;
+      if (!location.startsWith(this._URL)) {
+        iframe.setAttribute("src", this._URL);
+      } else {
+        // Update the URL so that onceDOMReady watch for the right url.
+        this._URL = location;
+      }
       iframe.setAttribute("aria-label", toolboxStrings("toolbox.label"));
       let domHelper = new DOMHelpers(iframe.contentWindow);
-      domHelper.onceDOMReady(() => domReady.resolve());
+      domHelper.onceDOMReady(() => domReady.resolve(), this._URL);
+      // Optimization: fire up a few other things before waiting on
+      // the iframe being ready (makes startup faster)
 
+      // Load the toolbox-level actor fronts and utilities now
+      yield this._target.makeRemote();
+
+      // Attach the thread
+      this._threadClient = yield attachThread(this);
       yield domReady.promise;
 
       this.isReady = true;
@@ -367,6 +389,9 @@ Toolbox.prototype = {
 
       let framesMenu = this.doc.getElementById("command-button-frames");
       framesMenu.addEventListener("command", this.selectFrame, true);
+
+      let noautohideMenu = this.doc.getElementById("command-button-noautohide");
+      noautohideMenu.addEventListener("command", this._toggleAutohide, true);
 
       this.textboxContextMenuPopup =
         this.doc.getElementById("toolbox-textbox-context-popup");
@@ -543,11 +568,6 @@ Toolbox.prototype = {
     let toggleKey = this.doc.getElementById("toolbox-toggle-host-key");
     toggleKey.addEventListener("command", this.switchToPreviousHost.bind(this), true);
 
-    if (Services.prefs.prefHasUserValue("devtools.loader.srcdir")) {
-      let reloadKey = this.doc.getElementById("tools-reload-key");
-      reloadKey.addEventListener("command", this.reload.bind(this), true);
-    }
-
     // Split console uses keypress instead of command so the event can be
     // cancelled with stopPropagation on the keypress, and not preventDefault.
     this.doc.addEventListener("keypress", this._splitConsoleOnKeypress, false);
@@ -686,7 +706,10 @@ Toolbox.prototype = {
     zoomValue = Math.max(zoomValue, MIN_ZOOM);
     zoomValue = Math.min(zoomValue, MAX_ZOOM);
 
-    let contViewer = this.frame.docShell.contentViewer;
+    let docShell = this.frame.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIWebNavigation)
+      .QueryInterface(Ci.nsIDocShell);
+    let contViewer = docShell.contentViewer;
 
     contViewer.fullZoom = zoomValue;
 
@@ -897,6 +920,10 @@ Toolbox.prototype = {
     if (!this.target.hasActor("gcli")) {
       return promise.resolve();
     }
+    // Disable gcli in browser toolbox until there is usages of it
+    if (this.target.chrome) {
+      return promise.resolve();
+    }
 
     const options = {
       environment: CommandUtils.createEnvironment(this, '_target')
@@ -989,12 +1016,6 @@ Toolbox.prototype = {
         return false;
       }
 
-      // Disable tilt in E10S mode. Removing it from the list of toolbox buttons
-      // allows a bunch of tests to pass without modification.
-      if (this.target.isMultiProcess && options.id === "command-button-tilt") {
-        return false;
-      }
-
       return {
         id: options.id,
         button: button,
@@ -1002,7 +1023,7 @@ Toolbox.prototype = {
         visibilityswitch: "devtools." + options.id + ".enabled",
         isTargetSupported: options.isTargetSupported
                            ? options.isTargetSupported
-                           : target => target.isLocalTab
+                           : target => target.isLocalTab,
       };
     }).filter(button=>button);
   },
@@ -1030,21 +1051,7 @@ Toolbox.prototype = {
       }
     });
 
-    // Tilt is handled separately because it is disabled in E10S mode. Because
-    // we have removed tilt from toolboxButtons we have to deal with it here.
-    let tiltEnabled = !this.target.isMultiProcess &&
-                      Services.prefs.getBoolPref("devtools.command-button-tilt.enabled");
-    let tiltButton = this.doc.getElementById("command-button-tilt");
-    // Remote toolboxes don't add the button to the DOM at all
-    if (!tiltButton) {
-      return;
-    }
-
-    if (tiltEnabled) {
-      tiltButton.removeAttribute("hidden");
-    } else {
-      tiltButton.setAttribute("hidden", "true");
-    }
+    this._updateNoautohideButton();
   },
 
   /**
@@ -1531,6 +1538,40 @@ Toolbox.prototype = {
     this._host.setTitle(title);
   },
 
+  // Returns an instance of the preference actor
+  get _preferenceFront() {
+    return this.target.root.then(rootForm => {
+      return new getPreferenceFront(this.target.client, rootForm);
+    });
+  },
+
+  _toggleAutohide: Task.async(function*() {
+    let prefName = "ui.popup.disable_autohide";
+    let front = yield this._preferenceFront;
+    let current = yield front.getBoolPref(prefName);
+    yield front.setBoolPref(prefName, !current);
+
+    this._updateNoautohideButton();
+  }),
+
+  _updateNoautohideButton: Task.async(function*() {
+    let menu = this.doc.getElementById("command-button-noautohide");
+    if (menu.getAttribute("hidden") === "true") {
+      return;
+    }
+    if (!this.target.root) {
+      return;
+    }
+    let prefName = "ui.popup.disable_autohide";
+    let front = yield this._preferenceFront;
+    let current = yield front.getBoolPref(prefName);
+    if (current) {
+      menu.setAttribute("checked", "true");
+    } else {
+      menu.removeAttribute("checked");
+    }
+  }),
+
   _listFrames: function(event) {
     if (!this._target.activeTab || !this._target.activeTab.traits.frames) {
       // We are not targetting a regular TabActor
@@ -1646,11 +1687,6 @@ Toolbox.prototype = {
     return newHost;
   },
 
-  reload: function () {
-    const {devtools} = Cu.import("resource://devtools/shared/Loader.jsm", {});
-    devtools.reload(true);
-  },
-
   /**
    * Switch to the last used host for the toolbox UI.
    * This is determined by the devtools.toolbox.previousHost pref.
@@ -1719,6 +1755,16 @@ Toolbox.prototype = {
   },
 
   /**
+   * Return if the tool is available as a tab (i.e. if it's checked
+   * in the options panel). This is different from Toolbox.getPanel -
+   * a tool could be registered but not yet opened in which case
+   * isToolRegistered would return true but getPanel would return false.
+   */
+  isToolRegistered: function(toolId) {
+    return gDevTools.getToolDefinitionMap().has(toolId);
+  },
+
+  /**
    * Handler for the tool-registered event.
    * @param  {string} event
    *         Name of the event ("tool-registered")
@@ -1728,6 +1774,9 @@ Toolbox.prototype = {
   _toolRegistered: function(event, toolId) {
     let tool = gDevTools.getToolDefinition(toolId);
     this._buildTabForTool(tool);
+    // Emit the event so tools can listen to it from the toolbox level
+    // instead of gDevTools
+    this.emit("tool-registered", toolId);
   },
 
   /**
@@ -1779,6 +1828,9 @@ Toolbox.prototype = {
         key.parentNode.removeChild(key);
       }
     }
+    // Emit the event so tools can listen to it from the toolbox level
+    // instead of gDevTools
+    this.emit("tool-unregistered", toolId);
   },
 
   /**
@@ -1951,6 +2003,10 @@ Toolbox.prototype = {
 
     // Destroy the profiler connection
     outstanding.push(this.destroyPerformance());
+
+    // Detach the thread
+    detachThread(this._threadClient);
+    this._threadClient = null;
 
     // We need to grab a reference to win before this._host is destroyed.
     let win = this.frame.ownerGlobal;
@@ -2136,7 +2192,7 @@ Toolbox.prototype = {
    * @see devtools/client/shared/source-utils.js
    */
   viewSourceInStyleEditor: function(sourceURL, sourceLine) {
-    return sourceUtils.viewSourceInStyleEditor(this, sourceURL, sourceLine);
+    return viewSource.viewSourceInStyleEditor(this, sourceURL, sourceLine);
   },
 
   /**
@@ -2144,7 +2200,7 @@ Toolbox.prototype = {
    * @see devtools/client/shared/source-utils.js
    */
   viewSourceInDebugger: function(sourceURL, sourceLine) {
-    return sourceUtils.viewSourceInDebugger(this, sourceURL, sourceLine);
+    return viewSource.viewSourceInDebugger(this, sourceURL, sourceLine);
   },
 
   /**
@@ -2157,7 +2213,7 @@ Toolbox.prototype = {
    * @see devtools/client/shared/source-utils.js
    */
   viewSourceInScratchpad: function(sourceURL, sourceLine) {
-    return sourceUtils.viewSourceInScratchpad(sourceURL, sourceLine);
+    return viewSource.viewSourceInScratchpad(sourceURL, sourceLine);
   },
 
   /**
@@ -2165,6 +2221,6 @@ Toolbox.prototype = {
    * @see devtools/client/shared/source-utils.js
    */
   viewSource: function(sourceURL, sourceLine) {
-    return sourceUtils.viewSource(this, sourceURL, sourceLine);
+    return viewSource.viewSource(this, sourceURL, sourceLine);
   },
 };

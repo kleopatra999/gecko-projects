@@ -2,6 +2,47 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
+ * Use this variable if you specify duration or some other properties
+ * for script animation.
+ * E.g., div.animate({ opacity: [0, 1] }, 100 * MS_PER_SEC);
+ *
+ * NOTE: Creating animations with short duration may cause intermittent
+ * failures in asynchronous test. For example, the short duration animation
+ * might be finished when animation.ready has been fulfilled because of slow
+ * platforms or busyness of the main thread.
+ * Setting short duration to cancel its animation does not matter but
+ * if you don't want to cancel the animation, consider using longer duration.
+ */
+const MS_PER_SEC = 1000;
+
+/**
+ * Appends a div to the document body and creates an animation on the div.
+ * NOTE: This function asserts when trying to create animations with durations
+ * shorter than 100s because the shorter duration may cause intermittent
+ * failures.  If you are not sure how long it is suitable, use 100s; it's
+ * long enough but shorter than our test framework timeout (330s).
+ * If you really need to use shorter durations, use animate() function directly.
+ *
+ * @param t  The testharness.js Test object. If provided, this will be used
+ *           to register a cleanup callback to remove the div when the test
+ *           finishes.
+ * @param attrs  A dictionary object with attribute names and values to set on
+ *               the div.
+ * @param frames  The keyframes passed to Element.animate().
+ * @param options  The options passed to Element.animate().
+ */
+function addDivAndAnimate(t, attrs, frames, options) {
+  let animDur = (typeof options === 'object') ?
+    options.duration : options;
+  assert_greater_than_equal(animDur, 100 * MS_PER_SEC,
+      'Clients of this addDivAndAnimate API must request a duration ' +
+      'of at least 100s, to avoid intermittent failures from e.g.' +
+      'the main thread being busy for an extended period');
+
+  return addDiv(t, attrs).animate(frames, options);
+}
+
+/**
  * Appends a div to the document body.
  *
  * @param t  The testharness.js Test object. If provided, this will be used
@@ -30,15 +71,31 @@ function addDiv(t, attrs) {
 }
 
 /**
- * Some tests cause animations to continue to exist even after their target
- * element has been removed from the document tree. To ensure that these
- * animations do not impact other tests we should cancel them when the test
- * is complete.
+ * Appends a style div to the document head.
+ *
+ * @param t  The testharness.js Test object. If provided, this will be used
+ *           to register a cleanup callback to remove the style element
+ *           when the test finishes.
+ *
+ * @param rules  A dictionary object with selector names and rules to set on
+ *               the style sheet.
  */
-function cancelAllAnimationsOnEnd(t) {
-  t.add_cleanup(function() {
-    document.timeline.getAnimations().forEach(animation => animation.cancel());
-  });
+function addStyle(t, rules) {
+  var extraStyle = document.createElement('style');
+  document.head.appendChild(extraStyle);
+  if (rules) {
+    var sheet = extraStyle.sheet;
+    for (var selector in rules) {
+      sheet.insertRule(selector + '{' + rules[selector] + '}',
+                       sheet.cssRules.length);
+    }
+  }
+
+  if (t && typeof t.add_cleanup === 'function') {
+    t.add_cleanup(function() {
+      extraStyle.remove();
+    });
+  }
 }
 
 /**
@@ -53,13 +110,19 @@ function waitForFrame() {
 /**
  * Returns a Promise that is resolved after the given number of consecutive
  * animation frames have occured (using requestAnimationFrame callbacks).
+ *
+ * @param frameCount  The number of animation frames.
+ * @param onFrame  An optional function to be processed in each animation frame.
  */
-function waitForAnimationFrames(frameCount) {
+function waitForAnimationFrames(frameCount, onFrame) {
   return new Promise(function(resolve, reject) {
     function handleFrame() {
       if (--frameCount <= 0) {
         resolve();
       } else {
+        if (onFrame && typeof onFrame === 'function') {
+          onFrame();
+        }
         window.requestAnimationFrame(handleFrame); // wait another frame
       }
     }

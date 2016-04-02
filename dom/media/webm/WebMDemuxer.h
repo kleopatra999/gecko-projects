@@ -98,6 +98,8 @@ public:
 
   bool IsSeekable() const override;
 
+  bool IsSeekableOnlyInBufferedRanges() const override;
+
   UniquePtr<EncryptionInfo> GetCrypto() override;
 
   bool GetOffsetForTime(uint64_t aTime, int64_t* aOffset);
@@ -108,10 +110,10 @@ public:
   nsresult Reset();
 
   // Pushes a packet to the front of the audio packet queue.
-  virtual void PushAudioPacket(NesteggPacketHolder* aItem);
+  void PushAudioPacket(NesteggPacketHolder* aItem);
 
   // Pushes a packet to the front of the video packet queue.
-  virtual void PushVideoPacket(NesteggPacketHolder* aItem);
+  void PushVideoPacket(NesteggPacketHolder* aItem);
 
   // Public accessor for nestegg callbacks
   MediaResourceIndex* GetResource()
@@ -140,7 +142,7 @@ private:
   void NotifyDataRemoved() override;
   void EnsureUpToDateIndex();
   media::TimeIntervals GetBuffered();
-  virtual nsresult SeekInternal(const media::TimeUnit& aTarget);
+  nsresult SeekInternal(const media::TimeUnit& aTarget);
 
   // Read a packet from the nestegg file. Returns nullptr if all packets for
   // the particular track have been read. Pass TrackInfo::kVideoTrack or
@@ -199,6 +201,12 @@ private:
   // as nestegg only performs 1-byte read at a time.
   int64_t mLastWebMBlockOffset;
   const bool mIsMediaSource;
+
+  Maybe<uint32_t> mLastSeenFrameWidth;
+  Maybe<uint32_t> mLastSeenFrameHeight;
+  // This will be populated only if a resolution change occurs, otherwise it
+  // will be left as null so the original metadata is used
+  RefPtr<SharedTrackInfo> mSharedVideoTrackInfo;
 };
 
 class WebMTrackDemuxer : public MediaTrackDemuxer

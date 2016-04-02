@@ -17,8 +17,11 @@
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Snprintf.h"
+#include "mozilla/Telemetry.h"
 #include "nsCORSListenerProxy.h"
+#include "nsContentPolicyUtils.h"
 #include "nsCSSParser.h"
 #include "nsDeviceContext.h"
 #include "nsFontFaceLoader.h"
@@ -39,6 +42,7 @@
 #include "nsPrintfCString.h"
 #include "nsStyleSet.h"
 #include "nsUTF8Utils.h"
+#include "nsDOMNavigationTiming.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -90,7 +94,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(FontFaceSet)
   NS_INTERFACE_MAP_ENTRY(nsICSSLoaderObserver)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-FontFaceSet::FontFaceSet(nsPIDOMWindow* aWindow, nsIDocument* aDocument)
+FontFaceSet::FontFaceSet(nsPIDOMWindowInner* aWindow, nsIDocument* aDocument)
   : DOMEventTargetHelper(aWindow)
   , mDocument(aDocument)
   , mStatus(FontFaceSetLoadStatus::Loaded)
@@ -279,7 +283,7 @@ FontFaceSet::FindMatchingFontFaces(const nsAString& aFont,
       continue;
     }
 
-    nsAutoTArray<gfxFontEntry*,4> entries;
+    AutoTArray<gfxFontEntry*,4> entries;
     bool needsBold;
     family->FindAllFontsForStyle(style, entries, needsBold);
 
@@ -303,6 +307,17 @@ FontFaceSet::FindMatchingFontFaces(const nsAString& aFont,
       }
     }
   }
+}
+
+TimeStamp
+FontFaceSet::GetNavigationStartTimeStamp()
+{
+  TimeStamp navStart;
+  RefPtr<nsDOMNavigationTiming> timing(mDocument->GetNavigationTiming());
+  if (timing) {
+    navStart = timing->GetNavigationStartTimeStamp();
+  }
+  return navStart;
 }
 
 already_AddRefed<Promise>
@@ -333,6 +348,11 @@ FontFaceSet::Load(JSContext* aCx,
   }
 
   nsIGlobalObject* globalObject = GetParentObject();
+  if (!globalObject) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
   JS::Rooted<JSObject*> jsGlobal(aCx, globalObject->GetGlobalJSObject());
   GlobalObject global(aCx, jsGlobal);
 
@@ -578,10 +598,9 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
                                             aFontFaceSrc->mURI,
                                             mDocument,
                                             aUserFontEntry->GetPrincipal(),
-                                            nsILoadInfo::SEC_NORMAL,
+                                            nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS,
                                             nsIContentPolicy::TYPE_FONT,
                                             loadGroup);
-
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<nsFontFaceLoader> fontLoader =
@@ -627,25 +646,9 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
                                nsINetworkPredictor::LEARN_LOAD_SUBRESOURCE,
                                loadGroup);
 
-  bool inherits = false;
-  rv = NS_URIChainHasFlags(aFontFaceSrc->mURI,
-                           nsIProtocolHandler::URI_INHERITS_SECURITY_CONTEXT,
-                           &inherits);
-  if (NS_SUCCEEDED(rv) && inherits) {
-    // allow data, javascript, etc URI's
-    rv = channel->AsyncOpen(streamLoader, nullptr);
-  } else {
-    RefPtr<nsCORSListenerProxy> listener =
-      new nsCORSListenerProxy(streamLoader, aUserFontEntry->GetPrincipal(), false);
-    // Doesn't matter what data: URI handling we use here, since we
-    // don't even use a CORS listener proxy for the data: case.
-    rv = listener->Init(channel, DataURIHandling::Disallow);
-    if (NS_SUCCEEDED(rv)) {
-      rv = channel->AsyncOpen(listener, nullptr);
-    }
-    if (NS_FAILED(rv)) {
-      fontLoader->DropChannel();  // explicitly need to break ref cycle
-    }
+  rv = channel->AsyncOpen2(streamLoader);
+  if (NS_FAILED(rv)) {
+    fontLoader->DropChannel();  // explicitly need to break ref cycle
   }
 
   if (NS_SUCCEEDED(rv)) {
@@ -656,21 +659,6 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
   }
 
   return rv;
-}
-
-static PLDHashOperator DetachFontEntries(const nsAString& aKey,
-                                         RefPtr<gfxUserFontFamily>& aFamily,
-                                         void* aUserArg)
-{
-  aFamily->DetachFontEntries();
-  return PL_DHASH_NEXT;
-}
-
-static PLDHashOperator RemoveIfEmpty(const nsAString& aKey,
-                                     RefPtr<gfxUserFontFamily>& aFamily,
-                                     void* aUserArg)
-{
-  return aFamily->GetFontList().Length() ? PL_DHASH_NEXT : PL_DHASH_REMOVE;
 }
 
 bool
@@ -707,7 +695,9 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
   // the same font entries as before. (The order can affect font selection
   // where multiple faces match the requested style, perhaps with overlapping
   // unicode-range coverage.)
-  mUserFontSet->mFontFamilies.Enumerate(DetachFontEntries, nullptr);
+  for (auto it = mUserFontSet->mFontFamilies.Iter(); !it.Done(); it.Next()) {
+    it.Data()->DetachFontEntries();
+  }
 
   // Sometimes aRules has duplicate @font-face rules in it; we should make
   // that not happen, but in the meantime, don't try to insert the same
@@ -739,7 +729,11 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
 
   // Remove any residual families that have no font entries (i.e., they were
   // not defined at all by the updated set of @font-face rules).
-  mUserFontSet->mFontFamilies.Enumerate(RemoveIfEmpty, nullptr);
+  for (auto it = mUserFontSet->mFontFamilies.Iter(); !it.Done(); it.Next()) {
+    if (it.Data()->GetFontList().IsEmpty()) {
+      it.Remove();
+    }
+  }
 
   // If any FontFace objects for rules are left in the old list, note that the
   // set has changed (even if the new set was built entirely by migrating old
@@ -779,14 +773,17 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
     CheckLoadingFinished();
   }
 
-  // local rules have been rebuilt, so clear the flag
-  mUserFontSet->mLocalRulesUsed = false;
+  // if local rules needed to be rebuilt, they have been rebuilt at this point
+  if (mUserFontSet->mRebuildLocalRules) {
+    mUserFontSet->mLocalRulesUsed = false;
+    mUserFontSet->mRebuildLocalRules = false;
+  }
 
   if (LOG_ENABLED() && !mRuleFaces.IsEmpty()) {
     LOG(("userfonts (%p) userfont rules update (%s) rule count: %d",
          mUserFontSet.get(),
          (modified ? "modified" : "not modified"),
-         mRuleFaces.Length()));
+         (int)(mRuleFaces.Length())));
   }
 
   return modified;
@@ -865,7 +862,8 @@ FontFaceSet::InsertRuleFontFace(FontFace* aFontFace, SheetType aSheetType,
 
       // if local rules were used, don't use the old font entry
       // for rules containing src local usage
-      if (mUserFontSet->mLocalRulesUsed) {
+      if (mUserFontSet->mLocalRulesUsed &&
+          mUserFontSet->mRebuildLocalRules) {
         nsCSSValue val;
         aFontFace->GetDesc(eCSSFontDesc_Src, val);
         nsCSSUnit unit = val.GetUnit();
@@ -966,6 +964,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
   int32_t stretch = NS_STYLE_FONT_STRETCH_NORMAL;
   uint8_t italicStyle = NS_STYLE_FONT_STYLE_NORMAL;
   uint32_t languageOverride = NO_FONT_LANGUAGE_OVERRIDE;
+  uint8_t fontDisplay = NS_FONT_DISPLAY_AUTO;
 
   // set up weight
   aFontFace->GetDesc(eCSSFontDesc_Weight, val);
@@ -1001,6 +1000,16 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
     italicStyle = val.GetIntValue();
   } else if (unit == eCSSUnit_Normal) {
     italicStyle = NS_STYLE_FONT_STYLE_NORMAL;
+  } else {
+    NS_ASSERTION(unit == eCSSUnit_Null,
+                 "@font-face style has unexpected unit");
+  }
+
+  // set up font display
+  aFontFace->GetDesc(eCSSFontDesc_Display, val);
+  unit = val.GetUnit();
+  if (unit == eCSSUnit_Enumerated) {
+    fontDisplay = val.GetIntValue();
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face style has unexpected unit");
@@ -1151,7 +1160,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
                                             stretch, italicStyle,
                                             featureSettings,
                                             languageOverride,
-                                            unicodeRanges);
+                                            unicodeRanges, fontDisplay);
   return entry.forget();
 }
 
@@ -1313,13 +1322,6 @@ FontFaceSet::CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
     *aPrincipal = aFontFaceSrc->mOriginPrincipal;
   }
 
-  nsresult rv = nsFontFaceLoader::CheckLoadAllowed(*aPrincipal,
-                                                   aFontFaceSrc->mURI,
-                                                   mDocument);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   *aBypassCache = false;
 
   nsCOMPtr<nsIDocShell> docShell = mDocument->GetDocShell();
@@ -1338,7 +1340,28 @@ FontFaceSet::CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
     }
   }
 
-  return rv;
+  return NS_OK;
+}
+
+
+// @arg aPrincipal: generally this is mDocument->NodePrincipal() but
+// might also be the original principal which enables user stylesheets
+// to load font files via @font-face rules.
+bool
+FontFaceSet::IsFontLoadAllowed(nsIURI* aFontLocation, nsIPrincipal* aPrincipal)
+{
+  int16_t shouldLoad = nsIContentPolicy::ACCEPT;
+  nsresult rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_FONT,
+                                          aFontLocation,
+                                          aPrincipal,
+                                          mDocument,
+                                          EmptyCString(), // mime type
+                                          nullptr, // aExtra
+                                          &shouldLoad,
+                                          nsContentUtils::GetContentPolicy(),
+                                          nsContentUtils::GetSecurityManager());
+
+  return NS_SUCCEEDED(rv) && NS_CP_ACCEPTED(shouldLoad);
 }
 
 nsresult
@@ -1354,18 +1377,21 @@ FontFaceSet::SyncLoadFontData(gfxUserFontEntry* aFontToLoad,
   // node and a principal.  This is because the document where the font is
   // being loaded might have a different origin from the principal of the
   // stylesheet that initiated the font load.
+  // Further, we only get here for data: loads, so it doesn't really matter
+  // whether we use SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS or not, to be more
+  // restrictive we use SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS.
   rv = NS_NewChannelWithTriggeringPrincipal(getter_AddRefs(channel),
                                             aFontFaceSrc->mURI,
                                             mDocument,
                                             aFontToLoad->GetPrincipal(),
-                                            nsILoadInfo::SEC_NORMAL,
+                                            nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS,
                                             nsIContentPolicy::TYPE_FONT);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
   // blocking stream is OK for data URIs
   nsCOMPtr<nsIInputStream> stream;
-  rv = channel->Open(getter_AddRefs(stream));
+  rv = channel->Open2(getter_AddRefs(stream));
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint64_t bufferLength64;
@@ -1669,7 +1695,7 @@ FontFaceSet::PrefEnabled()
 // nsICSSLoaderObserver
 
 NS_IMETHODIMP
-FontFaceSet::StyleSheetLoaded(mozilla::CSSStyleSheet* aSheet,
+FontFaceSet::StyleSheetLoaded(StyleSheetHandle aSheet,
                               bool aWasAlternate,
                               nsresult aStatus)
 {
@@ -1717,6 +1743,14 @@ FontFaceSet::UserFontSet::CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
   return mFontFaceSet->CheckFontLoad(aFontFaceSrc, aPrincipal, aBypassCache);
 }
 
+/* virtual */ bool
+FontFaceSet::UserFontSet::IsFontLoadAllowed(nsIURI* aFontLocation,
+                                            nsIPrincipal* aPrincipal)
+{
+  return mFontFaceSet &&
+         mFontFaceSet->IsFontLoadAllowed(aFontLocation, aPrincipal);
+}
+
 /* virtual */ nsresult
 FontFaceSet::UserFontSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
                                     const gfxFontFaceSrc* aFontFaceSrc)
@@ -1725,6 +1759,26 @@ FontFaceSet::UserFontSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
     return NS_ERROR_FAILURE;
   }
   return mFontFaceSet->StartLoad(aUserFontEntry, aFontFaceSrc);
+}
+
+void
+FontFaceSet::UserFontSet::RecordFontLoadDone(uint32_t aFontSize,
+                                             TimeStamp aDoneTime)
+{
+  mDownloadCount++;
+  mDownloadSize += aFontSize;
+  Telemetry::Accumulate(Telemetry::WEBFONT_SIZE, aFontSize / 1024);
+
+  if (!mFontFaceSet) {
+    return;
+  }
+
+  TimeStamp navStart = mFontFaceSet->GetNavigationStartTimeStamp();
+  TimeStamp zero;
+  if (navStart != zero) {
+    Telemetry::AccumulateTimeDelta(Telemetry::WEBFONT_DOWNLOAD_TIME_AFTER_START,
+                                   navStart, aDoneTime);
+  }
 }
 
 /* virtual */ nsresult
@@ -1775,11 +1829,13 @@ FontFaceSet::UserFontSet::CreateUserFontEntry(
                                uint8_t aStyle,
                                const nsTArray<gfxFontFeature>& aFeatureSettings,
                                uint32_t aLanguageOverride,
-                               gfxSparseBitSet* aUnicodeRanges)
+                               gfxSparseBitSet* aUnicodeRanges,
+                               uint8_t aFontDisplay)
 {
   RefPtr<gfxUserFontEntry> entry =
     new FontFace::Entry(this, aFontFaceSrcList, aWeight, aStretch, aStyle,
-                        aFeatureSettings, aLanguageOverride, aUnicodeRanges);
+                        aFeatureSettings, aLanguageOverride, aUnicodeRanges,
+                        aFontDisplay);
   return entry.forget();
 }
 

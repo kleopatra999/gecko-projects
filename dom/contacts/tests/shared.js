@@ -1,9 +1,7 @@
 "use strict";
 
 // Fix the environment to run Contacts tests
-if (SpecialPowers.isMainProcess()) {
-  SpecialPowers.Cu.import("resource://gre/modules/ContactService.jsm");
-}
+SpecialPowers.importInMainProcess("resource://gre/modules/ContactService.jsm");
 
 // Some helpful global vars
 var isAndroid = (navigator.userAgent.indexOf("Android") !== -1);
@@ -496,16 +494,10 @@ function start_tests() {
                                     .getService(SpecialPowers.Ci.nsIPropertyBag2)
                                     .getProperty('version');
   if (!isAndroid || androidVersion >= 14) {
-    SpecialPowers.pushPermissions([
-      {type: "contacts-write", allow: 1, context: document},
-      {type: "contacts-read", allow: 1, context: document},
-      {type: "contacts-create", allow: 1, context: document},
-    ], function() {
-      mozContacts = navigator.mozContacts;
-      next();
-    });
+    mozContacts = navigator.mozContacts;
+    next();
   } else {
     ok(true, "Skip tests on Android < 4.0 (bugs 897924 & 888891");
-    SimpleTest.finish();
+    parent.SimpleTest.finish();
   }
 }

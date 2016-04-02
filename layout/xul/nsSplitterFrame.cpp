@@ -30,11 +30,13 @@
 #include "nsContainerFrame.h"
 #include "nsAutoPtr.h"
 #include "nsContentCID.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsLayoutUtils.h"
 #include "nsDisplayList.h"
 #include "nsContentUtils.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/UniquePtr.h"
 
@@ -84,17 +86,16 @@ public:
                     int32_t aCount,
                     int32_t& aSpaceLeft);
 
-  void ResizeChildTo(nsPresContext* aPresContext,
-                   nscoord& aDiff, 
-                   nsSplitterInfo* aChildrenBeforeInfos, 
-                   nsSplitterInfo* aChildrenAfterInfos, 
-                   int32_t aChildrenBeforeCount, 
-                   int32_t aChildrenAfterCount, 
-                   bool aBounded);
+  void ResizeChildTo(nscoord& aDiff,
+                     nsSplitterInfo* aChildrenBeforeInfos,
+                     nsSplitterInfo* aChildrenAfterInfos,
+                     int32_t aChildrenBeforeCount,
+                     int32_t aChildrenAfterCount,
+                     bool aBounded);
 
   void UpdateState();
 
-  void AddListener(nsPresContext* aPresContext);
+  void AddListener();
   void RemoveListener();
 
   enum ResizeType { Closest, Farthest, Flex, Grow };
@@ -249,7 +250,7 @@ nsSplitterFrame::AttributeChanged(int32_t aNameSpaceID,
     // tell the slider its attribute changed so it can 
     // update itself
     nsIFrame* grippy = nullptr;
-    nsScrollbarButtonFrame::GetChildWithTag(PresContext(), nsGkAtoms::grippy, this, grippy);
+    nsScrollbarButtonFrame::GetChildWithTag(nsGkAtoms::grippy, this, grippy);
     if (grippy)
       grippy->AttributeChanged(aNameSpaceID, aAttribute, aModType);
   } else if (aAttribute == nsGkAtoms::state) {
@@ -295,7 +296,7 @@ nsSplitterFrame::Init(nsIContent*       aContent,
   nsBoxFrame::Init(aContent, aParent, aPrevInFlow);
 
   mInner->mState = nsSplitterFrameInner::Open;
-  mInner->AddListener(PresContext());
+  mInner->AddListener();
   mInner->mParentBox = nullptr;
 }
 
@@ -410,7 +411,7 @@ nsSplitterFrameInner::MouseUp(nsPresContext* aPresContext,
 {
   if (mDragging && mOuter) {
     AdjustChildren(aPresContext);
-    AddListener(aPresContext);
+    AddListener();
     nsIPresShell::SetCapturingContent(nullptr, 0); // XXXndeakin is this needed?
     mDragging = false;
     State newState = GetState(); 
@@ -475,7 +476,7 @@ nsSplitterFrameInner::MouseDrag(nsPresContext* aPresContext,
 
     nscoord oldPos = pos;
 
-    ResizeChildTo(aPresContext, pos,
+    ResizeChildTo(pos,
                   mChildInfosBefore.get(), mChildInfosAfter.get(),
                   mChildInfosBeforeCount, mChildInfosAfterCount, bounded);
 
@@ -542,7 +543,7 @@ nsSplitterFrameInner::MouseDrag(nsPresContext* aPresContext,
 }
 
 void
-nsSplitterFrameInner::AddListener(nsPresContext* aPresContext)
+nsSplitterFrameInner::AddListener()
 {
   mOuter->GetContent()->
     AddEventListener(NS_LITERAL_STRING("mouseup"), this, false, false);
@@ -676,7 +677,7 @@ nsSplitterFrameInner::MouseDown(nsIDOMEvent* aMouseEvent)
         mOuter->AddMargin(childBox, prefSize);
         mOuter->AddMargin(childBox, maxSize);
 
-        nscoord flex = childBox->GetFlex(state);
+        nscoord flex = childBox->GetFlex();
 
         nsMargin margin(0,0,0,0);
         childBox->GetMargin(margin);
@@ -742,7 +743,7 @@ nsSplitterFrameInner::MouseDown(nsIDOMEvent* aMouseEvent)
      mChildInfosAfterCount = 0;
 
   int32_t c;
-  nsPoint pt = nsLayoutUtils::GetDOMEventCoordinatesRelativeTo(mouseEvent,
+  nsPoint pt = nsLayoutUtils::GetDOMEventCoordinatesRelativeTo(mouseEvent->AsEvent(),
                                                                mParentBox);
   if (isHorizontal) {
      c = pt.x;
@@ -1023,14 +1024,13 @@ nsSplitterFrameInner::AddRemoveSpace(nscoord aDiff,
  */
 
 void
-nsSplitterFrameInner::ResizeChildTo(nsPresContext* aPresContext,
-                                   nscoord& aDiff, 
-                                   nsSplitterInfo* aChildrenBeforeInfos, 
-                                   nsSplitterInfo* aChildrenAfterInfos, 
-                                   int32_t aChildrenBeforeCount, 
-                                   int32_t aChildrenAfterCount, 
-                                   bool aBounded)
-{ 
+nsSplitterFrameInner::ResizeChildTo(nscoord& aDiff,
+                                    nsSplitterInfo* aChildrenBeforeInfos,
+                                    nsSplitterInfo* aChildrenAfterInfos,
+                                    int32_t aChildrenBeforeCount,
+                                    int32_t aChildrenAfterCount,
+                                    bool aBounded)
+{
   nscoord spaceLeft;
   AddRemoveSpace(aDiff, aChildrenBeforeInfos,aChildrenBeforeCount,spaceLeft);
 

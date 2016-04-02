@@ -140,11 +140,6 @@
         <attr name="state_open" format="boolean"/>
     </declare-styleable>
 
-    <declare-styleable name="GeckoView">
-        <attr name="url" format="string"/>
-        <attr name="doinit" format="boolean"/>
-    </declare-styleable>
-
     <declare-styleable name="IconTabWidget">
         <attr name="android:layout"/>
 
@@ -180,10 +175,6 @@
 
     <declare-styleable name="EllipsisTextView">
         <attr name="ellipsizeAtLine" format="integer"/>
-    </declare-styleable>
-
-    <declare-styleable name="FloatingHintEditText">
-        <attr name="floatingHintEditTextStyle" format="reference" />
     </declare-styleable>
 
     <declare-styleable name="FaviconView">

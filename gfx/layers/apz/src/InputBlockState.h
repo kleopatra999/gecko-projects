@@ -9,9 +9,11 @@
 
 #include "InputData.h"                      // for MultiTouchInput
 #include "mozilla/gfx/Matrix.h"             // for Matrix4x4
+#include "mozilla/layers/APZUtils.h"        // for TouchBehaviorFlags
 #include "mozilla/layers/AsyncDragMetrics.h"
 #include "nsAutoPtr.h"                      // for nsRefPtr
 #include "nsTArray.h"                       // for nsTArray
+#include "TouchCounter.h"
 
 namespace mozilla {
 namespace layers {
@@ -48,20 +50,35 @@ public:
 
   bool IsTargetConfirmed() const;
 
+  void SetScrolledApzc(AsyncPanZoomController* aApzc);
+  AsyncPanZoomController* GetScrolledApzc() const;
+
 protected:
   virtual void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc);
+
+private:
+  // Checks whether |aA| is an ancestor of |aB| (or the same as |aB|) in
+  // |mOverscrollHandoffChain|.
+  bool IsAncestorOf(AsyncPanZoomController* aA, AsyncPanZoomController* aB);
 
 private:
   RefPtr<AsyncPanZoomController> mTargetApzc;
   bool mTargetConfirmed;
   const uint64_t mBlockId;
+
+  // The APZC that was actually scrolled by events in this input block.
+  // This is used in configurations where a single input block is only
+  // allowed to scroll a single APZC (configurations where gfxPrefs::
+  // APZAllowImmediateHandoff() is false).
+  // Set the first time an input event in this block scrolls an APZC.
+  RefPtr<AsyncPanZoomController> mScrolledApzc;
 protected:
   RefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
 
   // Used to transform events from global screen space to |mTargetApzc|'s
   // screen space. It's cached at the beginning of the input block so that
   // all events in the block are in the same coordinate space.
-  gfx::Matrix4x4 mTransformToApzc;
+  ScreenToParentLayerMatrix4x4 mTransformToApzc;
 };
 
 /**
@@ -244,7 +261,7 @@ public:
   /**
    * Update the wheel transaction state for a new event.
    */
-  void Update(const ScrollWheelInput& aEvent);
+  void Update(ScrollWheelInput& aEvent);
 
 protected:
   void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
@@ -253,6 +270,7 @@ private:
   nsTArray<ScrollWheelInput> mEvents;
   TimeStamp mLastEventTime;
   TimeStamp mLastMouseMove;
+  uint32_t mScrollSeriesCounter;
   bool mTransactionEnded;
 };
 
@@ -398,10 +416,8 @@ public:
   /**
    * Set the single-tap-occurred flag that indicates that this touch block
    * triggered a single tap event.
-   * @return true if the flag was set. This may not happen if, for example,
-   *         SetDuringFastFling was previously called.
    */
-  bool SetSingleTapOccurred();
+  void SetSingleTapOccurred();
   /**
    * @return true iff the single-tap-occurred flag is set on this block.
    */
@@ -441,6 +457,11 @@ public:
    */
   bool UpdateSlopState(const MultiTouchInput& aInput,
                        bool aApzcCanConsumeEvents);
+
+  /**
+   * Returns the number of touch points currently active.
+   */
+  uint32_t GetActiveTouchCount() const;
 
   bool HasEvents() const override;
   void DropEvents() override;

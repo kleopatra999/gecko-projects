@@ -13,15 +13,9 @@ const SIZE_64_ARRAY = 8;
 
 const SIZE_BYTES = SIZE_32_ARRAY * 4;
 
-function IsSharedTypedArray(arr) {
-    return arr && arr.buffer && arr.buffer instanceof SharedArrayBuffer;
-}
-
 function MakeComparator(kind, arr, shared) {
     var bpe = arr.BYTES_PER_ELEMENT;
-    var uint8 = (bpe != 1) ? (IsSharedTypedArray(arr) ? new SharedUint8Array(arr.buffer)
-                                                      : new Uint8Array(arr.buffer))
-                           : arr;
+    var uint8 = (bpe != 1) ? new Uint8Array(arr.buffer) : arr;
 
     // Size in bytes of a single element in the SIMD vector.
     var sizeOfLaneElem;
@@ -39,6 +33,18 @@ function MakeComparator(kind, arr, shared) {
       case 'Int32x4':
         sizeOfLaneElem = 4;
         typedArrayCtor = Int32Array;
+        break;
+      case 'Uint8x16':
+        sizeOfLaneElem = 1;
+        typedArrayCtor = Uint8Array;
+        break;
+      case 'Uint16x8':
+        sizeOfLaneElem = 2;
+        typedArrayCtor = Uint16Array;
+        break;
+      case 'Uint32x4':
+        sizeOfLaneElem = 4;
+        typedArrayCtor = Uint32Array;
         break;
       case 'Float32x4':
         sizeOfLaneElem = 4;
@@ -120,7 +126,18 @@ function testLoad(kind, TA) {
         assertThrowsInstanceOf(() => SIMD[kind].load(), TypeError);
         assertThrowsInstanceOf(() => SIMD[kind].load(ta), TypeError);
         assertThrowsInstanceOf(() => SIMD[kind].load("hello", 0), TypeError);
+        // Indexes must be integers, there is no rounding.
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, 1.5), RangeError);
         assertThrowsInstanceOf(() => SIMD[kind].load(ta, -1), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, "hello"), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, NaN), RangeError);
+        // Try to trip up the bounds checking. Int32 is enough for everybody.
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, 0x100000000), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, 0x80000000), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, 0x40000000), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, 0x20000000), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, (1<<30) * (1<<23) - 1), RangeError);
+        assertThrowsInstanceOf(() => SIMD[kind].load(ta, (1<<30) * (1<<23)), RangeError);
 
         // Valid and invalid reads
         var C = MakeComparator(kind, ta);
@@ -163,13 +180,15 @@ function testLoad(kind, TA) {
             assertThrowsInstanceOf(() => SIMD[kind].load2(ta, lastValidArgLoad2 + 1), RangeError);
             assertThrowsInstanceOf(() => SIMD[kind].load3(ta, lastValidArgLoad3 + 1), RangeError);
         }
+
+        // Indexes are coerced with ToNumber. Try some strings that
+        // CanonicalNumericIndexString() would reject.
+        C.load("1.0e0");
+        C.load(" 2");
     }
 
     if (lanes == 4) {
-        // Test ToInt32 behavior
-        var v = SIMD[kind].load(TA, 12.5);
-        assertEqX4(v, [12, 13, 14, 15]);
-
+        // Test ToNumber behavior.
         var obj = {
             valueOf: function() { return 12 }
         }
@@ -184,25 +203,22 @@ function testLoad(kind, TA) {
 }
 
 function testSharedArrayBufferCompat() {
-    if (!this.SharedArrayBuffer || !this.SharedFloat32Array || !this.Atomics)
-        return;
-
-    var TA = new SharedFloat32Array(16);
+    var TA = new Float32Array(new SharedArrayBuffer(16*4));
     for (var i = 0; i < 16; i++)
         TA[i] = i + 1;
 
     for (var ta of [
-                    new SharedUint8Array(TA.buffer),
-                    new SharedInt8Array(TA.buffer),
-                    new SharedUint16Array(TA.buffer),
-                    new SharedInt16Array(TA.buffer),
-                    new SharedUint32Array(TA.buffer),
-                    new SharedInt32Array(TA.buffer),
-                    new SharedFloat32Array(TA.buffer),
-                    new SharedFloat64Array(TA.buffer)
+                    new Uint8Array(TA.buffer),
+                    new Int8Array(TA.buffer),
+                    new Uint16Array(TA.buffer),
+                    new Int16Array(TA.buffer),
+                    new Uint32Array(TA.buffer),
+                    new Int32Array(TA.buffer),
+                    new Float32Array(TA.buffer),
+                    new Float64Array(TA.buffer)
                    ])
     {
-        for (var kind of ['Int32x4', 'Float32x4', 'Float64x2']) {
+        for (var kind of ['Int32x4', 'Uint32x4', 'Float32x4', 'Float64x2']) {
             var comp = MakeComparator(kind, ta);
             comp.load(0);
             comp.load1(0);
@@ -216,6 +232,7 @@ function testSharedArrayBufferCompat() {
         }
 
         assertThrowsInstanceOf(() => SIMD.Int32x4.load(ta, 1024), RangeError);
+        assertThrowsInstanceOf(() => SIMD.Uint32x4.load(ta, 1024), RangeError);
         assertThrowsInstanceOf(() => SIMD.Float32x4.load(ta, 1024), RangeError);
         assertThrowsInstanceOf(() => SIMD.Float64x2.load(ta, 1024), RangeError);
     }
@@ -226,6 +243,21 @@ testLoad('Float64x2', new Float64Array(SIZE_64_ARRAY));
 testLoad('Int8x16', new Int8Array(SIZE_8_ARRAY));
 testLoad('Int16x8', new Int16Array(SIZE_16_ARRAY));
 testLoad('Int32x4', new Int32Array(SIZE_32_ARRAY));
+testLoad('Uint8x16', new Uint8Array(SIZE_8_ARRAY));
+testLoad('Uint16x8', new Uint16Array(SIZE_16_ARRAY));
+testLoad('Uint32x4', new Uint32Array(SIZE_32_ARRAY));
+
+if (typeof SharedArrayBuffer != "undefined") {
+  testLoad('Float32x4', new Float32Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Float64x2', new Float64Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Int8x16', new Int8Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Int16x8', new Int16Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Int32x4', new Int32Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Uint8x16', new Uint8Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Uint16x8', new Uint16Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+  testLoad('Uint32x4', new Uint32Array(new SharedArrayBuffer(SIZE_8_ARRAY)));
+}
+
 testSharedArrayBufferCompat();
 
 if (typeof reportCompare === "function")

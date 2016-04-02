@@ -142,7 +142,7 @@ New_HTMLLink(nsIContent* aContent, Accessible* aContext)
 {
   // Only some roles truly enjoy life as HTMLLinkAccessibles, for details
   // see closed bug 494807.
-  nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aContent);
+  const nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aContent->AsElement());
   if (roleMapEntry && roleMapEntry->role != roles::NOTHING &&
       roleMapEntry->role != roles::LINK) {
     return new HyperTextAccessibleWrap(aContent, aContext->Document());
@@ -596,7 +596,7 @@ nsAccessibilityService::ContentRemoved(nsIPresShell* aPresShell,
       Accessible* container = document->GetContainerAccessible(aChildNode);
       a11y::TreeWalker walker(container ? container : document, aChildNode,
                               a11y::TreeWalker::eWalkCache);
-      child = walker.NextChild();
+      child = walker.Next();
     }
 
     if (child) {
@@ -1091,7 +1091,9 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
 
   // Create accessible for visible text frames.
   if (content->IsNodeOfType(nsINode::eTEXT)) {
-    nsIFrame::RenderedText text = frame->GetRenderedText();
+    nsIFrame::RenderedText text = frame->GetRenderedText(0,
+        UINT32_MAX, nsIFrame::TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
+        nsIFrame::TrailingWhitespace::DONT_TRIM_TRAILING_WHITESPACE);
     // Ignore not rendered text nodes and whitespace text nodes between table
     // cells.
     if (text.mString.IsEmpty() ||
@@ -1103,9 +1105,6 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
     }
 
     newAcc = CreateAccessibleByFrameType(frame, content, aContext);
-    if (!aContext->IsAcceptableChild(newAcc))
-      return nullptr;
-
     document->BindToDocument(newAcc, nullptr);
     newAcc->AsTextLeaf()->SetText(text.mString);
     return newAcc;
@@ -1129,14 +1128,11 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
     }
 
     newAcc = new HyperTextAccessibleWrap(content, document);
-    if (!aContext->IsAcceptableChild(newAcc))
-      return nullptr;
-
-    document->BindToDocument(newAcc, aria::GetRoleMap(aNode));
+    document->BindToDocument(newAcc, aria::GetRoleMap(content->AsElement()));
     return newAcc;
   }
 
-  nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aNode);
+  const nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(content->AsElement());
 
   // If the element is focusable or global ARIA attribute is applied to it or
   // it is referenced by ARIA relationship then treat role="presentation" on
@@ -1188,7 +1184,7 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
     // expose their native roles.
     if (!roleMapEntry && newAcc && aContext->HasStrongARIARole()) {
       if (frame->AccessibleType() == eHTMLTableRowType) {
-        nsRoleMapEntry* contextRoleMap = aContext->ARIARoleMap();
+        const nsRoleMapEntry* contextRoleMap = aContext->ARIARoleMap();
         if (!contextRoleMap->IsOfType(eTable))
           roleMapEntry = &aria::gEmptyRoleMap;
 
@@ -1200,7 +1196,7 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
                                               nsGkAtoms::li,
                                               nsGkAtoms::dd) ||
                  frame->AccessibleType() == eHTMLLiType) {
-        nsRoleMapEntry* contextRoleMap = aContext->ARIARoleMap();
+        const nsRoleMapEntry* contextRoleMap = aContext->ARIARoleMap();
         if (!contextRoleMap->IsOfType(eList))
           roleMapEntry = &aria::gEmptyRoleMap;
       }
@@ -1289,10 +1285,9 @@ nsAccessibilityService::GetOrCreateAccessible(nsINode* aNode,
     }
   }
 
-  if (!newAcc || !aContext->IsAcceptableChild(newAcc))
-    return nullptr;
-
-  document->BindToDocument(newAcc, roleMapEntry);
+  if (newAcc) {
+    document->BindToDocument(newAcc, roleMapEntry);
+  }
   return newAcc;
 }
 
@@ -1332,12 +1327,15 @@ nsAccessibilityService::Init()
   logging::CheckEnv();
 #endif
 
+  gAccessibilityService = this;
+
   if (XRE_IsParentProcess())
     gApplicationAccessible = new ApplicationAccessibleWrap();
   else
     gApplicationAccessible = new ApplicationAccessible();
 
   NS_ADDREF(gApplicationAccessible); // will release in Shutdown()
+  gApplicationAccessible->Init();
 
 #ifdef MOZ_CRASHREPORTER
   CrashReporter::
@@ -1412,13 +1410,7 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
                                                DocAccessible* aDoc)
 {
   nsAutoString role;
-  for (const nsXBLBinding* binding = aContent->GetXBLBinding(); binding; binding = binding->GetBaseBinding()) {
-    nsIContent* bindingElm = binding->PrototypeBinding()->GetBindingElement();
-    bindingElm->GetAttr(kNameSpaceID_None, nsGkAtoms::role, role);
-    if (!role.IsEmpty())
-      break;
-  }
-
+  nsCoreUtils::XBLBindingRole(aContent, role);
   if (role.IsEmpty() || role.EqualsLiteral("none"))
     return nullptr;
 
@@ -1839,9 +1831,7 @@ NS_GetAccessibilityService(nsIAccessibilityService** aResult)
 
   statistics::A11yInitialized();
 
-  nsAccessibilityService::gAccessibilityService = service;
   NS_ADDREF(*aResult = service);
-
   return NS_OK;
 }
 

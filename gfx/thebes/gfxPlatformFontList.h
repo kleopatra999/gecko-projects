@@ -120,7 +120,7 @@ public:
 
     void UpdateFontList();
 
-    void ClearLangGroupPrefFonts();
+    virtual void ClearLangGroupPrefFonts();
 
     virtual void GetFontFamilyList(nsTArray<RefPtr<gfxFontFamily> >& aFamilyArray);
 
@@ -129,8 +129,9 @@ public:
                           int32_t aRunScript,
                           const gfxFontStyle* aStyle);
 
-    virtual gfxFontFamily* FindFamily(const nsAString& aFamily,
-                                      gfxFontStyle* aStyle = nullptr);
+    virtual gfxFontFamily*
+    FindFamily(const nsAString& aFamily, gfxFontStyle* aStyle = nullptr,
+               gfxFloat aDevToCssSize = 1.0);
 
     gfxFontEntry* FindFontForFamily(const nsAString& aFamily, const gfxFontStyle* aStyle, bool& aNeedsBold);
 
@@ -236,6 +237,10 @@ public:
     mozilla::FontFamilyType
     GetDefaultGeneric(eFontPrefLang aLang);
 
+    // map lang group ==> lang string
+    void GetSampleLangForGroup(nsIAtom* aLanguage, nsACString& aLangStr,
+                               bool aCheckEnvironment = true);
+
 protected:
     class MemoryReporter final : public nsIMemoryReporter
     {
@@ -307,12 +312,18 @@ protected:
 
     void GenerateFontListKey(const nsAString& aKeyName, nsAString& aResult);
 
-    static PLDHashOperator
-        HashEnumFuncForFamilies(nsStringHashKey::KeyType aKey,
-                                RefPtr<gfxFontFamily>& aFamilyEntry,
-                                void* aUserArg);
-
     virtual void GetFontFamilyNames(nsTArray<nsString>& aFontFamilyNames);
+
+    nsILanguageAtomService* GetLangService();
+
+    // helper function to map lang to lang group
+    nsIAtom* GetLangGroup(nsIAtom* aLanguage);
+
+    // helper method for finding an appropriate lang string
+    bool TryLangForGroup(const nsACString& aOSLang, nsIAtom* aLangGroup,
+                         nsACString& aLang);
+
+    static const char* GetGenericName(mozilla::FontFamilyType aGenericType);
 
     // gfxFontInfoLoader overrides, used to load in font cmaps
     virtual void InitLoader();

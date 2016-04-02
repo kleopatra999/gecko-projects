@@ -31,7 +31,7 @@ namespace mozilla {
 namespace layers {
 
 class ClientPaintedLayer;
-class CompositorChild;
+class CompositorBridgeChild;
 class ImageLayer;
 class PLayerChild;
 class FrameUniformityData;
@@ -97,6 +97,7 @@ public:
   virtual already_AddRefed<ColorLayer> CreateColorLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
+  void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier);
   TextureFactoryIdentifier GetTextureFactoryIdentifier()
   {
     return mForwarder->GetTextureFactoryIdentifier();
@@ -122,11 +123,6 @@ public:
   virtual void SetIsFirstPaint() override;
 
   TextureClientPool* GetTexturePool(gfx::SurfaceFormat aFormat, TextureFlags aFlags);
-
-  /// Utility methods for managing texture clients.
-  void ReturnTextureClientDeferred(TextureClient& aClient);
-  void ReturnTextureClient(TextureClient& aClient);
-  void ReportClientLost(TextureClient& aClient);
 
   /**
    * Pass through call to the forwarder for nsPresContext's
@@ -162,9 +158,9 @@ public:
   void* GetPaintedLayerCallbackData() const
   { return mPaintedLayerCallbackData; }
 
-  CompositorChild* GetRemoteRenderer();
+  CompositorBridgeChild* GetRemoteRenderer();
 
-  CompositorChild* GetCompositorChild();
+  CompositorBridgeChild* GetCompositorBridgeChild();
 
   // Disable component alpha layers with the software compositor.
   virtual bool ShouldAvoidComponentAlphaLayers() override { return !IsCompositingCheap(); }
@@ -206,11 +202,6 @@ public:
   void DidComposite(uint64_t aTransactionId,
                     const mozilla::TimeStamp& aCompositeStart,
                     const mozilla::TimeStamp& aCompositeEnd);
-
-  virtual bool SupportsMixBlendModes(EnumSet<gfx::CompositionOp>& aMixBlendModes) override
-  {
-   return (GetTextureFactoryIdentifier().mSupportedBlendModes & aMixBlendModes) == aMixBlendModes;
-  }
 
   virtual bool AreComponentAlphaLayersEnabled() override;
 
@@ -256,6 +247,14 @@ public:
   bool AsyncPanZoomEnabled() const override;
 
   void SetNextPaintSyncId(int32_t aSyncId);
+
+  class DidCompositeObserver {
+  public:
+    virtual void DidComposite() = 0;
+  };
+
+  void AddDidCompositeObserver(DidCompositeObserver* aObserver);
+  void RemoveDidCompositeObserver(DidCompositeObserver* aObserver);
 
 protected:
   enum TransactionPhase {
@@ -304,6 +303,8 @@ private:
                               void* aCallbackData,
                               EndTransactionFlags);
 
+  bool DependsOnStaleDevice() const;
+
   LayerRefArray mKeepAlive;
 
   nsIWidget* mWidget;
@@ -347,11 +348,14 @@ private:
   APZTestData mApzTestData;
 
   RefPtr<ShadowLayerForwarder> mForwarder;
-  nsAutoTArray<RefPtr<TextureClientPool>,2> mTexturePools;
-  nsAutoTArray<dom::OverfillCallback*,0> mOverfillCallbacks;
+  AutoTArray<RefPtr<TextureClientPool>,2> mTexturePools;
+  AutoTArray<dom::OverfillCallback*,0> mOverfillCallbacks;
   mozilla::TimeStamp mTransactionStart;
 
+  nsTArray<DidCompositeObserver*> mDidCompositeObservers;
+
   RefPtr<MemoryPressureObserver> mMemoryPressureObserver;
+  uint64_t mDeviceCounter;
 };
 
 class ClientLayer : public ShadowableLayer

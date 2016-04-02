@@ -10,6 +10,7 @@
 #include "gfxPrefs.h"
 #include "LayersLogging.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Move.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TouchEvents.h"
@@ -181,7 +182,7 @@ APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
 
   LayoutDevicePoint currentPoint =
       APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid)
-    * widget->GetDefaultScale();;
+    * widget->GetDefaultScale();
   if (!mActiveElementManager->ActiveElementUsesStyle()) {
     // If the active element isn't visually affected by the :active style, we
     // have no need to wait the extra sActiveDurationMs to make the activation
@@ -231,9 +232,12 @@ APZEventState::ProcessLongTap(const nsCOMPtr<nsIPresShell>& aPresShell,
                          nsIDOMMouseEvent::MOZ_SOURCE_TOUCH);
 
   APZES_LOG("Contextmenu event handled: %d\n", eventHandled);
-
-  // If no one handle context menu, fire MOZLONGTAP event
-  if (!eventHandled) {
+  if (eventHandled) {
+    // If the contextmenu event was handled then we're showing a contextmenu,
+    // and so we should remove any activation
+    mActiveElementManager->ClearActivation();
+  } else {
+    // If no one handle context menu, fire MOZLONGTAP event
     LayoutDevicePoint currentPoint =
         APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid)
       * widget->GetDefaultScale();
@@ -275,6 +279,7 @@ APZEventState::ProcessTouchEvent(const WidgetTouchEvent& aEvent,
       // Since APZ doesn't know about it we don't want to send a response for
       // this block; we want to just skip over it from the point of view of
       // prevent-default notifications.
+      APZES_LOG("Got a synthetic touch-start!\n");
       break;
     }
     if (isTouchPrevented) {
@@ -334,8 +339,7 @@ APZEventState::ProcessWheelEvent(const WidgetWheelEvent& aEvent,
 {
   // If this event starts a swipe, indicate that it shouldn't result in a
   // scroll by setting defaultPrevented to true.
-  bool defaultPrevented =
-    aEvent.mFlags.mDefaultPrevented || aEvent.TriggersSwipe();
+  bool defaultPrevented = aEvent.DefaultPrevented() || aEvent.TriggersSwipe();
   mContentReceivedInputBlockCallback(aGuid, aInputBlockId, defaultPrevented);
 }
 
@@ -407,7 +411,8 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
   }
   case APZStateChange::StartPanning:
   {
-    mActiveElementManager->HandlePanStart();
+    // The user started to pan, so we don't want anything to be :active.
+    mActiveElementManager->ClearActivation();
     break;
   }
   case APZStateChange::EndTouch:
@@ -421,6 +426,17 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
     // if an enumerator is not handled and there is no 'default' case.
     break;
   }
+}
+
+void
+APZEventState::ProcessClusterHit()
+{
+  // If we hit a cluster of links then we shouldn't activate any of them,
+  // as we will be showing the zoomed view. (This is only called on Fennec).
+#ifndef MOZ_ANDROID_APZ
+  MOZ_ASSERT(false);
+#endif
+  mActiveElementManager->ClearActivation();
 }
 
 bool

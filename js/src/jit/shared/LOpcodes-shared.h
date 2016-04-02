@@ -14,6 +14,7 @@
     _(OsiPoint)                     \
     _(MoveGroup)                    \
     _(Integer)                      \
+    _(Integer64)                    \
     _(Pointer)                      \
     _(Double)                       \
     _(Float32)                      \
@@ -22,12 +23,15 @@
     _(SimdSplatX4)                  \
     _(Int32x4)                      \
     _(Float32x4)                    \
+    _(SimdAllTrue)                  \
+    _(SimdAnyTrue)                  \
     _(SimdReinterpretCast)          \
     _(SimdExtractElementI)          \
+    _(SimdExtractElementU2D)        \
+    _(SimdExtractElementB)          \
     _(SimdExtractElementF)          \
     _(SimdInsertElementI)           \
     _(SimdInsertElementF)           \
-    _(SimdSignMaskX4)               \
     _(SimdGeneralShuffleI)          \
     _(SimdGeneralShuffleF)          \
     _(SimdSwizzleI)                 \
@@ -74,6 +78,7 @@
     _(CallGeneric)                  \
     _(CallNative)                   \
     _(ApplyArgsGeneric)             \
+    _(ApplyArrayGeneric)            \
     _(Bail)                         \
     _(Unreachable)                  \
     _(EncodeSnapshot)               \
@@ -89,12 +94,13 @@
     _(SetArgumentsObjectArg)        \
     _(ReturnFromCtor)               \
     _(ComputeThis)                  \
-    _(LoadArrowThis)                \
     _(BitNotI)                      \
     _(BitNotV)                      \
     _(BitOpI)                       \
+    _(BitOpI64)                     \
     _(BitOpV)                       \
     _(ShiftI)                       \
+    _(ShiftI64)                     \
     _(UrshD)                        \
     _(Return)                       \
     _(Throw)                        \
@@ -108,6 +114,8 @@
     _(ObjectGroupDispatch)          \
     _(Compare)                      \
     _(CompareAndBranch)             \
+    _(Compare64)                    \
+    _(Compare64AndBranch)           \
     _(CompareD)                     \
     _(CompareDAndBranch)            \
     _(CompareF)                     \
@@ -134,6 +142,8 @@
     _(AbsD)                         \
     _(AbsF)                         \
     _(ClzI)                         \
+    _(CtzI)                         \
+    _(PopcntI)                      \
     _(SqrtD)                        \
     _(SqrtF)                        \
     _(Atan2D)                       \
@@ -150,8 +160,11 @@
     _(NotO)                         \
     _(NotV)                         \
     _(AddI)                         \
+    _(AddI64)                       \
     _(SubI)                         \
+    _(SubI64)                       \
     _(MulI)                         \
+    _(MulI64)                       \
     _(MathD)                        \
     _(MathF)                        \
     _(DivI)                         \
@@ -176,6 +189,8 @@
     _(Float32ToInt32)               \
     _(TruncateDToInt32)             \
     _(TruncateFToInt32)             \
+    _(WrapInt64ToInt32)             \
+    _(ExtendInt32ToInt64)           \
     _(BooleanToString)              \
     _(IntToString)                  \
     _(DoubleToString)               \
@@ -183,6 +198,7 @@
     _(ValueToObjectOrNull)          \
     _(Int32x4ToFloat32x4)           \
     _(Float32x4ToInt32x4)           \
+    _(Float32x4ToUint32x4)          \
     _(Start)                        \
     _(OsrEntry)                     \
     _(OsrValue)                     \
@@ -190,8 +206,8 @@
     _(OsrReturnValue)               \
     _(OsrArgumentsObject)           \
     _(RegExp)                       \
-    _(RegExpExec)                   \
-    _(RegExpTest)                   \
+    _(RegExpMatcher)                \
+    _(RegExpTester)                 \
     _(RegExpReplace)                \
     _(StringReplace)                \
     _(Substr)                       \
@@ -222,6 +238,8 @@
     _(MonitorTypes)                 \
     _(PostWriteBarrierO)            \
     _(PostWriteBarrierV)            \
+    _(PostWriteElementBarrierO)     \
+    _(PostWriteElementBarrierV)     \
     _(InitializedLength)            \
     _(SetInitializedLength)         \
     _(UnboxedArrayLength)           \
@@ -257,6 +275,7 @@
     _(StoreTypedArrayElementHole)   \
     _(StoreTypedArrayElementStatic) \
     _(AtomicIsLockFree)             \
+    _(GuardSharedTypedArray)        \
     _(CompareExchangeTypedArrayElement) \
     _(AtomicExchangeTypedArrayElement) \
     _(AtomicTypedArrayElementBinop) \
@@ -267,6 +286,7 @@
     _(ClampVToUint8)                \
     _(LoadFixedSlotV)               \
     _(LoadFixedSlotT)               \
+    _(LoadFixedSlotAndUnbox)        \
     _(StoreFixedSlotV)              \
     _(StoreFixedSlotT)              \
     _(FunctionEnvironment)          \
@@ -275,6 +295,7 @@
     _(GetPropertyPolymorphicV)      \
     _(GetPropertyPolymorphicT)      \
     _(BindNameCache)                \
+    _(CallBindVar)                  \
     _(CallGetProperty)              \
     _(GetNameCache)                 \
     _(CallGetIntrinsicValue)        \
@@ -294,6 +315,7 @@
     _(IteratorEnd)                  \
     _(ArrayLength)                  \
     _(SetArrayLength)               \
+    _(GetNextMapEntryForIterator)   \
     _(TypedArrayLength)             \
     _(TypedArrayElements)           \
     _(SetDisjointTypedElements)     \
@@ -323,7 +345,10 @@
     _(CallInstanceOf)               \
     _(InterruptCheck)               \
     _(AsmJSInterruptCheck)          \
-    _(InterruptCheckImplicit)       \
+    _(AsmThrowUnreachable)          \
+    _(AsmReinterpret)               \
+    _(AsmReinterpretToI64)          \
+    _(AsmReinterpretFromI64)        \
     _(GetDOMProperty)               \
     _(GetDOMMemberV)                \
     _(GetDOMMemberT)                \
@@ -333,6 +358,8 @@
     _(IsObject)                     \
     _(IsObjectAndBranch)            \
     _(HasClass)                     \
+    _(AsmSelect)                    \
+    _(AsmSelectI64)                 \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
     _(AsmJSLoadFuncPtr)             \
@@ -364,6 +391,8 @@
     _(Debugger)                     \
     _(NewTarget)                    \
     _(ArrowNewTarget)               \
-    _(CheckReturn)
+    _(CheckReturn)                  \
+    _(CheckObjCoercible)            \
+    _(DebugCheckSelfHosted)
 
 #endif /* jit_shared_LOpcodes_shared_h */

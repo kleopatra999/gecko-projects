@@ -30,7 +30,8 @@
 #include "nsNameSpaceManager.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsAutoPtr.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/dom/Element.h"
 #include "nsDisplayList.h"
 #include "nsNodeUtils.h"
@@ -722,12 +723,10 @@ nsFrameborder GetFrameBorderHelper(nsGenericHTMLElement* aContent)
         case NS_STYLE_FRAME_YES:
         case NS_STYLE_FRAME_1:
           return eFrameborder_Yes;
-          break;
 
         case NS_STYLE_FRAME_NO:
         case NS_STYLE_FRAME_0:
           return eFrameborder_No;
-          break;
       }
     }
   }
@@ -806,7 +805,7 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
   DO_GLOBAL_REFLOW_COUNT("nsHTMLFramesetFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
   nsIPresShell *shell = aPresContext->PresShell();
-  nsStyleSet *styleSet = shell->StyleSet();
+  StyleSetHandle styleSet = shell->StyleSet();
 
   GetParent()->AddStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE);
 

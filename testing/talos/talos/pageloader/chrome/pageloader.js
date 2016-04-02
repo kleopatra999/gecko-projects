@@ -17,7 +17,7 @@ var NUM_CYCLES = 5;
 var numPageCycles = 1;
 
 var numRetries = 0;
-var maxRetries = 20;
+var maxRetries = 3;
 
 var pageFilterRegexp = null;
 var useBrowser = true;
@@ -35,7 +35,6 @@ var report;
 var noisy = false;
 var timeout = -1;
 var delay = 250;
-var timeoutEvent = -1;
 var running = false;
 var forceCC = true;
 var reportRSS = true;
@@ -67,6 +66,47 @@ var pageUrls;
 
 // the io service
 var gIOS = null;
+
+/**
+ * SingleTimeout class. Allow to register one and only one callback using
+ * setTimeout at a time.
+ */
+var SingleTimeout = function() {
+  this.timeoutEvent = undefined;
+};
+
+/**
+ * Register a callback with the given timeout.
+ *
+ * If timeout is < 0, this is a no-op.
+ *
+ * If a callback was previously registered and has not been called yet, it is
+ * first cleared with clear().
+ */
+SingleTimeout.prototype.register = function(callback, timeout) {
+  if (timeout >= 0) {
+    if (this.timeoutEvent !== undefined) {
+      this.clear();
+    }
+    var that = this;
+    this.timeoutEvent = setTimeout(function() {
+      that.timeoutEvent = undefined;
+      callback();
+    }, timeout);
+  }
+};
+
+/**
+ * Clear a registered callback.
+ */
+SingleTimeout.prototype.clear = function() {
+  if (this.timeoutEvent !== undefined) {
+    clearTimeout(this.timeoutEvent);
+    this.timeoutEvent = undefined;
+  }
+};
+
+var failTimeout = new SingleTimeout();
 
 function plInit() {
   if (running) {
@@ -185,30 +225,30 @@ function plInit() {
           return E10SUtils.canLoadURIInProcess(pageUrls[0], Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT);
         }
 
-        // For e10s windows, the initial browser is not remote until it attempts to
-        // browse to a URI that should be remote (landed at bug 1047603).
-        // However, when it loads such URI and reinitialize as remote, we lose the
-        // load listener and the injected tpRecordTime.
-        // The same thing happens if the initial browser starts as remote but the
-        // first page is not-remote (such as with TART/CART which load a chrome URI).
-        //
-        // The preferred pageloader behaviour in e10s is to run the pages as as remote,
-        // so if the page can load as remote, we will load it as remote.
-        //
-        // It also probably means that per test (or, in fact, per pageloader browser
-        // instance which adds the load listener and injects tpRecordTime), all the
-        // pages should be able to load in the same mode as the initial page - due
-        // to this reinitialization on the switch.
-        if (browserWindow.gMultiProcessBrowser) {
-          if (firstPageCanLoadAsRemote())
-            browserWindow.XULBrowserWindow.forceInitialBrowserRemote();
-          // Implicit else: initial browser in e10s is non-remote by default.
-        }
-
         // do this half a second after load, because we need to be
         // able to resize the window and not have it get clobbered
         // by the persisted values
         setTimeout(function () {
+                     // For e10s windows, the initial browser is not remote until it attempts to
+                     // browse to a URI that should be remote (landed at bug 1047603).
+                     // However, when it loads such URI and reinitialize as remote, we lose the
+                     // load listener and the injected tpRecordTime.
+                     // The same thing happens if the initial browser starts as remote but the
+                     // first page is not-remote (such as with TART/CART which load a chrome URI).
+                     //
+                     // The preferred pageloader behaviour in e10s is to run the pages as as remote,
+                     // so if the page can load as remote, we will load it as remote.
+                     //
+                     // It also probably means that per test (or, in fact, per pageloader browser
+                     // instance which adds the load listener and injects tpRecordTime), all the
+                     // pages should be able to load in the same mode as the initial page - due
+                     // to this reinitialization on the switch.
+                     if (browserWindow.gMultiProcessBrowser) {
+                       if (firstPageCanLoadAsRemote())
+                         browserWindow.XULBrowserWindow.forceInitialBrowserRemote();
+                       // Implicit else: initial browser in e10s is non-remote by default.
+                     }
+
                      browserWindow.resizeTo(winWidth, winHeight);
                      browserWindow.moveTo(0, 0);
                      browserWindow.focus();
@@ -346,9 +386,7 @@ function plLoadPage() {
     };
   }
 
-  if (timeout > 0) {
-    timeoutEvent = setTimeout(function () {loadFail(); }, timeout);
-  }
+  failTimeout.register(loadFail, timeout);
 
   // record which page we are about to open
   Profiler.mark("Opening " + pages[pageIndex].url.path);
@@ -566,9 +604,7 @@ function plPaintedCapturing() {
 }
 
 function _loadHandlerCapturing() {
-  if (timeout > 0) { 
-    clearTimeout(timeoutEvent);
-  }
+  failTimeout.clear();
 
   if (!(plPageFlags() & TEST_DOES_OWN_TIMING)) {
     dumpLine("tp: Capturing onload handler used with page that doesn't do its own timing?");
@@ -625,9 +661,7 @@ function plPainted() {
 }
 
 function _loadHandler() {
-  if (timeout > 0) {
-    clearTimeout(timeoutEvent);
-  }
+  failTimeout.clear();
 
   var end_time = Date.now();
   var time = (end_time - start_time);
@@ -651,9 +685,7 @@ function _loadHandler() {
 
 // the core handler for remote (e10s) browser
 function plLoadHandlerMessage() {
-  if (timeout > 0) {
-    clearTimeout(timeoutEvent);
-  }
+  failTimeout.clear();
 
   if ((plPageFlags() & EXECUTE_SCROLL_TEST)) {
     // Let the page settle down after its load event, then execute the scroll test.

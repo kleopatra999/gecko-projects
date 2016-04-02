@@ -22,6 +22,7 @@
 #include "FakePCObserver.h"
 #include "FakeMediaStreams.h"
 #include "FakeMediaStreamsImpl.h"
+#include "FakeLogging.h"
 #include "PeerConnectionImpl.h"
 #include "PeerConnectionCtx.h"
 #include "PeerConnectionMedia.h"
@@ -40,7 +41,12 @@
 #include "logging.h"
 #include "stunserver.h"
 #include "stunserver.cpp"
+#ifdef SIGNALING_UNITTEST_STANDALONE
 #include "PeerConnectionImplEnumsBinding.cpp"
+#endif
+
+#include "FakeIPC.h"
+#include "FakeIPC.cpp"
 
 #include "ice_ctx.h"
 #include "ice_peer_ctx.h"
@@ -340,6 +346,44 @@ TestObserver::NotifyDataChannel(nsIDOMDataChannel *channel, ER&)
   return NS_OK;
 }
 
+static const char* PCImplSignalingStateStrings[] = {
+  "SignalingInvalid",
+  "SignalingStable",
+  "SignalingHaveLocalOffer",
+  "SignalingHaveRemoteOffer",
+  "SignalingHaveLocalPranswer",
+  "SignalingHaveRemotePranswer",
+  "SignalingClosed"
+};
+
+static const char* PCImplIceConnectionStateStrings[] = {
+  "new",
+  "checking",
+  "connected",
+  "completed",
+  "failed",
+  "disconnected",
+  "closed"
+};
+
+static const char* PCImplIceGatheringStateStrings[] = {
+  "new",
+  "gathering",
+  "complete"
+};
+
+#ifdef SIGNALING_UNITTEST_STANDALONE
+static_assert(ArrayLength(PCImplSignalingStateStrings) ==
+	      size_t(PCImplSignalingState::EndGuard_),
+	      "Table sizes must match");
+static_assert(ArrayLength(PCImplIceConnectionStateStrings) ==
+	      size_t(PCImplIceConnectionState::EndGuard_),
+	      "Table sizes must match");
+static_assert(ArrayLength(PCImplIceGatheringStateStrings) ==
+	      size_t(PCImplIceGatheringState::EndGuard_),
+	      "Table sizes must match");
+#endif // SIGNALING_UNITTEST_STANDALONE
+
 NS_IMETHODIMP
 TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
 {
@@ -357,7 +401,7 @@ TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
     rv = pc->IceConnectionState(&gotice);
     NS_ENSURE_SUCCESS(rv, rv);
     std::cout << "ICE Connection State: "
-              << PCImplIceConnectionStateValues::strings[int(gotice)].value
+              << PCImplIceConnectionStateStrings[int(gotice)]
               << std::endl;
     break;
   case PCObserverStateType::IceGatheringState:
@@ -366,7 +410,7 @@ TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
     NS_ENSURE_SUCCESS(rv, rv);
     std::cout
         << "ICE Gathering State: "
-        << PCImplIceGatheringStateValues::strings[int(goticegathering)].value
+        << PCImplIceGatheringStateStrings[int(goticegathering)]
         << std::endl;
     break;
   case PCObserverStateType::SdpState:
@@ -378,7 +422,7 @@ TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
     rv = pc->SignalingState(&gotsignaling);
     NS_ENSURE_SUCCESS(rv, rv);
     std::cout << "Signaling State: "
-              << PCImplSignalingStateValues::strings[int(gotsignaling)].value
+              << PCImplSignalingStateStrings[int(gotsignaling)]
               << std::endl;
     break;
   default:
@@ -1644,19 +1688,19 @@ class SignalingAgentTest : public ::testing::Test {
   }
 
   bool CreateAgent(const std::string stun_addr, uint16_t stun_port) {
-    ScopedDeletePtr<SignalingAgent> agent(
+    UniquePtr<SignalingAgent> agent(
         new SignalingAgent("agent", stun_addr, stun_port));
 
     agent->Init();
 
-    agents_.push_back(agent.forget());
+    agents_.push_back(agent.release());
 
     return true;
   }
 
   void CreateAgentNoInit() {
-    ScopedDeletePtr<SignalingAgent> agent(new SignalingAgent("agent"));
-    agents_.push_back(agent.forget());
+    UniquePtr<SignalingAgent> agent(new SignalingAgent("agent"));
+    agents_.push_back(agent.release());
   }
 
   SignalingAgent *agent(size_t i) {
@@ -1705,8 +1749,8 @@ public:
     if (init_)
       return;
 
-    a1_ = new SignalingAgent(callerName, stun_addr_, stun_port_);
-    a2_ = new SignalingAgent(calleeName, stun_addr_, stun_port_);
+    a1_ = MakeUnique<SignalingAgent>(callerName, stun_addr_, stun_port_);
+    a2_ = MakeUnique<SignalingAgent>(calleeName, stun_addr_, stun_port_);
 
     if (GetParam() == "no_bundle") {
       a1_->SetBundleEnabled(false);
@@ -2126,15 +2170,12 @@ public:
 
  protected:
   bool init_;
-  ScopedDeletePtr<SignalingAgent> a1_;  // Canonically "caller"
-  ScopedDeletePtr<SignalingAgent> a2_;  // Canonically "callee"
+  UniquePtr<SignalingAgent> a1_;  // Canonically "caller"
+  UniquePtr<SignalingAgent> a2_;  // Canonically "callee"
   std::string stun_addr_;
   uint16_t stun_port_;
 };
 
-#if !defined(MOZILLA_XPCOMRT_API)
-// FIXME XPCOMRT doesn't support nsPrefService
-// See Bug 1129188 - Create standalone libpref for use in standalone WebRTC
 static void SetIntPrefOnMainThread(nsCOMPtr<nsIPrefBranch> prefs,
   const char *pref_name,
   int new_value) {
@@ -2184,7 +2225,6 @@ class FsFrPrefClearer {
   private:
     nsCOMPtr<nsIPrefBranch> mPrefs;
 };
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
 TEST_P(SignalingTest, JustInit)
 {
@@ -3970,10 +4010,6 @@ TEST_P(SignalingTest, hugeSdp)
   a2_->CreateAnswer(OFFER_AV);
 }
 
-#if !defined(MOZILLA_XPCOMRT_API)
-// FIXME XPCOMRT doesn't support nsPrefService
-// See Bug 1129188 - Create standalone libpref for use in standalone WebRTC
-
 // Test max_fs and max_fr prefs have proper impact on SDP offer
 TEST_P(SignalingTest, MaxFsFrInOffer)
 {
@@ -4108,7 +4144,6 @@ TEST_P(SignalingTest, MaxFsFrCallerCodec)
   ASSERT_EQ(video_conduit->SendingMaxFs(), (unsigned short) 600);
   ASSERT_EQ(video_conduit->SendingMaxFr(), (unsigned short) 60);
 }
-#endif // !defined(MOZILLA_XPCOMRT_API)
 
 // Validate offer with multiple video codecs
 TEST_P(SignalingTest, ValidateMultipleVideoCodecsInOffer)
@@ -4712,6 +4747,19 @@ static int gtest_main(int argc, char **argv) {
   return result;
 }
 
+#ifdef SIGNALING_UNITTEST_STANDALONE
+static void verifyStringTable(const EnumEntry* bindingTable,
+			      const char** ourTable)
+{
+  while (bindingTable->value) {
+    if (strcmp(bindingTable->value, *ourTable)) {
+      MOZ_CRASH("Our tables are out of sync with the bindings");
+    }
+    ++bindingTable;
+    ++ourTable;
+  }
+}
+#endif // SIGNALING_UNITTEST_STANDALONE
 
 int main(int argc, char **argv) {
 
@@ -4725,6 +4773,16 @@ int main(int argc, char **argv) {
     callerName = ansiCyan + callerName + ansiColorOff;
     calleeName = ansiMagenta + calleeName + ansiColorOff;
   }
+
+#ifdef SIGNALING_UNITTEST_STANDALONE
+  // Verify our string tables are correct.
+  verifyStringTable(PCImplSignalingStateValues::strings,
+		    test::PCImplSignalingStateStrings);
+  verifyStringTable(PCImplIceConnectionStateValues::strings,
+		    test::PCImplIceConnectionStateStrings);
+  verifyStringTable(PCImplIceGatheringStateValues::strings,
+		    test::PCImplIceGatheringStateStrings);
+#endif // SIGNALING_UNITTEST_STANDALONE
 
   std::string tmp = get_environment("STUN_SERVER_ADDRESS");
   if (tmp != "")

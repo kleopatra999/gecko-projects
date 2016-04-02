@@ -9,6 +9,8 @@
 %extensionsDTD;
 ]>
 
+<!-- import-globals-from extensions.js -->
+
 <bindings id="addonBindings"
           xmlns="http://www.mozilla.org/xbl"
           xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
@@ -745,6 +747,16 @@
         ]]></body>
       </method>
 
+      <method name="typeHasFlag">
+        <parameter name="aFlag"/>
+        <body><![CDATA[
+          let flag = AddonManager["TYPE_" + aFlag];
+          let type = AddonManager.addonTypes[this.mAddon.type];
+
+          return !!(type.flags & flag);
+        ]]></body>
+      </method>
+
       <method name="onUninstalled">
         <body><![CDATA[
           this.parentNode.removeChild(this);
@@ -877,11 +889,6 @@
                         tooltiptext="&cmd.showPreferencesUnix.tooltip;"
 #endif
                         oncommand="document.getBindingParent(this).showPreferences();"/>
-                        <!-- label="&cmd.debugAddon.label;" -->
-            <xul:button anonid="debug-btn" class="addon-control debug"
-                        label="&cmd.debugAddon.label;"
-                        oncommand="document.getBindingParent(this).debug();"/>
-
             <xul:button anonid="enable-btn"  class="addon-control enable"
                         label="&cmd.enableAddon.label;"
                         oncommand="document.getBindingParent(this).userDisabled = false;"/>
@@ -919,6 +926,7 @@
 
     <implementation>
       <constructor><![CDATA[
+        this._installStatus = document.getAnonymousElementByAttribute(this, "anonid", "install-status");
         this._installStatus.mControl = this;
 
         this.setAttribute("contextmenu", "addonitem-popup");
@@ -1018,10 +1026,6 @@
       <field name="_enableBtn">
         document.getAnonymousElementByAttribute(this, "anonid",
                                                 "enable-btn");
-      </field>
-      <field name="_debugBtn">
-        document.getAnonymousElementByAttribute(this, "anonid",
-                                                "debug-btn");
       </field>
       <field name="_disableBtn">
         document.getAnonymousElementByAttribute(this, "anonid",
@@ -1123,18 +1127,17 @@
               (this.mAddon.applyBackgroundUpdates == AddonManager.AUTOUPDATE_DISABLE ||
                (this.mAddon.applyBackgroundUpdates == AddonManager.AUTOUPDATE_DEFAULT &&
                 !AddonManager.autoUpdateDefault))) {
-            var self = this;
-            AddonManager.getAllInstalls(function(aInstallsList) {
+            AddonManager.getAllInstalls(aInstallsList => {
               // This can return after the binding has been destroyed,
               // so try to detect that and return early
-              if (!("onNewInstall" in self))
+              if (!("onNewInstall" in this))
                 return;
               for (let install of aInstallsList) {
                 if (install.existingAddon &&
-                    install.existingAddon.id == self.mAddon.id &&
+                    install.existingAddon.id == this.mAddon.id &&
                     install.state == AddonManager.STATE_AVAILABLE) {
-                  self.onNewInstall(install);
-                  self.onIncludeUpdateChanged();
+                  this.onNewInstall(install);
+                  this.onIncludeUpdateChanged();
                 }
               }
             });
@@ -1188,7 +1191,7 @@
           if (pending != AddonManager.PENDING_NONE) {
             this.removeAttribute("notification");
 
-            var pending = null;
+            pending = null;
             const PENDING_OPERATIONS = ["enable", "disable", "install",
                                         "uninstall", "upgrade"];
             for (let op of PENDING_OPERATIONS) {
@@ -1315,8 +1318,7 @@
           this._preferencesBtn.hidden = (!this.mAddon.optionsURL) ||
                                         this.mAddon.optionsType == AddonManager.OPTIONS_TYPE_INLINE_INFO;
 
-          let addonType = AddonManager.addonTypes[this.mAddon.type];
-          if (addonType.flags & AddonManager.TYPE_SUPPORTS_ASK_TO_ACTIVATE) {
+          if (this.typeHasFlag("SUPPORTS_ASK_TO_ACTIVATE")) {
             this._enableBtn.disabled = true;
             this._disableBtn.disabled = true;
             this._askToActivateMenuitem.disabled = !this.hasPermission("ask_to_activate");
@@ -1370,12 +1372,6 @@
                              this.mAddon.install.state != AddonManager.STATE_INSTALLED);
           this._showStatus(showProgress ? "progress" : "none");
 
-          let debuggable = this.mAddon.isDebuggable &&
-                           Services.prefs.getBoolPref('devtools.chrome.enabled') &&
-                           Services.prefs.getBoolPref('devtools.debugger.remote-enabled');
-
-          this._debugBtn.disabled = this._debugBtn.hidden = !debuggable
-
           if (this.mAddon.type == "experiment") {
             this.removeAttribute("notification");
             let prefix = "experiment.";
@@ -1412,7 +1408,6 @@
       <method name="_fetchReleaseNotes">
         <parameter name="aURI"/>
         <body><![CDATA[
-          var self = this;
           if (!aURI || this._relNotesLoaded) {
             sendToggleEvent();
             return;
@@ -1424,17 +1419,17 @@
           this._relNotesLoading.hidden = false;
           this._relNotesError.hidden = true;
 
-          function sendToggleEvent() {
+          let sendToggleEvent = () => {
             var event = document.createEvent("Events");
             event.initEvent("RelNotesToggle", true, true);
-            self.dispatchEvent(event);
+            this.dispatchEvent(event);
           }
 
-          function showRelNotes() {
+          let showRelNotes = () => {
             if (!relNotesData || !transformData)
               return;
 
-            self._relNotesLoading.hidden = true;
+            this._relNotesLoading.hidden = true;
 
             var processor = Components.classes["@mozilla.org/document-transformer;1?type=xslt"]
                                       .createInstance(Components.interfaces.nsIXSLTProcessor);
@@ -1442,20 +1437,20 @@
 
             processor.importStylesheet(transformData);
             var fragment = processor.transformToFragment(relNotesData, document);
-            self._relNotes.appendChild(fragment);
-            if (self.hasAttribute("show-relnotes")) {
-              var container = self._relNotesContainer;
+            this._relNotes.appendChild(fragment);
+            if (this.hasAttribute("show-relnotes")) {
+              var container = this._relNotesContainer;
               container.style.height = container.scrollHeight + "px";
             }
             sendToggleEvent();
           }
 
-          function handleError() {
+          let handleError = () => {
             dataReq.abort();
             styleReq.abort();
-            self._relNotesLoading.hidden = true;
-            self._relNotesError.hidden = false;
-            self._relNotesLoaded = false; // allow loading to be re-tried
+            this._relNotesLoading.hidden = true;
+            this._relNotesError.hidden = false;
+            this._relNotesLoaded = false; // allow loading to be re-tried
             sendToggleEvent();
           }
 
@@ -1541,9 +1536,11 @@
 
       <method name="uninstall">
         <body><![CDATA[
-          // If uninstalling does not require a restart then just disable it
-          // and show the undo UI.
-          if (!this.opRequiresRestart("uninstall")) {
+          // If uninstalling does not require a restart and the type doesn't
+          // support undoing of restartless uninstalls, then we fake it by
+          // just disabling it it, and doing the real uninstall later.
+          if (!this.opRequiresRestart("uninstall") &&
+              !this.typeHasFlag("SUPPORTS_UNDO_RESTARTLESS_UNINSTALL")) {
             this.setAttribute("wasDisabled", this.mAddon.userDisabled);
 
             // We must set userDisabled to true first, this will call
@@ -1553,14 +1550,8 @@
             // This won't update any other add-on manager views (bug 582002)
             this.setAttribute("pending", "uninstall");
           } else {
-            this.mAddon.uninstall();
+            this.mAddon.uninstall(true);
           }
-        ]]></body>
-      </method>
-
-      <method name="debug">
-        <body><![CDATA[
-          gViewController.doCommand("cmd_debugItem", this.mAddon);
         ]]></body>
       </method>
 
@@ -1795,7 +1786,7 @@
                                                                      [this.mAddon.name],
                                                                      1);
 
-        if (!this.isPending("uninstall"))
+        if (!this.opRequiresRestart("uninstall"))
           this._restartBtn.setAttribute("hidden", true);
 
         gEventManager.registerAddonListener(this, this.mAddon.id);

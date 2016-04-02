@@ -72,6 +72,8 @@ def create_parser(product_choices=None):
                         help="Multiplier relative to standard test timeout to use")
     parser.add_argument("--repeat", action="store", type=int, default=1,
                         help="Number of times to run the tests")
+    parser.add_argument("--repeat-until-unexpected", action="store_true", default=None,
+                        help="Run tests in a loop until one returns an unexpected result")
 
     parser.add_argument("--no-capture-stdio", action="store_true", default=False,
                         help="Don't capture stdio and write to logging")
@@ -126,6 +128,9 @@ def create_parser(product_choices=None):
     debugging_group.add_argument("--stackwalk-binary", action="store", type=abs_path,
                                  help="Path to stackwalker program used to analyse minidumps.")
 
+    debugging_group.add_argument("--pdb", action="store_true",
+                                 help="Drop into pdb on python exception")
+
     chunking_group = parser.add_argument_group("Test Chunking")
     chunking_group.add_argument("--total-chunks", action="store", type=int, default=1,
                                 help="Total number of chunks to use")
@@ -165,6 +170,10 @@ def create_parser(product_choices=None):
     servo_group.add_argument("--user-stylesheet",
                              default=[], action="append", dest="user_stylesheets",
                              help="Inject a user CSS stylesheet into every test.")
+    servo_group.add_argument("--servo-backend",
+                             default="cpu", choices=["cpu", "webrender"],
+                             help="Rendering backend to use with Servo.")
+
 
     parser.add_argument("test_list", nargs="*",
                         help="List of URLs for tests to run, or paths including tests to run. "
@@ -334,12 +343,25 @@ def check_args(kwargs):
 
     return kwargs
 
+def check_args_update(kwargs):
+    set_from_config(kwargs)
 
-def create_parser_update():
+    if kwargs["product"] is None:
+        kwargs["product"] = "firefox"
+
+def create_parser_update(product_choices=None):
     from mozlog.structured import commandline
+
+    import products
+
+    if product_choices is None:
+        config_data = config.load()
+        product_choices = products.products_enabled(config_data)
 
     parser = argparse.ArgumentParser("web-platform-tests-update",
                                      description="Update script for web-platform-tests tests.")
+    parser.add_argument("--product", action="store", choices=product_choices,
+                        default=None, help="Browser for which metadata is being updated")
     parser.add_argument("--config", action="store", type=abs_path, help="Path to config file")
     parser.add_argument("--metadata", action="store", type=abs_path, dest="metadata_root",
                         help="Path to the folder containing test metadata"),
@@ -382,7 +404,7 @@ def parse_args():
 def parse_args_update():
     parser = create_parser_update()
     rv = vars(parser.parse_args())
-    set_from_config(rv)
+    check_args_update(rv)
     return rv
 
 

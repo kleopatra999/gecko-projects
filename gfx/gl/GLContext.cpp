@@ -31,7 +31,6 @@
 #include "TextureGarbageBin.h"
 #include "gfx2DGlue.h"
 #include "gfxPrefs.h"
-#include "DriverCrashGuard.h"
 #include "mozilla/IntegerPrintfMacros.h"
 
 #include "OGLShaderProgram.h" // for ShaderProgramType
@@ -66,7 +65,7 @@ uint32_t GLContext::sDebugMode = 0;
 #define END_SYMBOLS { nullptr, { nullptr } }
 
 // should match the order of GLExtensions, and be null-terminated.
-static const char *sExtensionNames[] = {
+static const char *const sExtensionNames[] = {
     "NO_EXTENSION",
     "GL_AMD_compressed_ATC_texture",
     "GL_ANGLE_depth_texture",
@@ -100,11 +99,13 @@ static const char *sExtensionNames[] = {
     "GL_ARB_pixel_buffer_object",
     "GL_ARB_robustness",
     "GL_ARB_sampler_objects",
+    "GL_ARB_seamless_cube_map",
     "GL_ARB_sync",
     "GL_ARB_texture_compression",
     "GL_ARB_texture_float",
     "GL_ARB_texture_non_power_of_two",
     "GL_ARB_texture_rectangle",
+    "GL_ARB_texture_rg",
     "GL_ARB_texture_storage",
     "GL_ARB_texture_swizzle",
     "GL_ARB_timer_query",
@@ -178,6 +179,108 @@ static const char *sExtensionNames[] = {
     "GL_OES_texture_npot",
     "GL_OES_vertex_array_object"
 };
+
+static bool
+ParseGLSLVersion(GLContext* gl, uint32_t* out_version)
+{
+    if (gl->fGetError() != LOCAL_GL_NO_ERROR) {
+        MOZ_ASSERT(false, "An OpenGL error has been triggered before.");
+        return false;
+    }
+
+    /**
+     * OpenGL 2.x, 3.x, 4.x specifications:
+     *  The VERSION and SHADING_LANGUAGE_VERSION strings are laid out as follows:
+     *
+     *    <version number><space><vendor-specific information>
+     *
+     *  The version number is either of the form major_number.minor_number or
+     *  major_number.minor_number.release_number, where the numbers all have
+     *  one or more digits.
+     *
+     * SHADING_LANGUAGE_VERSION is *almost* identical to VERSION. The
+     * difference is that the minor version always has two digits and the
+     * prefix has an additional 'GLSL ES'
+     *
+     *
+     * OpenGL ES 2.0, 3.0 specifications:
+     *  The VERSION string is laid out as follows:
+     *
+     *     "OpenGL ES N.M vendor-specific information"
+     *
+     *  The version number is either of the form major_number.minor_number or
+     *  major_number.minor_number.release_number, where the numbers all have
+     *  one or more digits.
+     *
+     *
+     * Note:
+     *  We don't care about release_number.
+     */
+    const char* versionString = (const char*) gl->fGetString(LOCAL_GL_SHADING_LANGUAGE_VERSION);
+
+    if (gl->fGetError() != LOCAL_GL_NO_ERROR) {
+        MOZ_ASSERT(false, "glGetString(GL_SHADING_LANGUAGE_VERSION) has generated an error");
+        return false;
+    }
+
+    if (!versionString) {
+        // This happens on the Android emulators. We'll just return 100
+        *out_version = 100;
+        return true;
+    }
+
+    const auto fnSkipPrefix = [&versionString](const char* prefix) {
+        const auto len = strlen(prefix);
+        if (strncmp(versionString, prefix, len) == 0)
+            versionString += len;
+    };
+
+    const char kGLESVersionPrefix[] = "OpenGL ES GLSL ES";
+    fnSkipPrefix(kGLESVersionPrefix);
+
+    if (gl->WorkAroundDriverBugs()) {
+        // Nexus 7 2013 (bug 1234441)
+        const char kBadGLESVersionPrefix[] = "OpenGL ES GLSL";
+        fnSkipPrefix(kBadGLESVersionPrefix);
+    }
+
+    const char* itr = versionString;
+    char* end = nullptr;
+    auto majorVersion = strtol(itr, &end, 10);
+
+    if (!end) {
+        MOZ_ASSERT(false, "Failed to parse the GL major version number.");
+        return false;
+    }
+
+    if (*end != '.') {
+        MOZ_ASSERT(false, "Failed to parse GL's major-minor version number separator.");
+        return false;
+    }
+
+    // we skip the '.' between the major and the minor version
+    itr = end + 1;
+    end = nullptr;
+
+    auto minorVersion = strtol(itr, &end, 10);
+    if (!end) {
+        MOZ_ASSERT(false, "Failed to parse GL's minor version number.");
+        return false;
+    }
+
+    if (majorVersion <= 0 || majorVersion >= 100) {
+        MOZ_ASSERT(false, "Invalid major version.");
+        return false;
+    }
+
+    if (minorVersion < 0 || minorVersion >= 100) {
+        MOZ_ASSERT(false, "Invalid minor version.");
+        return false;
+    }
+
+    *out_version = (uint32_t) majorVersion * 100 + (uint32_t) minorVersion;
+    return true;
+}
 
 static bool
 ParseGLVersion(GLContext* gl, uint32_t* out_version)
@@ -303,6 +406,7 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mContextLost(false),
     mVersion(0),
     mProfile(ContextProfile::Unknown),
+    mShadingLanguageVersion(0),
     mVendor(GLVendor::Other),
     mRenderer(GLRenderer::Other),
     mHasRobustness(false),
@@ -315,11 +419,14 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mMaxCubeMapTextureSize(0),
     mMaxTextureImageSize(0),
     mMaxRenderbufferSize(0),
+    mMaxSamples(0),
     mNeedsTextureSizeChecks(false),
     mNeedsFlushBeforeDeleteFB(false),
     mWorkAroundDriverBugs(true),
     mHeavyGLCallsSinceLastFlush(false)
 {
+    mMaxViewportDims[0] = 0;
+    mMaxViewportDims[1] = 0;
     mOwningThreadId = PlatformThread::CurrentId();
 }
 
@@ -368,11 +475,6 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
     if (mInitialized) {
         reporter.SetSuccessful();
         return true;
-    }
-
-    GLContextCrashGuard crashGuard;
-    if (crashGuard.Crashed()) {
-        return false;
     }
 
     mWorkAroundDriverBugs = gfxPrefs::WorkAroundDriverBugs();
@@ -515,8 +617,12 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
         uint32_t version = 0;
         ParseGLVersion(this, &version);
 
+        mShadingLanguageVersion = 100;
+        ParseGLSLVersion(this, &mShadingLanguageVersion);
+
         if (ShouldSpew()) {
             printf_stderr("OpenGL version detected: %u\n", version);
+            printf_stderr("OpenGL shading language version detected: %u\n", mShadingLanguageVersion);
             printf_stderr("OpenGL vendor: %s\n", fGetString(LOCAL_GL_VENDOR));
             printf_stderr("OpenGL renderer: %s\n", fGetString(LOCAL_GL_RENDERER));
         }
@@ -1609,11 +1715,18 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
         }
 #endif
 #ifdef MOZ_X11
-        if (mWorkAroundDriverBugs &&
-            mVendor == GLVendor::Nouveau) {
-            // see bug 814716. Clamp MaxCubeMapTextureSize at 2K for Nouveau.
-            mMaxCubeMapTextureSize = std::min(mMaxCubeMapTextureSize, 2048);
-            mNeedsTextureSizeChecks = true;
+        if (mWorkAroundDriverBugs) {
+            if (mVendor == GLVendor::Nouveau) {
+                // see bug 814716. Clamp MaxCubeMapTextureSize at 2K for Nouveau.
+                mMaxCubeMapTextureSize = std::min(mMaxCubeMapTextureSize, 2048);
+                mNeedsTextureSizeChecks = true;
+            } else if (mVendor == GLVendor::Intel) {
+                // Bug 1199923. Driver seems to report a larger max size than
+                // actually supported.
+                mMaxTextureSize /= 2;
+                mMaxRenderbufferSize /= 2;
+                mNeedsTextureSizeChecks = true;
+            }
         }
 #endif
         if (mWorkAroundDriverBugs &&
@@ -1625,7 +1738,6 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
 
         mMaxTextureImageSize = mMaxTextureSize;
 
-        mMaxSamples = 0;
         if (IsSupported(GLFeature::framebuffer_multisample)) {
             fGetIntegerv(LOCAL_GL_MAX_SAMPLES, (GLint*)&mMaxSamples);
         }
@@ -1967,7 +2079,7 @@ GLContext::ChooseGLFormats(const SurfaceCaps& caps) const
 
     // Be clear that these are 0 if unavailable.
     formats.depthStencil = 0;
-    if (!IsGLES() || IsExtensionSupported(OES_packed_depth_stencil)) {
+    if (IsSupported(GLFeature::packed_depth_stencil)) {
         formats.depthStencil = LOCAL_GL_DEPTH24_STENCIL8;
     }
 
@@ -2682,7 +2794,7 @@ GLContext::Readback(SharedSurface* src, gfx::DataSourceSurface* dest)
                                          LOCAL_GL_RENDERBUFFER, src->ProdRenderbuffer());
                 break;
             default:
-                MOZ_CRASH("bad `src->mAttachType`.");
+                MOZ_CRASH("GFX: bad `src->mAttachType`.");
             }
 
             DebugOnly<GLenum> status = fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);

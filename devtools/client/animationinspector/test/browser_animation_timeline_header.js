@@ -4,15 +4,18 @@
 
 "use strict";
 
+requestLongerTimeout(2);
+
 // Check that the timeline shows correct time graduations in the header.
 
-const {findOptimalTimeInterval} = require("devtools/client/animationinspector/utils");
-const {TimeScale} = require("devtools/client/animationinspector/components");
-// Should be kept in sync with TIME_GRADUATION_MIN_SPACING in components.js
+const {findOptimalTimeInterval, TimeScale} = require("devtools/client/animationinspector/utils");
+
+// Should be kept in sync with TIME_GRADUATION_MIN_SPACING in
+// animation-timeline.js
 const TIME_GRADUATION_MIN_SPACING = 40;
 
 add_task(function*() {
-  yield addTab(TEST_URL_ROOT + "doc_simple_animation.html");
+  yield addTab(URL_ROOT + "doc_simple_animation.html");
   let {panel} = yield openAnimationInspector();
 
   let timeline = panel.animationsTimelineComponent;
@@ -20,11 +23,14 @@ add_task(function*() {
 
   info("Find out how many time graduations should there be");
   let width = headerEl.offsetWidth;
-  let scale = width / (TimeScale.maxEndTime - TimeScale.minStartTime);
+
+  let animationDuration = TimeScale.maxEndTime - TimeScale.minStartTime;
+  let minTimeInterval = TIME_GRADUATION_MIN_SPACING * animationDuration / width;
+
   // Note that findOptimalTimeInterval is tested separately in xpcshell test
   // test_findOptimalTimeInterval.js, so we assume that it works here.
-  let interval = findOptimalTimeInterval(scale, TIME_GRADUATION_MIN_SPACING);
-  let nb = Math.ceil(width / interval);
+  let interval = findOptimalTimeInterval(minTimeInterval);
+  let nb = Math.ceil(animationDuration / interval);
 
   is(headerEl.querySelectorAll(".time-tick").length, nb,
      "The expected number of time ticks were found");
@@ -32,15 +38,16 @@ add_task(function*() {
   info("Make sure graduations are evenly distributed and show the right times");
   [...headerEl.querySelectorAll(".time-tick")].forEach((tick, i) => {
     let left = parseFloat(tick.style.left);
-    is(Math.round(left), Math.round(i * interval),
-      "Graduation " + i + " is positioned correctly");
+    let expectedPos = i * interval * 100 / animationDuration;
+    is(Math.round(left), Math.round(expectedPos),
+      `Graduation ${i} is positioned correctly`);
 
     // Note that the distancetoRelativeTime and formatTime functions are tested
     // separately in xpcshell test test_timeScale.js, so we assume that they
     // work here.
     let formattedTime = TimeScale.formatTime(
-      TimeScale.distanceToRelativeTime(i * interval, width));
+      TimeScale.distanceToRelativeTime(expectedPos, width));
     is(tick.textContent, formattedTime,
-      "Graduation " + i + " has the right text content");
+      `Graduation ${i} has the right text content`);
   });
 });

@@ -70,7 +70,8 @@
 #include "gfxRect.h"
 #include "ImageLayers.h"
 #include "ImageContainer.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsBlockFrame.h"
 #include "nsStyleStructInlines.h"
 
@@ -143,6 +144,8 @@ nsImageFrame::nsImageFrame(nsStyleContext* aContext) :
   mReflowCallbackPosted(false),
   mForceSyncDecoding(false)
 {
+  EnableVisibilityTracking();
+
   // We assume our size is not constrained and we haven't gotten an
   // initial reflow yet, so don't touch those flags.
   mIntrinsicSize.width.SetCoordValue(0);
@@ -219,7 +222,7 @@ nsImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
   if (mDisplayingIcon)
     gIconLoad->RemoveIconObserver(this);
 
-  nsSplittableFrame::DestroyFrom(aDestructRoot);
+  ImageFrameSuper::DestroyFrom(aDestructRoot);
 }
 
 void
@@ -255,7 +258,7 @@ nsImageFrame::Init(nsIContent*       aContent,
                    nsContainerFrame* aParent,
                    nsIFrame*         aPrevInFlow)
 {
-  nsSplittableFrame::Init(aContent, aParent, aPrevInFlow);
+  ImageFrameSuper::Init(aContent, aParent, aPrevInFlow);
 
   mListener = new nsImageListener(this);
 
@@ -681,16 +684,18 @@ nsImageFrame::NotifyNewCurrentRequest(imgIRequest *aRequest,
   }
 
   if (mState & IMAGE_GOTINITIALREFLOW) { // do nothing if we haven't gotten the initial reflow yet
-    if (!(mState & IMAGE_SIZECONSTRAINED) && intrinsicSizeChanged) {
-      nsIPresShell *presShell = PresContext()->GetPresShell();
-      if (presShell) { 
-        presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
-                                    NS_FRAME_IS_DIRTY);
+    if (intrinsicSizeChanged) {
+      if (!(mState & IMAGE_SIZECONSTRAINED)) {
+        nsIPresShell *presShell = PresContext()->GetPresShell();
+        if (presShell) {
+          presShell->FrameNeedsReflow(this, nsIPresShell::eStyleChange,
+                                      NS_FRAME_IS_DIRTY);
+        }
+      } else {
+        // We've already gotten the initial reflow, and our size hasn't changed,
+        // so we're ready to request a decode.
+        MaybeDecodeForPredictedSize();
       }
-    } else {
-      // We've already gotten the initial reflow, and our size hasn't changed,
-      // so we're ready to request a decode.
-      MaybeDecodeForPredictedSize();
     }
     // Update border+content to account for image change
     InvalidateFrame();
@@ -709,9 +714,7 @@ nsImageFrame::MaybeDecodeForPredictedSize()
     return;  // We won't draw anything, so no point in decoding.
   }
 
-  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
-  MOZ_ASSERT(imageLoader);
-  if (imageLoader->GetVisibleCount() == 0) {
+  if (GetVisibility() != Visibility::APPROXIMATELY_VISIBLE) {
     return;  // We're not visible, so don't decode.
   }
 
@@ -756,22 +759,15 @@ nsImageFrame::MaybeDecodeForPredictedSize()
 nsRect
 nsImageFrame::PredictedDestRect(const nsRect& aFrameContentBox)
 {
-  // What is the rect painted by the image?  It's the image's "dest rect" (the
-  // rect where a full copy of the image is mapped), clipped to the container's
-  // content box.  So, we intersect those rects.
-
   // Note: To get the "dest rect", we have to provide the "constraint rect"
   // (which is the content-box, with the effects of fragmentation undone).
   nsRect constraintRect(aFrameContentBox.TopLeft(), mComputedSize);
   constraintRect.y -= GetContinuationOffset();
 
-  const nsRect destRect =
-    nsLayoutUtils::ComputeObjectDestRect(constraintRect,
-                                         mIntrinsicSize,
-                                         mIntrinsicRatio,
-                                         StylePosition());
-
-  return destRect.Intersect(aFrameContentBox);
+  return nsLayoutUtils::ComputeObjectDestRect(constraintRect,
+                                              mIntrinsicSize,
+                                              mIntrinsicRatio,
+                                              StylePosition());
 }
 
 void
@@ -1045,7 +1041,16 @@ nsImageFrame::ReflowFinished()
 {
   mReflowCallbackPosted = false;
 
-  nsLayoutUtils::UpdateImageVisibilityForFrame(this);
+  // XXX(seth): We don't need this. The purpose of updating visibility
+  // synchronously is to ensure that animated images start animating
+  // immediately. In the short term, however,
+  // nsImageLoadingContent::OnUnlockedDraw() is enough to ensure that
+  // animations start as soon as the image is painted for the first time, and in
+  // the long term we want to update visibility information from the display
+  // list whenever we paint, so we don't actually need to do this. However, to
+  // avoid behavior changes during the transition from the old image visibility
+  // code, we'll leave it in for now.
+  UpdateVisibilitySynchronously();
 
   return false;
 }
@@ -1134,9 +1139,8 @@ nsImageFrame::DisplayAltText(nsPresContext*      aPresContext,
   // Set font and color
   aRenderingContext.ThebesContext()->
     SetColor(Color::FromABGR(StyleColor()->mColor));
-  RefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-    nsLayoutUtils::FontSizeInflationFor(this));
+  RefPtr<nsFontMetrics> fm =
+    nsLayoutUtils::GetInflatedFontMetricsForFrame(this);
 
   // Format the text to display within the formatting rect
 
@@ -1210,7 +1214,8 @@ nsImageFrame::DisplayAltText(nsPresContext*      aPresContext,
 
       rv = nsBidiPresUtils::RenderText(str, maxFit, dir,
                                        aPresContext, aRenderingContext,
-                                       aRenderingContext, *fm, x, y);
+                                       aRenderingContext.GetDrawTarget(),
+                                       *fm, x, y);
     }
     if (NS_FAILED(rv)) {
       nsLayoutUtils::DrawUniDirString(str, maxFit,
@@ -1463,7 +1468,7 @@ nsImageFrame::DisplayAltFeedback(nsRenderingContext& aRenderingContext,
 }
 
 #ifdef DEBUG
-static void PaintDebugImageMap(nsIFrame* aFrame, nsRenderingContext* aCtx,
+static void PaintDebugImageMap(nsIFrame* aFrame, DrawTarget* aDrawTarget,
                                const nsRect& aDirtyRect, nsPoint aPt)
 {
   nsImageFrame* f = static_cast<nsImageFrame*>(aFrame);
@@ -1471,11 +1476,10 @@ static void PaintDebugImageMap(nsIFrame* aFrame, nsRenderingContext* aCtx,
   gfxPoint devPixelOffset =
     nsLayoutUtils::PointToGfxPoint(inner.TopLeft(),
                                    aFrame->PresContext()->AppUnitsPerDevPixel());
-  DrawTarget* drawTarget = aCtx->GetDrawTarget();
-  AutoRestoreTransform autoRestoreTransform(drawTarget);
-  drawTarget->SetTransform(
-    drawTarget->GetTransform().PreTranslate(ToPoint(devPixelOffset)));
-  f->GetImageMap()->Draw(aFrame, *drawTarget,
+  AutoRestoreTransform autoRestoreTransform(aDrawTarget);
+  aDrawTarget->SetTransform(
+    aDrawTarget->GetTransform().PreTranslate(ToPoint(devPixelOffset)));
+  f->GetImageMap()->Draw(aFrame, *aDrawTarget,
                          ColorPattern(ToDeviceColor(Color(0.f, 0.f, 0.f, 1.f))));
 }
 #endif
@@ -1643,8 +1647,10 @@ nsDisplayImage::GetLayerState(nsDisplayListBuilder* aBuilder,
 nsDisplayImage::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
                                 bool* aSnap)
 {
+  *aSnap = false;
   if (mImage && mImage->IsOpaque()) {
-    return nsRegion(GetDestRect(aSnap));
+    const nsRect frameContentBox = GetBounds(aSnap);
+    return GetDestRect().Intersect(frameContentBox);
   }
   return nsRegion();
 }
@@ -1705,10 +1711,22 @@ nsDisplayImage::ConfigureLayer(ImageLayer* aLayer,
   // aParameters.Offset() is always zero.
   MOZ_ASSERT(aParameters.Offset() == LayerIntPoint(0,0));
 
+  // It's possible (for example, due to downscale-during-decode) that the
+  // ImageContainer this ImageLayer is holding has a different size from the
+  // intrinsic size of the image. For this reason we compute the transform using
+  // the ImageContainer's size rather than the image's intrinsic size.
+  // XXX(seth): In reality, since the size of the ImageContainer may change
+  // asynchronously, this is not enough. Bug 1183378 will provide a more
+  // complete fix, but this solution is safe in more cases than simply relying
+  // on the intrinsic size.
+  IntSize containerSize = aLayer->GetContainer()
+                        ? aLayer->GetContainer()->GetCurrentSize()
+                        : IntSize(imageWidth, imageHeight);
+
   const LayoutDevicePoint p = destRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(destRect.Width() / imageWidth,
-                     destRect.Height() / imageHeight);
+  transform.PreScale(destRect.Width() / containerSize.width,
+                     destRect.Height() / containerSize.height);
   aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 }
 
@@ -2074,7 +2092,7 @@ nsImageFrame::HandleEvent(nsPresContext* aPresContext,
     }
   }
 
-  return nsSplittableFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
+  return ImageFrameSuper::HandleEvent(aPresContext, aEvent, aEventStatus);
 }
 
 nsresult
@@ -2111,8 +2129,8 @@ nsImageFrame::AttributeChanged(int32_t aNameSpaceID,
                                nsIAtom* aAttribute,
                                int32_t aModType)
 {
-  nsresult rv = nsSplittableFrame::AttributeChanged(aNameSpaceID,
-                                                    aAttribute, aModType);
+  nsresult rv = ImageFrameSuper::AttributeChanged(aNameSpaceID,
+                                                  aAttribute, aModType);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -2124,6 +2142,25 @@ nsImageFrame::AttributeChanged(int32_t aNameSpaceID,
   }
 
   return NS_OK;
+}
+
+void
+nsImageFrame::OnVisibilityChange(Visibility aNewVisibility,
+                                 Maybe<OnNonvisible> aNonvisibleAction)
+{
+  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
+  if (!imageLoader) {
+    MOZ_ASSERT_UNREACHABLE("Should have an nsIImageLoadingContent");
+    return;
+  }
+
+  imageLoader->OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+
+  if (aNewVisibility == Visibility::APPROXIMATELY_VISIBLE) {
+    MaybeDecodeForPredictedSize();
+  }
+
+  ImageFrameSuper::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
 }
 
 nsIAtom*
@@ -2463,9 +2500,9 @@ nsImageFrame::AddInlineMinISize(nsRenderingContext *aRenderingContext,
     parent->StyleText()->WhiteSpaceCanWrap(parent) &&
     !IsInAutoWidthTableCellForQuirk(this);
 
-  if (canBreak)
-    aData->OptionallyBreak(aRenderingContext);
- 
+  if (canBreak) {
+    aData->OptionallyBreak();
+  }
   aData->trailingWhitespace = 0;
   aData->skipWhitespace = false;
   aData->trailingTextFrame = nullptr;
@@ -2473,7 +2510,7 @@ nsImageFrame::AddInlineMinISize(nsRenderingContext *aRenderingContext,
                             this, nsLayoutUtils::MIN_ISIZE);
   aData->atStartOfLine = false;
 
-  if (canBreak)
-    aData->OptionallyBreak(aRenderingContext);
-
+  if (canBreak) {
+    aData->OptionallyBreak();
+  }
 }

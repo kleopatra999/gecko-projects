@@ -27,7 +27,7 @@
 #include <android/log.h>
 #define GADM_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "GonkAudioDecoderManager", __VA_ARGS__)
 
-extern PRLogModuleInfo* GetPDMLog();
+extern mozilla::LogModule* GetPDMLog();
 #define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 using namespace android;
@@ -251,6 +251,15 @@ GonkAudioDecoderManager::ProcessFlush()
   mAudioQueue.Reset();
   GADM_LOG(">>>FLUSH");
   GonkDecoderManager::ProcessFlush();
+}
+
+void
+GonkAudioDecoderManager::ResetEOS()
+{
+  GADM_LOG("ResetEOS(<<<");
+  mAudioQueue.Reset();
+  GADM_LOG(">>>ResetEOS(");
+  GonkDecoderManager::ResetEOS();
 }
 
 } // namespace mozilla

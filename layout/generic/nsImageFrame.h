@@ -8,7 +8,7 @@
 #ifndef nsImageFrame_h___
 #define nsImageFrame_h___
 
-#include "nsSplittableFrame.h"
+#include "nsAtomicContainerFrame.h"
 #include "nsIIOService.h"
 #include "nsIObserver.h"
 
@@ -58,11 +58,15 @@ private:
   nsImageFrame *mFrame;
 };
 
-typedef nsSplittableFrame ImageFrameSuper;
+typedef nsAtomicContainerFrame ImageFrameSuper;
 
 class nsImageFrame : public ImageFrameSuper,
                      public nsIReflowCallback {
 public:
+  template <typename T> using Maybe = mozilla::Maybe<T>;
+  using Nothing = mozilla::Nothing;
+  using Visibility = mozilla::Visibility;
+
   typedef mozilla::image::DrawResult DrawResult;
   typedef mozilla::layers::ImageContainer ImageContainer;
   typedef mozilla::layers::ImageLayer ImageLayer;
@@ -104,6 +108,9 @@ public:
                                     nsIAtom* aAttribute,
                                     int32_t aModType) override;
 
+  void OnVisibilityChange(Visibility aNewVisibility,
+                          Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
+
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
@@ -112,7 +119,8 @@ public:
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
-    return ImageFrameSuper::IsFrameOfType(aFlags & ~(nsIFrame::eReplaced));
+    return ImageFrameSuper::IsFrameOfType(aFlags &
+      ~(nsIFrame::eReplaced | nsIFrame::eReplacedSizing));
   }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -120,6 +128,11 @@ public:
   void List(FILE* out = stderr, const char* aPrefix = "", 
             uint32_t aFlags = 0) const override;
 #endif
+
+  nsSplittableType GetSplittableType() const override
+  {
+    return NS_FRAME_SPLITTABLE;
+  }
 
   virtual LogicalSides GetLogicalSkipSides(const nsHTMLReflowState* aReflowState = nullptr) const override;
 
@@ -248,6 +261,7 @@ protected:
    * Computes the predicted dest rect that we'll draw into, in app units, based
    * upon the provided frame content box. (The content box is what
    * nsDisplayImage::GetBounds() returns.)
+   * The result is not necessarily contained in the frame content box.
    */
   nsRect PredictedDestRect(const nsRect& aFrameContentBox);
 
@@ -425,7 +439,8 @@ public:
                                                         nsDisplayListBuilder* aBuilder) override;
 
   /**
-   * @return the dest rect we'll use when drawing this image, in app units.
+   * @return The dest rect we'll use when drawing this image, in app units.
+   *         Not necessarily contained in this item's bounds.
    */
   nsRect GetDestRect(bool* aSnap = nullptr);
 

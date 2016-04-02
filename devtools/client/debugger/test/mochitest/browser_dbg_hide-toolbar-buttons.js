@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Bug 1093349: Test that the pretty-printing and blackboxing buttons
@@ -11,9 +13,6 @@ const TAB_URL = EXAMPLE_URL + "doc_auto-pretty-print-01.html";
 var { RootActor } = require("devtools/server/actors/root");
 
 function test() {
-  let gTab, gDebuggee, gPanel, gDebugger;
-  let gEditor, gSources, gBreakpoints, gBreakpointsAdded, gBreakpointsRemoving;
-
   RootActor.prototype.traits.noBlackBoxing = true;
   RootActor.prototype.traits.noPrettyPrinting = true;
 

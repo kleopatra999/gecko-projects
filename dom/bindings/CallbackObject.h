@@ -26,7 +26,6 @@
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "nsContentUtils.h"
 #include "nsWrapperCache.h"
 #include "nsJSEnvironment.h"
 #include "xpcpublic.h"
@@ -66,6 +65,16 @@ public:
     } else {
       Init(aCallback, nullptr, aIncumbentGlobal);
     }
+  }
+
+  // Instead of capturing the current stack to use as an async parent when the
+  // callback is invoked, the caller can use this overload to pass in a stack
+  // for that purpose.
+  explicit CallbackObject(JS::Handle<JSObject*> aCallback,
+                          JS::Handle<JSObject*> aAsyncStack,
+                          nsIGlobalObject *aIncumbentGlobal)
+  {
+    Init(aCallback, aAsyncStack, aIncumbentGlobal);
   }
 
   JS::Handle<JSObject*> Callback() const
@@ -248,7 +257,6 @@ protected:
 
     // Members which are used to set the async stack.
     Maybe<JS::Rooted<JSObject*>> mAsyncStack;
-    Maybe<JS::Rooted<JSString*>> mAsyncCause;
     Maybe<JS::AutoSetAsyncStackForNewCalls> mAsyncStackSetter;
 
     // Can't construct a JSAutoCompartment without a JSContext either.  Also,
@@ -261,7 +269,6 @@ protected:
     // we should re-throw them.
     ErrorResult& mErrorResult;
     const ExceptionHandling mExceptionHandling;
-    JS::ContextOptions mSavedJSContextOptions;
     const bool mIsMainThread;
   };
 };

@@ -10,7 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "nsGenericHTMLFrameElement.h"
 #include "nsIDOMHTMLIFrameElement.h"
-#include "nsDOMSettableTokenList.h"
+#include "nsDOMTokenList.h"
 
 namespace mozilla {
 namespace dom {
@@ -84,7 +84,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::name, aName, aError);
   }
-  nsDOMSettableTokenList* Sandbox()
+  nsDOMTokenList* Sandbox()
   {
     return GetTokenList(nsGkAtoms::sandbox);
   }
@@ -159,13 +159,13 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::marginheight, aMarginHeight, aError);
   }
-  void SetReferrer(const nsAString& aReferrer, ErrorResult& aError)
+  void SetReferrerPolicy(const nsAString& aReferrer, ErrorResult& aError)
   {
-    SetHTMLAttr(nsGkAtoms::referrer, aReferrer, aError);
+    SetHTMLAttr(nsGkAtoms::referrerpolicy, aReferrer, aError);
   }
-  void GetReferrer(nsAString& aReferrer)
+  void GetReferrerPolicy(nsAString& aReferrer)
   {
-    GetHTMLAttr(nsGkAtoms::referrer, aReferrer);
+    GetHTMLAttr(nsGkAtoms::referrerpolicy, aReferrer);
   }
 
   nsIDocument* GetSVGDocument()

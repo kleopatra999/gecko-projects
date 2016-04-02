@@ -46,7 +46,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "logging.h"
 #include "nsError.h"
-#include "mozilla/Scoped.h"
 
 // nICEr includes
 extern "C" {
@@ -169,13 +168,13 @@ static bool ToNrIceCandidate(const nr_ice_candidate& candc,
 // Make an NrIceCandidate from the candidate |cand|.
 // This is not a member fxn because we want to hide the
 // defn of nr_ice_candidate but we pass by reference.
-static NrIceCandidate* MakeNrIceCandidate(const nr_ice_candidate& candc) {
-  ScopedDeletePtr<NrIceCandidate> out(new NrIceCandidate());
+static UniquePtr<NrIceCandidate> MakeNrIceCandidate(const nr_ice_candidate& candc) {
+  UniquePtr<NrIceCandidate> out(new NrIceCandidate());
 
-  if (!ToNrIceCandidate(candc, out)) {
+  if (!ToNrIceCandidate(candc, out.get())) {
     return nullptr;
   }
-  return out.forget();
+  return out;
 }
 
 // NrIceMediaStream
@@ -259,8 +258,8 @@ nsresult NrIceMediaStream::ParseTrickleCandidate(const std::string& candidate) {
 
 // Returns NS_ERROR_NOT_AVAILABLE if component is unpaired or disabled.
 nsresult NrIceMediaStream::GetActivePair(int component,
-                                         NrIceCandidate **localp,
-                                         NrIceCandidate **remotep) {
+                                         UniquePtr<NrIceCandidate>* localp,
+                                         UniquePtr<NrIceCandidate>* remotep) {
   int r;
   nr_ice_candidate *local_int;
   nr_ice_candidate *remote_int;
@@ -280,20 +279,20 @@ nsresult NrIceMediaStream::GetActivePair(int component,
   if (r)
     return NS_ERROR_FAILURE;
 
-  ScopedDeletePtr<NrIceCandidate> local(
+  UniquePtr<NrIceCandidate> local(
       MakeNrIceCandidate(*local_int));
   if (!local)
     return NS_ERROR_FAILURE;
 
-  ScopedDeletePtr<NrIceCandidate> remote(
+  UniquePtr<NrIceCandidate> remote(
       MakeNrIceCandidate(*remote_int));
   if (!remote)
     return NS_ERROR_FAILURE;
 
   if (localp)
-    *localp = local.forget();
+    *localp = Move(local);
   if (remotep)
-    *remotep = remote.forget();
+    *remotep = Move(remote);
 
   return NS_OK;
 }
@@ -306,6 +305,11 @@ nsresult NrIceMediaStream::GetCandidatePairs(std::vector<NrIceCandidatePair>*
     return NS_ERROR_NOT_AVAILABLE;
   }
 
+  // If we haven't at least started checking then there is nothing to report
+  if (ctx_->connection_state() == NrIceCtx::ICE_CTX_INIT) {
+    return NS_OK;
+  }
+
   // Get the check_list on the peer stream (this is where the check_list
   // actually lives, not in stream_)
   nr_ice_media_stream* peer_stream;
@@ -314,14 +318,45 @@ nsresult NrIceMediaStream::GetCandidatePairs(std::vector<NrIceCandidatePair>*
     return NS_ERROR_FAILURE;
   }
 
-  nr_ice_cand_pair *p1;
+  nr_ice_cand_pair *p1, *p2;
   out_pairs->clear();
 
-  TAILQ_FOREACH(p1, &peer_stream->check_list, entry) {
+  TAILQ_FOREACH(p1, &peer_stream->check_list, check_queue_entry) {
     MOZ_ASSERT(p1);
     MOZ_ASSERT(p1->local);
     MOZ_ASSERT(p1->remote);
     NrIceCandidatePair pair;
+
+    p2 = TAILQ_FIRST(&peer_stream->check_list);
+    while (p2) {
+      if (p1 == p2) {
+        /* Don't compare with our self. */
+        p2=TAILQ_NEXT(p2, check_queue_entry);
+        continue;
+      }
+      if (strncmp(p1->codeword,p2->codeword,sizeof(p1->codeword))==0) {
+        /* In case of duplicate pairs we only report the one winning pair */
+        if (
+            ((p2->remote->component && (p2->remote->component->active == p2)) &&
+             !(p1->remote->component && (p1->remote->component->active == p1))) ||
+            ((p2->peer_nominated || p2->nominated) &&
+             !(p1->peer_nominated || p1->nominated)) ||
+            (p2->priority > p1->priority) ||
+            ((p2->state == NR_ICE_PAIR_STATE_SUCCEEDED) &&
+             (p1->state != NR_ICE_PAIR_STATE_SUCCEEDED)) ||
+            ((p2->state != NR_ICE_PAIR_STATE_CANCELLED) &&
+             (p1->state == NR_ICE_PAIR_STATE_CANCELLED))
+            ) {
+          /* p2 is a better pair. */
+          break;
+        }
+      }
+      p2=TAILQ_NEXT(p2, check_queue_entry);
+    }
+    if (p2) {
+      /* p2 points to a duplicate but better pair so skip this one */
+      continue;
+    }
 
     switch (p1->state) {
       case NR_ICE_PAIR_STATE_FROZEN:
@@ -452,6 +487,11 @@ nsresult NrIceMediaStream::GetRemoteCandidates(
     std::vector<NrIceCandidate>* candidates) const {
   if (!stream_) {
     return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  // If we haven't at least started checking then there is nothing to report
+  if (ctx_->connection_state() == NrIceCtx::ICE_CTX_INIT) {
+    return NS_OK;
   }
 
   nr_ice_media_stream* peer_stream;

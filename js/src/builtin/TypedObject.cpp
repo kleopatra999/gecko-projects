@@ -13,6 +13,7 @@
 #include "jsfun.h"
 #include "jsutil.h"
 
+#include "builtin/SIMD.h"
 #include "gc/Marking.h"
 #include "js/Vector.h"
 #include "vm/GlobalObject.h"
@@ -230,8 +231,8 @@ const Class js::ScalarTypeDescr::class_ = {
 
 const JSFunctionSpec js::ScalarTypeDescr::typeObjectMethods[] = {
     JS_SELF_HOSTED_FN("toSource", "DescrToSource", 0, 0),
-    {"array", {nullptr, nullptr}, 1, 0, "ArrayShorthand"},
-    {"equivalent", {nullptr, nullptr}, 1, 0, "TypeDescrEquivalent"},
+    JS_SELF_HOSTED_FN("array", "ArrayShorthand", 1, JSFUN_HAS_REST),
+    JS_SELF_HOSTED_FN("equivalent", "TypeDescrEquivalent", 1, 0),
     JS_FS_END
 };
 
@@ -411,36 +412,42 @@ js::ReferenceTypeDescr::call(JSContext* cx, unsigned argc, Value* vp)
  * Note: these are partially defined in SIMD.cpp
  */
 
-static const int32_t SimdSizes[] = {
-#define SIMD_SIZE(_kind, _type, _name, _lanes)                 \
-    sizeof(_type) * _lanes,
-    JS_FOR_EACH_SIMD_TYPE_REPR(SIMD_SIZE) 0
-#undef SIMD_SIZE
-};
-
-static int32_t SimdLanes[] = {
-#define SIMD_LANE(_kind, _type, _name, _lanes)                 \
-    _lanes,
-    JS_FOR_EACH_SIMD_TYPE_REPR(SIMD_LANE) 0
-#undef SIMD_LANE
-};
-
-int32_t
-SimdTypeDescr::size(Type t)
-{
-    return SimdSizes[t];
+SimdType
+SimdTypeDescr::type() const {
+    uint32_t t = uint32_t(getReservedSlot(JS_DESCR_SLOT_TYPE).toInt32());
+    MOZ_ASSERT(t < uint32_t(SimdType::Count));
+    return SimdType(t);
 }
 
 int32_t
-SimdTypeDescr::alignment(Type t)
+SimdTypeDescr::size(SimdType t)
 {
-    return SimdSizes[t];
+    MOZ_ASSERT(unsigned(t) < unsigned(SimdType::Count));
+    switch (t) {
+      case SimdType::Int8x16:
+      case SimdType::Int16x8:
+      case SimdType::Int32x4:
+      case SimdType::Uint8x16:
+      case SimdType::Uint16x8:
+      case SimdType::Uint32x4:
+      case SimdType::Float32x4:
+      case SimdType::Float64x2:
+      case SimdType::Bool8x16:
+      case SimdType::Bool16x8:
+      case SimdType::Bool32x4:
+      case SimdType::Bool64x2:
+        return 16;
+      case SimdType::Count:
+        break;
+    }
+    MOZ_CRASH("unexpected SIMD type");
 }
 
 int32_t
-SimdTypeDescr::lanes(Type t)
+SimdTypeDescr::alignment(SimdType t)
 {
-    return SimdLanes[t];
+    MOZ_ASSERT(unsigned(t) < unsigned(SimdType::Count));
+    return size(t);
 }
 
 /***************************************************************************
@@ -1022,7 +1029,7 @@ StructTypeDescr::fieldCount() const
 size_t
 StructTypeDescr::maybeForwardedFieldCount() const
 {
-    ArrayObject& fieldInfo = *MaybeForwarded(&fieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_NAMES));
+    ArrayObject& fieldInfo = maybeForwardedFieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_NAMES);
     return fieldInfo.getDenseInitializedLength();
 }
 
@@ -1058,7 +1065,7 @@ StructTypeDescr::fieldOffset(size_t index) const
 size_t
 StructTypeDescr::maybeForwardedFieldOffset(size_t index) const
 {
-    ArrayObject& fieldOffsets = *MaybeForwarded(&fieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_OFFSETS));
+    ArrayObject& fieldOffsets = maybeForwardedFieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_OFFSETS);
     MOZ_ASSERT(index < fieldOffsets.getDenseInitializedLength());
     return AssertedCast<size_t>(fieldOffsets.getDenseElement(index).toInt32());
 }
@@ -1074,11 +1081,9 @@ StructTypeDescr::fieldDescr(size_t index) const
 TypeDescr&
 StructTypeDescr::maybeForwardedFieldDescr(size_t index) const
 {
-    ArrayObject& fieldDescrs = *MaybeForwarded(&fieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_TYPES));
+    ArrayObject& fieldDescrs = maybeForwardedFieldInfoObject(JS_DESCR_SLOT_STRUCT_FIELD_TYPES);
     MOZ_ASSERT(index < fieldDescrs.getDenseInitializedLength());
-    JSObject& descr =
-        *MaybeForwarded(&fieldDescrs.getDenseElement(index).toObject());
-    return descr.as<TypeDescr>();
+    return MaybeForwarded(&fieldDescrs.getDenseElement(index).toObject())->as<TypeDescr>();
 }
 
 /******************************************************************************
@@ -1379,7 +1384,7 @@ TypedObject::isAttached() const
         if (table) {
             JSObject* buffer = table->lookup(this);
             if (buffer)
-                return !buffer->as<ArrayBufferObject>().isNeutered();
+                return !buffer->as<ArrayBufferObject>().isDetached();
         }
         return true;
     }
@@ -1388,7 +1393,7 @@ TypedObject::isAttached() const
     if (!as<OutlineTypedObject>().outOfLineTypedMem())
         return false;
     JSObject& owner = as<OutlineTypedObject>().owner();
-    if (owner.is<ArrayBufferObject>() && owner.as<ArrayBufferObject>().isNeutered())
+    if (owner.is<ArrayBufferObject>() && owner.as<ArrayBufferObject>().isDetached())
         return false;
     return true;
 }
@@ -1401,7 +1406,7 @@ TypedObject::maybeForwardedIsAttached() const
     if (!as<OutlineTypedObject>().outOfLineTypedMem())
         return false;
     JSObject& owner = *MaybeForwarded(&as<OutlineTypedObject>().owner());
-    if (owner.is<ArrayBufferObject>() && owner.as<ArrayBufferObject>().isNeutered())
+    if (owner.is<ArrayBufferObject>() && owner.as<ArrayBufferObject>().isDetached())
         return false;
     return true;
 }
@@ -1582,6 +1587,8 @@ TypedObject::createZeroed(JSContext* cx, HandleTypeDescr descr, int32_t length, 
 {
     // If possible, create an object with inline data.
     if ((size_t) descr->size() <= InlineTypedObject::MaximumSize) {
+        AutoSetNewObjectMetadata metadata(cx);
+
         InlineTypedObject* obj = InlineTypedObject::create(cx, descr, heap);
         if (!obj)
             return nullptr;
@@ -1650,6 +1657,7 @@ OutlineTypedObject::obj_trace(JSTracer* trc, JSObject* object)
     // inline with it. Note that an array buffer pointing to data in an inline
     // typed object will never be used as an owner for another outline typed
     // object. In such cases, the owner will be the inline typed object itself.
+    MakeAccessibleAfterMovingGC(owner);
     MOZ_ASSERT_IF(owner->is<ArrayBufferObject>(),
                   !owner->as<ArrayBufferObject>().forInlineTypedObject());
     if (owner != oldOwner &&
@@ -1736,7 +1744,7 @@ ReportPropertyError(JSContext* cx,
 
 bool
 TypedObject::obj_defineProperty(JSContext* cx, HandleObject obj, HandleId id,
-                                Handle<JSPropertyDescriptor> desc,
+                                Handle<PropertyDescriptor> desc,
                                 ObjectOpResult& result)
 {
     Rooted<TypedObject*> typedObj(cx, &obj->as<TypedObject>());
@@ -1956,7 +1964,7 @@ TypedObject::obj_setProperty(JSContext* cx, HandleObject obj, HandleId id, Handl
 
 bool
 TypedObject::obj_getOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
-                                          MutableHandle<JSPropertyDescriptor> desc)
+                                          MutableHandle<PropertyDescriptor> desc)
 {
     Rooted<TypedObject*> typedObj(cx, &obj->as<TypedObject>());
     if (!typedObj->isAttached()) {
@@ -2095,7 +2103,7 @@ TypedObject::obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& proper
 }
 
 void
-OutlineTypedObject::neuter(void* newData)
+OutlineTypedObject::notifyBufferDetached(void* newData)
 {
     setData(reinterpret_cast<uint8_t*>(newData));
 }
@@ -2127,6 +2135,8 @@ InlineTypedObject::create(JSContext* cx, HandleTypeDescr descr, gc::InitialHeap 
 InlineTypedObject::createCopy(JSContext* cx, Handle<InlineTypedObject*> templateObject,
                               gc::InitialHeap heap)
 {
+    AutoSetNewObjectMetadata metadata(cx);
+
     Rooted<TypeDescr*> descr(cx, &templateObject->typeDescr());
     InlineTypedObject* res = create(cx, descr, heap);
     if (!res)
@@ -2236,10 +2246,24 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
  * Typed object classes
  */
 
-#define DEFINE_TYPEDOBJ_CLASS(Name, Trace)        \
+const ObjectOps TypedObject::objectOps_ = {
+    TypedObject::obj_lookupProperty,
+    TypedObject::obj_defineProperty,
+    TypedObject::obj_hasProperty,
+    TypedObject::obj_getProperty,
+    TypedObject::obj_setProperty,
+    TypedObject::obj_getOwnPropertyDescriptor,
+    TypedObject::obj_deleteProperty,
+    nullptr, nullptr, /* watch/unwatch */
+    nullptr,   /* getElements */
+    TypedObject::obj_enumerate,
+    nullptr, /* thisValue */
+};
+
+#define DEFINE_TYPEDOBJ_CLASS(Name, Trace, flag)         \
     const Class Name::class_ = {                         \
         # Name,                                          \
-        Class::NON_NATIVE, \
+        Class::NON_NATIVE | flag,                        \
         nullptr,        /* addProperty */                \
         nullptr,        /* delProperty */                \
         nullptr,        /* getProperty */                \
@@ -2254,25 +2278,15 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
         Trace,                                           \
         JS_NULL_CLASS_SPEC,                              \
         JS_NULL_CLASS_EXT,                               \
-        {                                                \
-            TypedObject::obj_lookupProperty,             \
-            TypedObject::obj_defineProperty,             \
-            TypedObject::obj_hasProperty,                \
-            TypedObject::obj_getProperty,                \
-            TypedObject::obj_setProperty,                \
-            TypedObject::obj_getOwnPropertyDescriptor,   \
-            TypedObject::obj_deleteProperty,             \
-            nullptr, nullptr, /* watch/unwatch */        \
-            nullptr,   /* getElements */                 \
-            TypedObject::obj_enumerate,                  \
-            nullptr, /* thisValue */                     \
-        }                                                \
+        &TypedObject::objectOps_                         \
     }
 
-DEFINE_TYPEDOBJ_CLASS(OutlineTransparentTypedObject, OutlineTypedObject::obj_trace);
-DEFINE_TYPEDOBJ_CLASS(OutlineOpaqueTypedObject,      OutlineTypedObject::obj_trace);
-DEFINE_TYPEDOBJ_CLASS(InlineTransparentTypedObject,  InlineTypedObject::obj_trace);
-DEFINE_TYPEDOBJ_CLASS(InlineOpaqueTypedObject,       InlineTypedObject::obj_trace);
+DEFINE_TYPEDOBJ_CLASS(OutlineTransparentTypedObject, OutlineTypedObject::obj_trace, 0);
+DEFINE_TYPEDOBJ_CLASS(OutlineOpaqueTypedObject,      OutlineTypedObject::obj_trace, 0);
+DEFINE_TYPEDOBJ_CLASS(InlineTransparentTypedObject,  InlineTypedObject::obj_trace,
+                      JSCLASS_DELAY_METADATA_CALLBACK);
+DEFINE_TYPEDOBJ_CLASS(InlineOpaqueTypedObject,       InlineTypedObject::obj_trace,
+                      JSCLASS_DELAY_METADATA_CALLBACK);
 
 static int32_t
 LengthForType(TypeDescr& descr)
@@ -2349,7 +2363,7 @@ TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp)
         Rooted<ArrayBufferObject*> buffer(cx);
         buffer = &args[0].toObject().as<ArrayBufferObject>();
 
-        if (callee->opaque() || buffer->isNeutered()) {
+        if (callee->opaque() || buffer->isDetached()) {
             JS_ReportErrorNumber(cx, GetErrorMessage,
                                  nullptr, JSMSG_TYPEDOBJECT_BAD_ARGS);
             return false;
@@ -2592,52 +2606,18 @@ js::GetTypedObjectModule(JSContext* cx, unsigned argc, Value* vp)
 }
 
 bool
-js::GetFloat32x4TypeDescr(JSContext* cx, unsigned argc, Value* vp)
+js::GetSimdTypeDescr(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isInt32());
+    // One of the JS_SIMDTYPEREPR_* constants / a SimdType enum value.
+    // getOrCreateSimdTypeDescr() will do the range check.
+    int32_t simdTypeRepr = args[0].toInt32();
     Rooted<GlobalObject*> global(cx, cx->global());
     MOZ_ASSERT(global);
-    args.rval().setObject(global->float32x4TypeDescr());
-    return true;
-}
-
-bool
-js::GetFloat64x2TypeDescr(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Rooted<GlobalObject*> global(cx, cx->global());
-    MOZ_ASSERT(global);
-    args.rval().setObject(global->float64x2TypeDescr());
-    return true;
-}
-
-bool
-js::GetInt8x16TypeDescr(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Rooted<GlobalObject*> global(cx, cx->global());
-    MOZ_ASSERT(global);
-    args.rval().setObject(global->int8x16TypeDescr());
-    return true;
-}
-
-bool
-js::GetInt16x8TypeDescr(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Rooted<GlobalObject*> global(cx, cx->global());
-    MOZ_ASSERT(global);
-    args.rval().setObject(global->int16x8TypeDescr());
-    return true;
-}
-
-bool
-js::GetInt32x4TypeDescr(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Rooted<GlobalObject*> global(cx, cx->global());
-    MOZ_ASSERT(global);
-    args.rval().setObject(global->int32x4TypeDescr());
+    auto* obj = GlobalObject::getOrCreateSimdTypeDescr(cx, global, SimdType(simdTypeRepr));
+    args.rval().setObject(*obj);
     return true;
 }
 
@@ -2840,7 +2820,7 @@ visitReferences(TypeDescr& descr,
       case type::Array:
       {
         ArrayTypeDescr& arrayDescr = descr.as<ArrayTypeDescr>();
-        TypeDescr& elementDescr = *MaybeForwarded(&arrayDescr.elementType());
+        TypeDescr& elementDescr = arrayDescr.maybeForwardedElementType();
         for (int32_t i = 0; i < arrayDescr.length(); i++) {
             visitReferences(elementDescr, mem, visitor);
             mem += elementDescr.size();
@@ -2965,16 +2945,14 @@ MemoryTracingVisitor::visitReference(ReferenceTypeDescr& descr, uint8_t* mem)
       case ReferenceTypeDescr::TYPE_OBJECT:
       {
         HeapPtrObject* objectPtr = reinterpret_cast<js::HeapPtrObject*>(mem);
-        if (*objectPtr)
-            TraceEdge(trace_, objectPtr, "reference-obj");
+        TraceNullableEdge(trace_, objectPtr, "reference-obj");
         return;
       }
 
       case ReferenceTypeDescr::TYPE_STRING:
       {
         HeapPtrString* stringPtr = reinterpret_cast<js::HeapPtrString*>(mem);
-        if (*stringPtr)
-            TraceEdge(trace_, stringPtr, "reference-str");
+        TraceNullableEdge(trace_, stringPtr, "reference-str");
         return;
       }
     }

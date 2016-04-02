@@ -36,7 +36,7 @@ using mozilla::dom::NodeInfo;
 
 #include "mozilla/Logging.h"
 
-static PRLogModuleInfo* gNodeInfoManagerLeakPRLog;
+static LazyLogModule gNodeInfoManagerLeakPRLog("NodeInfoManagerLeak");
 
 PLHashNumber
 nsNodeInfoManager::GetNodeInfoInnerHashValue(const void *key)
@@ -114,9 +114,6 @@ nsNodeInfoManager::nsNodeInfoManager()
     mDocumentNodeInfo(nullptr)
 {
   nsLayoutStatics::AddRef();
-
-  if (!gNodeInfoManagerLeakPRLog)
-    gNodeInfoManagerLeakPRLog = PR_NewLogModule("NodeInfoManagerLeak");
 
   if (gNodeInfoManagerLeakPRLog)
     MOZ_LOG(gNodeInfoManagerLeakPRLog, LogLevel::Debug,
@@ -268,7 +265,7 @@ nsNodeInfoManager::GetNodeInfo(const nsAString& aName, nsIAtom *aPrefix,
 {
 #ifdef DEBUG
   {
-    nsCOMPtr<nsIAtom> nameAtom = do_GetAtom(aName);
+    nsCOMPtr<nsIAtom> nameAtom = NS_Atomize(aName);
     CheckValidNodeInfo(aNodeType, nameAtom, aNamespaceID, nullptr);
   }
 #endif
@@ -285,7 +282,7 @@ nsNodeInfoManager::GetNodeInfo(const nsAString& aName, nsIAtom *aPrefix,
     return NS_OK;
   }
 
-  nsCOMPtr<nsIAtom> nameAtom = do_GetAtom(aName);
+  nsCOMPtr<nsIAtom> nameAtom = NS_Atomize(aName);
   NS_ENSURE_TRUE(nameAtom, NS_ERROR_OUT_OF_MEMORY);
 
   RefPtr<NodeInfo> newNodeInfo =

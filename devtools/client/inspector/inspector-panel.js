@@ -4,19 +4,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {Cc, Ci, Cu, Cr} = require("chrome");
+"use strict";
 
-Cu.import("resource://gre/modules/Services.jsm");
+const {Cc, Ci, Cu} = require("chrome");
 
+var Services = require("Services");
 var promise = require("promise");
 var EventEmitter = require("devtools/shared/event-emitter");
 var clipboard = require("sdk/clipboard");
 var {HostType} = require("devtools/client/framework/toolbox").Toolbox;
 
-loader.lazyGetter(this, "MarkupView", () => require("devtools/client/markupview/markup-view").MarkupView);
+loader.lazyRequireGetter(this, "CSS", "CSS");
+
+loader.lazyGetter(this, "MarkupView", () => require("devtools/client/inspector/markup/markup").MarkupView);
 loader.lazyGetter(this, "HTMLBreadcrumbs", () => require("devtools/client/inspector/breadcrumbs").HTMLBreadcrumbs);
 loader.lazyGetter(this, "ToolSidebar", () => require("devtools/client/framework/sidebar").ToolSidebar);
 loader.lazyGetter(this, "InspectorSearch", () => require("devtools/client/inspector/inspector-search").InspectorSearch);
+loader.lazyGetter(this, "RuleViewTool", () => require("devtools/client/inspector/rules/rules").RuleViewTool);
+loader.lazyGetter(this, "ComputedViewTool", () => require("devtools/client/inspector/computed/computed").ComputedViewTool);
+loader.lazyGetter(this, "FontInspector", () => require("devtools/client/inspector/fonts/fonts").FontInspector);
+loader.lazyGetter(this, "LayoutView", () => require("devtools/client/inspector/layout/layout").LayoutView);
 
 loader.lazyGetter(this, "strings", () => {
   return Services.strings.createBundle("chrome://devtools/locale/inspector.properties");
@@ -28,9 +35,7 @@ loader.lazyGetter(this, "clipboardHelper", () => {
   return Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper);
 });
 
-loader.lazyImporter(this, "CommandUtils", "resource://devtools/client/shared/DeveloperToolbar.jsm");
-
-const LAYOUT_CHANGE_TIMER = 250;
+loader.lazyRequireGetter(this, "CommandUtils", "devtools/client/shared/developer-toolbar", true);
 
 /**
  * Represents an open instance of the Inspector for a tab.
@@ -47,8 +52,6 @@ const LAYOUT_CHANGE_TIMER = 250;
  *      view has been reloaded)
  * - markuploaded
  *      Fired when the markup-view frame has loaded
- * - layout-change
- *      Fired when the layout of the inspector changes
  * - breadcrumbs-updated
  *      Fired when the breadcrumb widget updates to a new node
  * - layoutview-updated
@@ -87,8 +90,6 @@ function InspectorPanel(iframeWindow, toolbox) {
   this.onNewSelection = this.onNewSelection.bind(this);
   this.onBeforeNewSelection = this.onBeforeNewSelection.bind(this);
   this.onDetached = this.onDetached.bind(this);
-  this.onToolboxHostChanged = this.onToolboxHostChanged.bind(this);
-  this.scheduleLayoutChange = this.scheduleLayoutChange.bind(this);
   this.onPaneToggleButtonClicked = this.onPaneToggleButtonClicked.bind(this);
   this._onMarkupFrameLoad = this._onMarkupFrameLoad.bind(this);
 
@@ -165,12 +166,7 @@ InspectorPanel.prototype = {
 
     this.breadcrumbs = new HTMLBreadcrumbs(this);
 
-    this._toolbox.on("host-changed", this.onToolboxHostChanged);
-
     if (this.target.isLocalTab) {
-      this.browser = this.target.tab.linkedBrowser;
-      this.browser.addEventListener("resize", this.scheduleLayoutChange, true);
-
       // Show a warning when the debugger is paused.
       // We show the warning only when the inspector
       // is selected.
@@ -178,7 +174,7 @@ InspectorPanel.prototype = {
         let notificationBox = this._toolbox.getNotificationBox();
         let notification = notificationBox.getNotificationWithValue("inspector-script-paused");
         if (!notification && this._toolbox.currentToolId == "inspector" &&
-            this.target.isThreadPaused) {
+            this._toolbox.threadClient.paused) {
           let message = strings.GetStringFromName("debuggerPausedWarning.message");
           notificationBox.appendNotification(message,
             "inspector-script-paused", "", notificationBox.PRIORITY_WARNING_HIGH);
@@ -188,7 +184,7 @@ InspectorPanel.prototype = {
           notificationBox.removeNotification(notification);
         }
 
-        if (notification && !this.target.isThreadPaused) {
+        if (notification && !this._toolbox.threadClient.paused) {
           notificationBox.removeNotification(notification);
         }
 
@@ -358,23 +354,16 @@ InspectorPanel.prototype = {
 
     this.sidebar.on("select", this._setDefaultSidebar);
 
-    this.sidebar.addTab("ruleview",
-                        "chrome://devtools/content/styleinspector/cssruleview.xhtml",
-                        "ruleview" == defaultTab);
+    this.ruleview = new RuleViewTool(this, this.panelWin);
+    this.computedview = new ComputedViewTool(this, this.panelWin);
 
-    this.sidebar.addTab("computedview",
-                        "chrome://devtools/content/styleinspector/computedview.xhtml",
-                        "computedview" == defaultTab);
-
-    if (Services.prefs.getBoolPref("devtools.fontinspector.enabled") && this.canGetUsedFontFaces) {
-      this.sidebar.addTab("fontinspector",
-                          "chrome://devtools/content/fontinspector/font-inspector.xhtml",
-                          "fontinspector" == defaultTab);
+    if (Services.prefs.getBoolPref("devtools.fontinspector.enabled") &&
+        this.canGetUsedFontFaces) {
+      this.fontInspector = new FontInspector(this, this.panelWin);
+      this.panelDoc.getElementById("sidebar-tab-fontinspector").hidden = false;
     }
 
-    this.sidebar.addTab("layoutview",
-                        "chrome://devtools/content/layoutview/view.xhtml",
-                        "layoutview" == defaultTab);
+    this.layoutview = new LayoutView(this, this.panelWin);
 
     if (this.target.form.animationsActor) {
       this.sidebar.addTab("animationinspector",
@@ -382,7 +371,7 @@ InspectorPanel.prototype = {
                           "animationinspector" == defaultTab);
     }
 
-    this.sidebar.show();
+    this.sidebar.show(defaultTab);
 
     this.setupSidebarToggle();
   },
@@ -394,7 +383,6 @@ InspectorPanel.prototype = {
     this._paneToggleButton = this.panelDoc.getElementById("inspector-pane-toggle");
     this._paneToggleButton.addEventListener("mousedown",
       this.onPaneToggleButtonClicked);
-    this.updatePaneToggleButton();
   },
 
   /**
@@ -467,8 +455,6 @@ InspectorPanel.prototype = {
       return;
     }
 
-    this.cancelLayoutChange();
-
     // Wait for all the known tools to finish updating and then let the
     // client know.
     let selection = this.selection.nodeFront;
@@ -514,7 +500,7 @@ InspectorPanel.prototype = {
 
     if (!this._updateProgress) {
       // Start an update in progress.
-      var self = this;
+      let self = this;
       this._updateProgress = {
         node: this.selection.nodeFront,
         outstanding: new Set(),
@@ -522,7 +508,9 @@ InspectorPanel.prototype = {
           if (this !== self._updateProgress) {
             return;
           }
-          if (this.node !== self.selection.nodeFront) {
+          // Cancel update if there is no `selection` anymore.
+          // It can happen if the inspector panel is already destroyed.
+          if (!self.selection || (this.node !== self.selection.nodeFront)) {
             self.cancelUpdate();
             return;
           }
@@ -568,7 +556,6 @@ InspectorPanel.prototype = {
    * node was selected).
    */
   onDetached: function(event, parentNode) {
-    this.cancelLayoutChange();
     this.breadcrumbs.cutAfter(this.breadcrumbs.indexOf(parentNode));
     this.selection.setNodeFront(parentNode ? parentNode : this._defaultNode, "detached");
   },
@@ -587,19 +574,28 @@ InspectorPanel.prototype = {
     }
 
     this.cancelUpdate();
-    this.cancelLayoutChange();
-
-    if (this.browser) {
-      this.browser.removeEventListener("resize", this.scheduleLayoutChange, true);
-      this.browser = null;
-    }
 
     this.target.off("will-navigate", this._onBeforeNavigate);
 
     this.target.off("thread-paused", this.updateDebuggerPausedWarning);
     this.target.off("thread-resumed", this.updateDebuggerPausedWarning);
     this._toolbox.off("select", this.updateDebuggerPausedWarning);
-    this._toolbox.off("host-changed", this.onToolboxHostChanged);
+
+    if (this.ruleview) {
+      this.ruleview.destroy();
+    }
+
+    if (this.computedview) {
+      this.computedview.destroy();
+    }
+
+    if (this.fontInspector) {
+      this.fontInspector.destroy();
+    }
+
+    if (this.layoutview) {
+      this.layoutview.destroy();
+    }
 
     this.sidebar.off("select", this._setDefaultSidebar);
     let sidebarDestroyer = this.sidebar.destroy();
@@ -939,7 +935,7 @@ InspectorPanel.prototype = {
 
     this._markupBox.setAttribute("collapsed", true);
     this._markupBox.appendChild(this._markupFrame);
-    this._markupFrame.setAttribute("src", "chrome://devtools/content/markupview/markup-view.xhtml");
+    this._markupFrame.setAttribute("src", "chrome://devtools/content/inspector/markup/markup.xhtml");
     this._markupFrame.setAttribute("aria-label", strings.GetStringFromName("inspector.panelLabel.markupView"));
   },
 
@@ -981,13 +977,6 @@ InspectorPanel.prototype = {
   },
 
   /**
-   * When the type of toolbox host changes.
-   */
-  onToolboxHostChanged: function() {
-    this.updatePaneToggleButton();
-  },
-
-  /**
    * When the pane toggle button is clicked, toggle the pane, change the button
    * state and tooltip.
    */
@@ -996,10 +985,16 @@ InspectorPanel.prototype = {
     let button = this._paneToggleButton;
     let isVisible = !button.hasAttribute("pane-collapsed");
 
-    // Make sure the sidebar has a width attribute before collapsing because
-    // ViewHelpers needs it.
-    if (isVisible && !sidePane.hasAttribute("width")) {
-      sidePane.setAttribute("width", sidePane.getBoundingClientRect().width);
+    // Make sure the sidebar has width and height attributes before collapsing
+    // because ViewHelpers needs it.
+    if (isVisible) {
+      let rect = sidePane.getBoundingClientRect();
+      if (!sidePane.hasAttribute("width")) {
+        sidePane.setAttribute("width", rect.width);
+      }
+      // always refresh the height attribute before collapsing, it could have
+      // been modified by resizing the container.
+      sidePane.setAttribute("height", rect.height);
     }
 
     ViewHelpers.togglePane({
@@ -1015,14 +1010,6 @@ InspectorPanel.prototype = {
       button.removeAttribute("pane-collapsed");
       button.setAttribute("tooltiptext", strings.GetStringFromName("inspector.collapsePane"));
     }
-  },
-
-  /**
-   * Update the pane toggle button visibility depending on the toolbox host type.
-   */
-  updatePaneToggleButton: function() {
-    this._paneToggleButton.setAttribute("hidden",
-      this._toolbox.hostType === HostType.SIDE);
   },
 
   /**
@@ -1049,7 +1036,7 @@ InspectorPanel.prototype = {
       let jsterm = panel.hud.jsterm;
 
       jsterm.execute("inspect($0)");
-      jsterm.inputNode.focus();
+      jsterm.focus();
     });
   },
 
@@ -1390,41 +1377,5 @@ InspectorPanel.prototype = {
     this.inspector.resolveRelativeURL(link, this.selection.nodeFront).then(url => {
       clipboardHelper.copyString(url);
     }, console.error);
-  },
-
-  /**
-   * Trigger a high-priority layout change for things that need to be
-   * updated immediately
-   */
-  immediateLayoutChange: function() {
-    this.emit("layout-change");
-  },
-
-  /**
-   * Schedule a low-priority change event for things like paint
-   * and resize.
-   */
-  scheduleLayoutChange: function(event) {
-    // Filter out non browser window resize events (i.e. triggered by iframes)
-    if (this.browser.contentWindow === event.target) {
-      if (this._timer) {
-        return null;
-      }
-      this._timer = this.panelWin.setTimeout(() => {
-        this.emit("layout-change");
-        this._timer = null;
-      }, LAYOUT_CHANGE_TIMER);
-    }
-  },
-
-  /**
-   * Cancel a pending low-priority change event if any is
-   * scheduled.
-   */
-  cancelLayoutChange: function() {
-    if (this._timer) {
-      this.panelWin.clearTimeout(this._timer);
-      delete this._timer;
-    }
   }
 };

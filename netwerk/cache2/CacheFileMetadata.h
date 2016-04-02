@@ -116,6 +116,7 @@ public:
 
   NS_IMETHOD OnMetadataRead(nsresult aResult) = 0;
   NS_IMETHOD OnMetadataWritten(nsresult aResult) = 0;
+  virtual bool IsKilled() = 0;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(CacheFileMetadataListener,
@@ -146,7 +147,7 @@ public:
   nsresult SyncReadMetadata(nsIFile *aFile);
 
   bool     IsAnonymous() const { return mAnonymous; }
-  mozilla::OriginAttributes const & OriginAttributes() const { return mOriginAttributes; }
+  mozilla::NeckoOriginAttributes const & OriginAttributes() const { return mOriginAttributes; }
   bool     Pinned() const      { return !!(mMetaHdr.mFlags & kCacheEntryIsPinned); }
 
   const char * GetElement(const char *aKey);
@@ -183,6 +184,7 @@ public:
   NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult) override;
   NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult) override;
   NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult) override;
+  virtual bool IsKilled() override { return mListener && mListener->IsKilled(); }
 
   // Memory reporting
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -213,7 +215,7 @@ private:
   bool                                mAnonymous      : 1;
   bool                                mAllocExactSize : 1;
   bool                                mFirstRead      : 1;
-  mozilla::OriginAttributes           mOriginAttributes;
+  mozilla::NeckoOriginAttributes      mOriginAttributes;
   mozilla::TimeStamp                  mReadStart;
   nsCOMPtr<CacheFileMetadataListener> mListener;
 };

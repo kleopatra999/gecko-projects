@@ -30,6 +30,8 @@ HTMLImageMapAccessible::
   ImageAccessibleWrap(aContent, aDoc)
 {
   mType = eImageMapType;
+
+  UpdateChildAreas(false);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -86,7 +88,7 @@ HTMLImageMapAccessible::UpdateChildAreas(bool aDoFireEvents)
     return;
 
   bool treeChanged = false;
-  AutoTreeMutation mut(this);
+  AutoTreeMutation mt(this);
   RefPtr<AccReorderEvent> reorderEvent = new AccReorderEvent(this);
 
   // Remove areas that are not a valid part of the image map anymore.
@@ -101,6 +103,7 @@ HTMLImageMapAccessible::UpdateChildAreas(bool aDoFireEvents)
       reorderEvent->AddSubMutationEvent(event);
     }
 
+    mt.BeforeRemoval(area);
     RemoveChild(area);
     treeChanged = true;
   }
@@ -109,19 +112,20 @@ HTMLImageMapAccessible::UpdateChildAreas(bool aDoFireEvents)
   uint32_t areaElmCount = imageMapObj->AreaCount();
   for (uint32_t idx = 0; idx < areaElmCount; idx++) {
     nsIContent* areaContent = imageMapObj->GetAreaAt(idx);
-
     Accessible* area = mChildren.SafeElementAt(idx);
     if (!area || area->GetContent() != areaContent) {
       RefPtr<Accessible> area = new HTMLAreaAccessible(areaContent, mDoc);
-      mDoc->BindToDocument(area, aria::GetRoleMap(areaContent));
+      mDoc->BindToDocument(area, aria::GetRoleMap(areaContent->AsElement()));
 
       if (!InsertChildAt(idx, area)) {
         mDoc->UnbindFromDocument(area);
         break;
       }
 
+      mt.AfterInsertion(area);
+
       if (aDoFireEvents) {
-        RefPtr<AccShowEvent> event = new AccShowEvent(area, areaContent);
+        RefPtr<AccShowEvent> event = new AccShowEvent(area);
         mDoc->FireDelayedEvent(event);
         reorderEvent->AddSubMutationEvent(event);
       }
@@ -130,12 +134,11 @@ HTMLImageMapAccessible::UpdateChildAreas(bool aDoFireEvents)
     }
   }
 
+  mt.Done();
+
   // Fire reorder event if needed.
   if (treeChanged && aDoFireEvents)
     mDoc->FireDelayedEvent(reorderEvent);
-
-  if (!treeChanged)
-    mut.mInvalidationRequired = false;
 }
 
 Accessible*
@@ -150,16 +153,6 @@ HTMLImageMapAccessible::GetChildAccessibleFor(const nsINode* aNode) const
 
   return nullptr;
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// HTMLImageMapAccessible: Accessible protected
-
-void
-HTMLImageMapAccessible::CacheChildren()
-{
-  UpdateChildAreas(false);
-}
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLAreaAccessible
@@ -230,15 +223,6 @@ uint32_t
 HTMLAreaAccessible::EndOffset()
 {
   return IndexInParent() + 1;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// HTMLAreaAccessible: Accessible protected
-
-void
-HTMLAreaAccessible::CacheChildren()
-{
-  // No children for aria accessible.
 }
 
 nsRect

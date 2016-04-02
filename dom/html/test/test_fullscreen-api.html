@@ -23,6 +23,7 @@
 
 /** Tests for Bug 545812 **/
 SimpleTest.requestFlakyTimeout("untriaged");
+SimpleTest.expectAssertions(0, 1);
 
 // Run the tests which go full-screen in new windows, as mochitests normally
 // run in an iframe, which by default will not have the allowfullscreen
@@ -30,11 +31,9 @@ SimpleTest.requestFlakyTimeout("untriaged");
 var gTestWindows = [
   "file_fullscreen-multiple.html",
   "file_fullscreen-rollback.html",
-  "file_fullscreen-esc-context-menu.html",
   "file_fullscreen-esc-exit.html",
   "file_fullscreen-denied.html",
   "file_fullscreen-api.html",
-  "file_fullscreen-api-keys.html",
   "file_fullscreen-plugins.html",
   "file_fullscreen-hidden.html",
   "file_fullscreen-svg-element.html",
@@ -42,7 +41,9 @@ var gTestWindows = [
   "file_fullscreen-scrollbar.html",
   "file_fullscreen-selector.html",
   "file_fullscreen-top-layer.html",
+  "file_fullscreen-backdrop.html",
   "file_fullscreen-nested.html",
+  "file_fullscreen-prefixed.html",
 ];
 
 var testWindow = null;
@@ -62,7 +63,7 @@ function nextTest() {
 function runNextTest() {
   if (gTestIndex < gTestWindows.length) {
     info("Run test " + gTestWindows[gTestIndex]);
-    testWindow = window.open(gTestWindows[gTestIndex], "", "width=500,height=500");
+    testWindow = window.open(gTestWindows[gTestIndex], "", "width=500,height=500,scrollbars=yes");
     // We'll wait for the window to load, then make sure our window is refocused
     // before starting the test, which will get kicked off on "focus".
     // This ensures that we're essentially back on the primary "desktop" on

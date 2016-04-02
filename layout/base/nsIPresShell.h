@@ -24,6 +24,8 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSheetHandle.h"
 #include "mozilla/WeakPtr.h"
 #include "gfxPoint.h"
 #include "nsTHashtable.h"
@@ -33,7 +35,6 @@
 #include "nsQueryFrame.h"
 #include "nsCoord.h"
 #include "nsColor.h"
-#include "nsCompatibility.h"
 #include "nsFrameManagerBase.h"
 #include "nsRect.h"
 #include "nsRegionFwd.h"
@@ -48,11 +49,14 @@
 #include "nsMargin.h"
 #include "nsFrameState.h"
 
+#ifdef MOZ_B2G
+#include "nsIHardwareKeyHandler.h"
+#endif
+
 class nsDocShell;
 class nsIDocument;
 class nsIFrame;
 class nsPresContext;
-class nsStyleSet;
 class nsViewManager;
 class nsView;
 class nsRenderingContext;
@@ -62,15 +66,13 @@ class nsAString;
 class nsCaret;
 namespace mozilla {
 class AccessibleCaretEventHub;
-class TouchCaret;
-class SelectionCarets;
+class CSSStyleSheet;
 } // namespace mozilla
 class nsFrameSelection;
 class nsFrameManager;
 class nsILayoutHistoryState;
 class nsIReflowCallback;
 class nsIDOMNode;
-class nsIStyleSheet;
 class nsCSSFrameConstructor;
 class nsISelection;
 template<class E> class nsCOMArray;
@@ -80,7 +82,7 @@ class gfxContext;
 class nsIDOMEvent;
 class nsDisplayList;
 class nsDisplayListBuilder;
-class nsPIDOMWindow;
+class nsPIDOMWindowOuter;
 struct nsPoint;
 class nsINode;
 struct nsRect;
@@ -140,10 +142,10 @@ typedef struct CapturingContentInfo {
   mozilla::StaticRefPtr<nsIContent> mContent;
 } CapturingContentInfo;
 
-// ae50e013-b2f1-4d4e-94c7-77cbcdab1c23
+// a75573d6-34c8-4485-8fb7-edcb6fc70e12
 #define NS_IPRESSHELL_IID \
-{ 0xae50e013, 0xb2f1, 0x4d4e, \
-  { 0x94, 0xc7, 0x77, 0xcb, 0xcd, 0xab, 0x1c, 0x23 } }
+{ 0xa75573d6, 0x34c8, 0x4485, \
+  { 0x8f, 0xb7, 0xed, 0xcb, 0x6f, 0xc7, 0x0e, 0x12 } }
 
 // debug VerifyReflow flags
 #define VERIFY_REFLOW_ON                    0x01
@@ -334,7 +336,7 @@ public:
 #endif
 
 #ifdef MOZILLA_INTERNAL_API
-  nsStyleSet* StyleSet() const { return mStyleSet; }
+  mozilla::StyleSetHandle StyleSet() const { return mStyleSet; }
 
   nsCSSFrameConstructor* FrameConstructor() const { return mFrameConstructor; }
 
@@ -808,31 +810,6 @@ public:
   virtual void NotifyDestroyingFrame(nsIFrame* aFrame) = 0;
 
   /**
-   * Get the touch caret, if it exists. AddRefs it.
-   */
-  virtual already_AddRefed<mozilla::TouchCaret> GetTouchCaret() const = 0;
-
-  /**
-   * Returns the touch caret element of the presshell.
-   */
-  virtual mozilla::dom::Element* GetTouchCaretElement() const = 0;
-
-  /**
-   * Get the selection caret, if it exists. AddRefs it.
-   */
-  virtual already_AddRefed<mozilla::SelectionCarets> GetSelectionCarets() const = 0;
-
-  /**
-   * Returns the start part of selection caret element of the presshell.
-   */
-  virtual mozilla::dom::Element* GetSelectionCaretsStartElement() const = 0;
-
-  /**
-   * Returns the end part of selection caret element of the presshell.
-   */
-  virtual mozilla::dom::Element* GetSelectionCaretsEndElement() const = 0;
-
-  /**
    * Get the AccessibleCaretEventHub, if it exists. AddRefs it.
    */
   virtual already_AddRefed<mozilla::AccessibleCaretEventHub> GetAccessibleCaretEventHub() const = 0;
@@ -907,6 +884,12 @@ public:
                                           bool aEmbeddedCancelled) = 0;
 
   /**
+   * Return whether or not the event is valid to be dispatched
+   */
+  virtual bool CanDispatchEvent(
+      const mozilla::WidgetGUIEvent* aEvent = nullptr) const = 0;
+
+  /**
     * Gets the current target event frame from the PresShell
     */
   virtual nsIFrame* GetEventTargetFrame() = 0;
@@ -937,6 +920,20 @@ public:
   bool IsPaintingSuppressed() const { return mPaintingSuppressed; }
 
   /**
+   * Pause painting by freezing the refresh driver of this and all parent
+   * presentations. This may not have the desired effect if this pres shell
+   * has its own refresh driver.
+   */
+  virtual void PausePainting() = 0;
+
+  /**
+   * Resume painting by thawing the refresh driver of this and all parent
+   * presentations. This may not have the desired effect if this pres shell
+   * has its own refresh driver.
+   */
+  virtual void ResumePainting() = 0;
+
+  /**
    * Unsuppress painting.
    */
   virtual void UnsuppressPainting() = 0;
@@ -958,22 +955,24 @@ public:
   /**
    * Get the set of agent style sheets for this presentation
    */
-  virtual nsresult GetAgentStyleSheets(nsCOMArray<nsIStyleSheet>& aSheets) = 0;
+  virtual nsresult GetAgentStyleSheets(
+      nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) = 0;
 
   /**
    * Replace the set of agent style sheets
    */
-  virtual nsresult SetAgentStyleSheets(const nsCOMArray<nsIStyleSheet>& aSheets) = 0;
+  virtual nsresult SetAgentStyleSheets(
+      const nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) = 0;
 
   /**
    * Add an override style sheet for this presentation
    */
-  virtual nsresult AddOverrideStyleSheet(nsIStyleSheet *aSheet) = 0;
+  virtual nsresult AddOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) = 0;
 
   /**
    * Remove an override style sheet
    */
-  virtual nsresult RemoveOverrideStyleSheet(nsIStyleSheet *aSheet) = 0;
+  virtual nsresult RemoveOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) = 0;
 
   /**
    * Reconstruct frames for all elements in the document
@@ -1121,7 +1120,7 @@ public:
    * edge of the presshell area. The aPoint, aScreenRect and aFlags arguments
    * function in a similar manner as RenderSelection.
    */
-  virtual already_AddRefed<SourceSurface>
+  virtual already_AddRefed<mozilla::gfx::SourceSurface>
   RenderNode(nsIDOMNode* aNode,
              nsIntRegion* aRegion,
              nsIntPoint& aPoint,
@@ -1144,7 +1143,7 @@ public:
    * point isn't used because the position can be determined from the displayed
    * frames.
    */
-  virtual already_AddRefed<SourceSurface>
+  virtual already_AddRefed<mozilla::gfx::SourceSurface>
   RenderSelection(nsISelection* aSelection,
                   nsIntPoint& aPoint,
                   nsIntRect* aScreenRect,
@@ -1263,7 +1262,7 @@ public:
     nsCOMPtr<nsIContent> mOverrideContent;
     bool                 mReleaseContent;
     bool                 mPrimaryState;
-    
+
     explicit PointerCaptureInfo(nsIContent* aPendingContent, bool aPrimaryState) :
       mPendingContent(aPendingContent), mReleaseContent(false), mPrimaryState(aPrimaryState)
     {
@@ -1303,7 +1302,7 @@ public:
                                                    bool aIsPrimary,
                                                    nsIContent* aCaptureTarget);
   static void SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
-  static void ReleasePointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
+  static void ReleasePointerCapturingContent(uint32_t aPointerId);
   static nsIContent* GetPointerCapturingContent(uint32_t aPointerId);
 
   // CheckPointerCaptureState checks cases, when got/lostpointercapture events should be fired.
@@ -1379,7 +1378,7 @@ public:
   /**
    * Get the root DOM window of this presShell.
    */
-  virtual already_AddRefed<nsPIDOMWindow> GetRootWindow() = 0;
+  virtual already_AddRefed<nsPIDOMWindowOuter> GetRootWindow() = 0;
 
   /**
    * Get the layer manager for the widget of the root view, if it has
@@ -1412,8 +1411,19 @@ public:
    * The resolution defaults to 1.0.
    */
   virtual nsresult SetResolution(float aResolution) = 0;
-  float GetResolution() { return mResolution; }
+  float GetResolution() const { return mResolution.valueOr(1.0); }
   virtual float GetCumulativeResolution() = 0;
+
+  /**
+   * Calculate the cumulative scale resolution from this document up to
+   * but not including the root document.
+   */
+  virtual float GetCumulativeNonRootScaleResolution() = 0;
+
+  /**
+   * Was the current resolution set by the user or just default initialized?
+   */
+  bool IsResolutionSet() { return mResolution.isSome(); }
 
   /**
    * Similar to SetResolution() but also increases the scale of the content
@@ -1564,22 +1574,38 @@ public:
   void InvalidatePresShellIfHidden();
   void CancelInvalidatePresShellIfHidden();
 
-  // Schedule an update of the list of visible images.
-  virtual void ScheduleImageVisibilityUpdate() = 0;
 
-  // Clears the current list of visible images on this presshell and replaces it
-  // with images that are in the display list aList.
-  virtual void RebuildImageVisibilityDisplayList(const nsDisplayList& aList) = 0;
-  virtual void RebuildImageVisibility(nsRect* aRect = nullptr) = 0;
+  //////////////////////////////////////////////////////////////////////////////
+  // Approximate frame visibility tracking public API.
+  //////////////////////////////////////////////////////////////////////////////
 
-  // Ensures the image is in the list of visible images.
-  virtual void EnsureImageInVisibleList(nsIImageLoadingContent* aImage) = 0;
+  /// Schedule an update of the list of approximately visible frames "soon".
+  /// This lets the refresh driver know that we want a visibility update in the
+  /// near future. The refresh driver applies its own heuristics and throttling
+  /// to decide when to actually perform the visibility update.
+  virtual void ScheduleApproximateFrameVisibilityUpdateSoon() = 0;
 
-  // Removes the image from the list of visible images if it is present there.
-  virtual void RemoveImageFromVisibleList(nsIImageLoadingContent* aImage) = 0;
+  /// Schedule an update of the list of approximately visible frames "now". The
+  /// update runs asynchronously, but it will be posted to the event loop
+  /// immediately. Prefer the "soon" variation of this method when possible, as
+  /// this variation ignores the refresh driver's heuristics.
+  virtual void ScheduleApproximateFrameVisibilityUpdateNow() = 0;
 
-  // Whether we should assume all images are visible.
-  virtual bool AssumeAllImagesVisible() = 0;
+  /// Clears the current list of approximately visible frames on this pres shell
+  /// and replaces it with frames that are in the display list @aList.
+  virtual void RebuildApproximateFrameVisibilityDisplayList(const nsDisplayList& aList) = 0;
+  virtual void RebuildApproximateFrameVisibility(nsRect* aRect = nullptr,
+                                                 bool aRemoveOnly = false) = 0;
+
+  /// Ensures @aFrame is in the list of approximately visible frames.
+  virtual void EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame) = 0;
+
+  /// Removes @aFrame from the list of approximately visible frames if present.
+  virtual void RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) = 0;
+
+  /// Whether we should assume all frames are visible.
+  virtual bool AssumeAllFramesVisible() = 0;
+
 
   /**
    * Returns whether the document's style set's rule processor for the
@@ -1675,6 +1701,10 @@ public:
 
   void SyncWindowProperties(nsView* aView);
 
+#ifdef ANDROID
+  virtual nsIDocument* GetTouchEventTargetDocument() = 0;
+#endif
+
 protected:
   friend class nsRefreshDriver;
 
@@ -1686,7 +1716,7 @@ protected:
   // we must share ownership.
   nsCOMPtr<nsIDocument>     mDocument;
   RefPtr<nsPresContext>   mPresContext;
-  nsStyleSet*               mStyleSet;      // [OWNS]
+  mozilla::StyleSetHandle   mStyleSet;      // [OWNS]
   nsCSSFrameConstructor*    mFrameConstructor; // [OWNS]
   nsViewManager*           mViewManager;   // [WEAK] docViewer owns it so I don't have to
   nsPresArena               mFrameArena;
@@ -1709,6 +1739,11 @@ protected:
   // moving/sizing loop is running, see bug 491700 for details.
   nsCOMPtr<nsITimer>        mReflowContinueTimer;
 
+#ifdef MOZ_B2G
+  // Forward hardware key events to the input-method-app
+  nsCOMPtr<nsIHardwareKeyHandler> mHardwareKeyHandler;
+#endif // MOZ_B2G
+
 #ifdef DEBUG
   nsIFrame*                 mDrawEventTargetFrame;
   // Ensure that every allocation from the PresArena is eventually freed.
@@ -1728,7 +1763,7 @@ protected:
 
   // Used to force allocation and rendering of proportionally more or
   // less pixels in both dimensions.
-  float                     mResolution;
+  mozilla::Maybe<float>     mResolution;
 
   int16_t                   mSelectionFlags;
 
@@ -1780,7 +1815,7 @@ protected:
   // same update block we have already had other changes that require
   // the whole document to be restyled (i.e., mStylesHaveChanged is already
   // true), then we don't bother adding the scope root here.
-  nsAutoTArray<RefPtr<mozilla::dom::Element>,1> mChangedScopeStyleRoots;
+  AutoTArray<RefPtr<mozilla::dom::Element>,1> mChangedScopeStyleRoots;
 
   static nsIContent*        gKeyDownTarget;
 
@@ -1792,6 +1827,7 @@ protected:
   bool mFontSizeInflationForceEnabled;
   bool mFontSizeInflationDisabledInMasterProcess;
   bool mFontSizeInflationEnabled;
+  bool mPaintingIsFrozen;
 
   // Dirty bit indicating that mFontSizeInflationEnabled needs to be recomputed.
   bool mFontSizeInflationEnabledIsDirty;

@@ -11,9 +11,21 @@ XPCSHELL_TESTS_MANIFESTS += [
 ]
 
 EXTRA_JS_MODULES += [
+    'NewTabMessages.jsm',
+    'NewTabPrefsProvider.jsm',
+    'NewTabRemoteResources.jsm',
     'NewTabURL.jsm',
-    'PlacesProvider.jsm',
-    'RemoteAboutNewTab.jsm',
-    'RemoteNewTabLocation.jsm',
-    'RemoteNewTabUtils.jsm',
+    'NewTabWebChannel.jsm',
+    'PlacesProvider.jsm'
+]
+
+XPIDL_SOURCES += [
+    'nsIAboutNewTabService.idl',
+]
+
+XPIDL_MODULE = 'browser-newtab'
+
+EXTRA_COMPONENTS += [
+    'aboutNewTabService.js',
+    'NewTabComponents.manifest',
 ]

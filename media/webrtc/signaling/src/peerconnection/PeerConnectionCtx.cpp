@@ -11,6 +11,7 @@
 #include "prcvar.h"
 
 #include "mozilla/Telemetry.h"
+#include "browser_logging/WebRtcLog.h"
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
 #include "mozilla/dom/RTCPeerConnectionBinding.h"
@@ -54,7 +55,7 @@ public:
       rv = observerService->AddObserver(this,
                                         NS_XPCOM_SHUTDOWN_OBSERVER_ID,
                                         false);
-      MOZ_ALWAYS_TRUE(NS_SUCCEEDED(rv));
+      MOZ_ALWAYS_SUCCEEDS(rv);
 #endif
       (void) rv;
     }
@@ -72,7 +73,7 @@ public:
 
       nsresult rv = observerService->RemoveObserver(this,
                                                     NS_XPCOM_SHUTDOWN_OBSERVER_ID);
-      MOZ_ALWAYS_TRUE(NS_SUCCEEDED(rv));
+      MOZ_ALWAYS_SUCCEEDS(rv);
 
       // Make sure we're not deleted while still inside ::Observe()
       RefPtr<PeerConnectionCtxShutdown> kungFuDeathGrip(this);
@@ -135,6 +136,7 @@ nsresult PeerConnectionCtx::InitializeGlobal(nsIThread *mainThread,
     }
   }
 
+  EnableWebRtcLog();
   return NS_OK;
 }
 
@@ -155,6 +157,8 @@ void PeerConnectionCtx::Destroy() {
     delete gInstance;
     gInstance = nullptr;
   }
+
+  StopWebRtcLog();
 }
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
@@ -328,7 +332,9 @@ PeerConnectionCtx::EverySecondTelemetryCallback_m(nsITimer* timer, void *closure
   for (auto p = ctx->mPeerConnections.begin();
         p != ctx->mPeerConnections.end(); ++p) {
     if (p->second->HasMedia()) {
-      queries->append(nsAutoPtr<RTCStatsQuery>(new RTCStatsQuery(true)));
+      if (!queries->append(nsAutoPtr<RTCStatsQuery>(new RTCStatsQuery(true)))) {
+	return;
+      }
       if (NS_WARN_IF(NS_FAILED(p->second->BuildStatsQuery_m(nullptr, // all tracks
                                                             queries->back())))) {
         queries->popBack();

@@ -12,7 +12,6 @@
 #include "nsNSSCertificate.h"
 #include "nsIX509CertValidity.h"
 #include "nsIDateTimeFormat.h"
-#include "nsDateTimeFormatCID.h"
 #include "nsICertOverrideService.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
@@ -834,9 +833,10 @@ GetDateBoundary(nsIX509Cert* ix509,
     trueExpired_falseNotYetValid = false;
   }
 
-  nsCOMPtr<nsIDateTimeFormat> dateTimeFormat(do_CreateInstance(NS_DATETIMEFORMAT_CONTRACTID, &rv));
-  if (NS_FAILED(rv))
+  nsCOMPtr<nsIDateTimeFormat> dateTimeFormat = nsIDateTimeFormat::Create();
+  if (!dateTimeFormat) {
     return;
+  }
 
   dateTimeFormat->FormatPRTime(nullptr, kDateFormatLong, kTimeFormatNoSeconds,
                                timeToUse, formattedDate);
@@ -882,7 +882,6 @@ AppendErrorTextCode(PRErrorCode errorCodeToReport,
   if (codeName)
   {
     nsCString error_id(codeName);
-    ToLowerCase(error_id);
     NS_ConvertASCIItoUTF16 idU(error_id);
 
     const char16_t *params[1];
@@ -890,7 +889,7 @@ AppendErrorTextCode(PRErrorCode errorCodeToReport,
 
     nsString formattedString;
     nsresult rv;
-    rv = component->PIPBundleFormatStringFromName("certErrorCodePrefix", 
+    rv = component->PIPBundleFormatStringFromName("certErrorCodePrefix2",
                                                   params, 1, 
                                                   formattedString);
     if (NS_SUCCEEDED(rv)) {

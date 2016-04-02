@@ -8,6 +8,8 @@
 
 "use strict";
 
+Cu.import("resource://testing-common/PromiseTestUtils.jsm", this);
+
 const { PromisesFront } = require("devtools/server/actors/promises");
 
 var events = require("sdk/event/core");
@@ -18,6 +20,8 @@ add_task(function*() {
 
   ok(Promise.toString().contains("native code"), "Expect native DOM Promise");
 
+  // We have to attach the chrome TabActor before playing with the PromiseActor
+  yield attachTab(client, chromeActors);
   yield testPromisesSettled(client, chromeActors,
     v => new Promise(resolve => resolve(v)),
     v => new Promise((resolve, reject) => reject(v)));
@@ -50,6 +54,7 @@ function* testPromisesSettled(client, form, makeResolvePromise,
   let foundResolvedPromise = yield onPromiseSettled;
   ok(foundResolvedPromise, "Found our resolved promise");
 
+  PromiseTestUtils.expectUncaughtRejection(r => r.message == resolution);
   onPromiseSettled = oncePromiseSettled(front, resolution, false, true);
   let rejectedPromise = makeRejectPromise(resolution);
   let foundRejectedPromise = yield onPromiseSettled;

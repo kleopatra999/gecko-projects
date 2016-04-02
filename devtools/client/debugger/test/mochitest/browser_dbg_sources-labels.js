@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that urls are correctly shortened to unique labels.
@@ -11,7 +13,7 @@ function test() {
   let gTab, gPanel, gDebugger;
   let gSources, gUtils;
 
-  initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
+  initDebugger(TAB_URL).then(Task.async(function*([aTab,, aPanel]) {
     gTab = aTab;
     gPanel = aPanel;
     gDebugger = gPanel.panelWin;
@@ -20,6 +22,8 @@ function test() {
 
     let ellipsis = gPanel.panelWin.L10N.ellipsis;
     let nananana = new Array(20).join(NaN);
+
+    yield waitForSourceShown(gPanel, '.html');
 
     // Test trimming url queries.
 
@@ -162,5 +166,5 @@ function test() {
       "gSources.getItemForAttachment isn't functioning properly (1).");
 
     closeDebuggerAndFinish(gPanel);
-  });
+  }));
 }

@@ -15,7 +15,7 @@
 // Support for Notification API extension.
 #include "mozilla/dom/NotificationBinding.h"
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 namespace dom {
@@ -66,6 +66,9 @@ public:
   InvalidateWorkers(WhichServiceWorker aWhichOnes) = 0;
 
   virtual void
+  RegistrationRemoved() = 0;
+
+  virtual void
   GetScope(nsAString& aScope) const = 0;
 };
 
@@ -76,7 +79,7 @@ public:
 
   IMPL_EVENT_HANDLER(updatefound)
 
-  ServiceWorkerRegistrationBase(nsPIDOMWindow* aWindow,
+  ServiceWorkerRegistrationBase(nsPIDOMWindowInner* aWindow,
                                 const nsAString& aScope);
 
   JSObject*
@@ -101,13 +104,11 @@ protected:
 class ServiceWorkerRegistrationMainThread final : public ServiceWorkerRegistrationBase,
                                                   public ServiceWorkerRegistrationListener
 {
+  friend nsPIDOMWindowInner;
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ServiceWorkerRegistrationMainThread,
                                            ServiceWorkerRegistrationBase)
-
-  ServiceWorkerRegistrationMainThread(nsPIDOMWindow* aWindow,
-                                      const nsAString& aScope);
 
   already_AddRefed<Promise>
   Update(ErrorResult& aRv);
@@ -155,12 +156,17 @@ public:
   InvalidateWorkers(WhichServiceWorker aWhichOnes) override;
 
   void
+  RegistrationRemoved() override;
+
+  void
   GetScope(nsAString& aScope) const override
   {
     aScope = mScope;
   }
 
 private:
+  ServiceWorkerRegistrationMainThread(nsPIDOMWindowInner* aWindow,
+                                      const nsAString& aScope);
   ~ServiceWorkerRegistrationMainThread();
 
   already_AddRefed<workers::ServiceWorker>
@@ -233,7 +239,7 @@ public:
   }
 
   bool
-  Notify(JSContext* aCx, workers::Status aStatus) override;
+  Notify(workers::Status aStatus) override;
 
   already_AddRefed<WorkerPushManager>
   GetPushManager(ErrorResult& aRv);

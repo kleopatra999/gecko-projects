@@ -253,7 +253,7 @@ HTMLButtonElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
       // DOMActive event should be trusted since the activation is actually
       // occurred even if the cause is an untrusted click event.
       InternalUIEvent actEvent(true, eLegacyDOMActivate, mouseEvent);
-      actEvent.detail = 1;
+      actEvent.mDetail = 1;
 
       nsCOMPtr<nsIPresShell> shell = aVisitor.mPresContext->GetPresShell();
       if (shell) {
@@ -292,15 +292,8 @@ HTMLButtonElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
                eKeyPress == aVisitor.mEvent->mMessage) ||
               (keyEvent->keyCode == NS_VK_SPACE &&
                eKeyUp == aVisitor.mEvent->mMessage)) {
-            nsEventStatus status = nsEventStatus_eIgnore;
-
-            WidgetMouseEvent event(aVisitor.mEvent->mFlags.mIsTrusted,
-                                   eMouseClick, nullptr,
-                                   WidgetMouseEvent::eReal);
-            event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_KEYBOARD;
-            EventDispatcher::Dispatch(static_cast<nsIContent*>(this),
-                                      aVisitor.mPresContext, &event, nullptr,
-                                      &status);
+            DispatchSimulatedClick(this, aVisitor.mEvent->IsTrusted(),
+                                   aVisitor.mPresContext);
             aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
           }
         }
@@ -310,16 +303,22 @@ HTMLButtonElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
         {
           WidgetMouseEvent* mouseEvent = aVisitor.mEvent->AsMouseEvent();
           if (mouseEvent->button == WidgetMouseEvent::eLeftButton) {
-            if (mouseEvent->mFlags.mIsTrusted) {
+            if (mouseEvent->IsTrusted()) {
               EventStateManager* esm =
                 aVisitor.mPresContext->EventStateManager();
               EventStateManager::SetActiveManager(
                 static_cast<EventStateManager*>(esm), this);
             }
             nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-            if (fm)
-              fm->SetFocus(this, nsIFocusManager::FLAG_BYMOUSE |
-                                 nsIFocusManager::FLAG_NOSCROLL);
+            if (fm) {
+              uint32_t flags = nsIFocusManager::FLAG_BYMOUSE |
+                               nsIFocusManager::FLAG_NOSCROLL;
+              // If this was a touch-generated event, pass that information:
+              if (mouseEvent->inputSource == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH) {
+                flags |= nsIFocusManager::FLAG_BYTOUCH;
+              }
+              fm->SetFocus(this, flags);
+            }
             mouseEvent->mFlags.mMultipleActionsPrevented = true;
           } else if (mouseEvent->button == WidgetMouseEvent::eMiddleButton ||
                      mouseEvent->button == WidgetMouseEvent::eRightButton) {

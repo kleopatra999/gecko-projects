@@ -9,6 +9,7 @@
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/gfx/Point.h" // IntSize
 
 #include"GeckoProfiler.h"
 #include "OggWriter.h"
@@ -31,10 +32,39 @@
 #undef LOG
 #endif
 
-PRLogModuleInfo* gMediaEncoderLog;
+mozilla::LazyLogModule gMediaEncoderLog("MediaEncoder");
 #define LOG(type, msg) MOZ_LOG(gMediaEncoderLog, type, msg)
 
 namespace mozilla {
+
+void
+MediaEncoder::SetDirectConnect(bool aConnected)
+{
+  mDirectConnected = aConnected;
+}
+
+void
+MediaEncoder::NotifyRealtimeData(MediaStreamGraph* aGraph,
+                                 TrackID aID,
+                                 StreamTime aTrackOffset,
+                                 uint32_t aTrackEvents,
+                                 const MediaSegment& aRealtimeMedia)
+{
+  if (mSuspended == RECORD_NOT_SUSPENDED) {
+    // Process the incoming raw track data from MediaStreamGraph, called on the
+    // thread of MediaStreamGraph.
+    if (mAudioEncoder && aRealtimeMedia.GetType() == MediaSegment::AUDIO) {
+      mAudioEncoder->NotifyQueuedTrackChanges(aGraph, aID,
+                                              aTrackOffset, aTrackEvents,
+                                              aRealtimeMedia);
+
+    } else if (mVideoEncoder && aRealtimeMedia.GetType() == MediaSegment::VIDEO) {
+      mVideoEncoder->NotifyQueuedTrackChanges(aGraph, aID,
+                                              aTrackOffset, aTrackEvents,
+                                              aRealtimeMedia);
+    }
+  }
+}
 
 void
 MediaEncoder::NotifyQueuedTrackChanges(MediaStreamGraph* aGraph,
@@ -45,17 +75,36 @@ MediaEncoder::NotifyQueuedTrackChanges(MediaStreamGraph* aGraph,
                                        MediaStream* aInputStream,
                                        TrackID aInputTrackID)
 {
-  // Process the incoming raw track data from MediaStreamGraph, called on the
-  // thread of MediaStreamGraph.
-  if (mAudioEncoder && aQueuedMedia.GetType() == MediaSegment::AUDIO) {
-    mAudioEncoder->NotifyQueuedTrackChanges(aGraph, aID,
-                                            aTrackOffset, aTrackEvents,
-                                            aQueuedMedia);
-
-  } else if (mVideoEncoder && aQueuedMedia.GetType() == MediaSegment::VIDEO) {
-      mVideoEncoder->NotifyQueuedTrackChanges(aGraph, aID,
-                                              aTrackOffset, aTrackEvents,
-                                              aQueuedMedia);
+  if (!mDirectConnected) {
+    NotifyRealtimeData(aGraph, aID, aTrackOffset, aTrackEvents, aQueuedMedia);
+  } else {
+    if (aTrackEvents != 0) {
+      // forward events (TRACK_EVENT_ENDED) but not the media
+      if (aQueuedMedia.GetType() == MediaSegment::VIDEO) {
+        VideoSegment segment;
+        NotifyRealtimeData(aGraph, aID, aTrackOffset, aTrackEvents, segment);
+      } else {
+        AudioSegment segment;
+        NotifyRealtimeData(aGraph, aID, aTrackOffset, aTrackEvents, segment);
+      }
+    }
+    if (mSuspended == RECORD_RESUMED) {
+      if (mVideoEncoder) {
+        if (aQueuedMedia.GetType() == MediaSegment::VIDEO) {
+          // insert a null frame of duration equal to the first segment passed
+          // after Resume(), so it'll get added to one of the DirectListener frames
+          VideoSegment segment;
+          gfx::IntSize size(0,0);
+          segment.AppendFrame(nullptr, aQueuedMedia.GetDuration(), size);
+          mVideoEncoder->NotifyQueuedTrackChanges(aGraph, aID,
+                                                  aTrackOffset, aTrackEvents,
+                                                  segment);
+          mSuspended = RECORD_NOT_SUSPENDED;
+        }
+      } else {
+        mSuspended = RECORD_NOT_SUSPENDED; // no video
+      }
+    }
   }
 }
 
@@ -79,9 +128,6 @@ MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint32_t aAudioBitrate,
                             uint32_t aVideoBitrate, uint32_t aBitrate,
                             uint8_t aTrackTypes)
 {
-  if (!gMediaEncoderLog) {
-    gMediaEncoderLog = PR_NewLogModule("MediaEncoder");
-  }
   PROFILER_LABEL("MediaEncoder", "CreateEncoder",
     js::ProfileEntry::Category::OTHER);
 

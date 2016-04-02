@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that event listeners are fetched when the events tab is selected
@@ -10,10 +12,11 @@ const TAB_URL = EXAMPLE_URL + "doc_event-listeners-02.html";
 
 function test() {
   initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
+    let gPanel = aPanel;
     let gDebugger = aPanel.panelWin;
     let gView = gDebugger.DebuggerView;
     let gEvents = gView.EventListeners;
-    let gStore = gDebugger.store;
+    let gController = gDebugger.DebuggerController;
     let constants = gDebugger.require('./content/constants');
 
     Task.spawn(function*() {
@@ -26,7 +29,7 @@ function test() {
 
     function testFetchOnFocus() {
       return Task.spawn(function*() {
-        let fetched = afterDispatch(gStore, constants.FETCH_EVENT_LISTENERS);
+        let fetched = waitForDispatch(aPanel, constants.FETCH_EVENT_LISTENERS);
 
         gView.toggleInstrumentsPane({ visible: true, animated: false }, 1);
         is(gView.instrumentsPaneHidden, false,
@@ -45,10 +48,10 @@ function test() {
 
     function testFetchOnReloadWhenFocused() {
       return Task.spawn(function*() {
-        let fetched = afterDispatch(gStore, constants.FETCH_EVENT_LISTENERS);
+        let fetched = waitForDispatch(aPanel, constants.FETCH_EVENT_LISTENERS);
 
         let reloading = once(gDebugger.gTarget, "will-navigate");
-        let reloaded = waitForSourcesAfterReload();
+        let reloaded = waitForNavigation(gPanel);
         gDebugger.DebuggerController._target.activeTab.reload();
 
         yield reloading;
@@ -76,7 +79,7 @@ function test() {
 
     function testFetchOnReloadWhenNotFocused() {
       return Task.spawn(function*() {
-        gStore.dispatch({
+        gController.dispatch({
           type: gDebugger.services.WAIT_UNTIL,
           predicate: action => {
             return (action.type === constants.FETCH_EVENT_LISTENERS ||
@@ -99,7 +102,7 @@ function test() {
           "The variables tab should be selected.");
 
         let reloading = once(gDebugger.gTarget, "will-navigate");
-        let reloaded = waitForSourcesAfterReload();
+        let reloaded = waitForNavigation(gPanel);
         gDebugger.DebuggerController._target.activeTab.reload();
 
         yield reloading;
@@ -124,14 +127,6 @@ function test() {
         ok(true,
           "Event listeners were not added after the target finished navigating.");
       });
-    }
-
-    function waitForSourcesAfterReload() {
-      return promise.all([
-        waitForDebuggerEvents(aPanel, gDebugger.EVENTS.NEW_SOURCE),
-        waitForDebuggerEvents(aPanel, gDebugger.EVENTS.SOURCES_ADDED),
-        waitForDebuggerEvents(aPanel, gDebugger.EVENTS.SOURCE_SHOWN)
-      ]);
     }
   });
 }

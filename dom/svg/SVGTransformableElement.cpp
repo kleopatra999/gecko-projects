@@ -63,15 +63,26 @@ SVGTransformableElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
     if (!frame || (frame->GetStateBits() & NS_FRAME_IS_NONDISPLAY)) {
       return retval;
     }
+
+    bool isAdditionOrRemoval = false;
     if (aModType == nsIDOMMutationEvent::ADDITION ||
-        aModType == nsIDOMMutationEvent::REMOVAL ||
-        (aModType == nsIDOMMutationEvent::MODIFICATION &&
-         !(mTransforms && mTransforms->HasTransform()))) {
-      // Reconstruct the frame tree to handle stacking context changes:
-      NS_UpdateHint(retval, nsChangeHint_ReconstructFrame);
+        aModType == nsIDOMMutationEvent::REMOVAL) {
+      isAdditionOrRemoval = true;
     } else {
       MOZ_ASSERT(aModType == nsIDOMMutationEvent::MODIFICATION,
                  "Unknown modification type.");
+      if (!mTransforms ||
+          !mTransforms->HasTransform() ||
+          !mTransforms->HadTransformBeforeLastBaseValChange()) {
+        // New or old value is empty; this is effectively addition or removal.
+        isAdditionOrRemoval = true;
+      }
+    }
+
+    if (isAdditionOrRemoval) {
+      // Reconstruct the frame tree to handle stacking context changes:
+      NS_UpdateHint(retval, nsChangeHint_ReconstructFrame);
+    } else {
       // We just assume the old and new transforms are different.
       NS_UpdateHint(retval, NS_CombineHint(nsChangeHint_UpdatePostTransformOverflow,
                                            nsChangeHint_UpdateTransformLayer));
@@ -90,34 +101,12 @@ SVGTransformableElement::IsEventAttributeName(nsIAtom* aName)
 // nsSVGElement overrides
 
 gfxMatrix
-SVGTransformableElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
-                                                  TransformTypes aWhich) const
+SVGTransformableElement::PrependLocalTransformsTo(
+  const gfxMatrix &aMatrix,
+  SVGTransformTypes aWhich) const
 {
-  gfxMatrix result(aMatrix);
-
-  if (aWhich == eChildToUserSpace) {
-    // We don't have anything to prepend.
-    // eChildToUserSpace is not the common case, which is why we return
-    // 'result' to benefit from NRVO rather than returning aMatrix before
-    // creating 'result'.
-    return result;
-  }
-
-  MOZ_ASSERT(aWhich == eAllTransforms || aWhich == eUserSpaceToParent,
-             "Unknown TransformTypes");
-
-  // animateMotion's resulting transform is supposed to apply *on top of*
-  // any transformations from the |transform| attribute. So since we're
-  // PRE-multiplying, we need to apply the animateMotion transform *first*.
-  if (mAnimateMotionTransform) {
-    result.PreMultiply(ThebesMatrix(*mAnimateMotionTransform));
-  }
-
-  if (mTransforms) {
-    result.PreMultiply(mTransforms->GetAnimValue().GetConsolidationMatrix());
-  }
-
-  return result;
+  return SVGContentUtils::PrependLocalTransformsTo(
+    aMatrix, aWhich, mAnimateMotionTransform, mTransforms);
 }
 
 const gfx::Matrix*

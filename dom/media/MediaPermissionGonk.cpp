@@ -117,7 +117,7 @@ public:
   MediaPermissionRequest(RefPtr<dom::GetUserMediaRequest> &aRequest,
                          nsTArray<nsCOMPtr<nsIMediaDevice> > &aDevices);
 
-  already_AddRefed<nsPIDOMWindow> GetOwner();
+  already_AddRefed<nsPIDOMWindowInner> GetOwner();
 
 protected:
   virtual ~MediaPermissionRequest() {}
@@ -158,8 +158,8 @@ MediaPermissionRequest::MediaPermissionRequest(RefPtr<dom::GetUserMediaRequest> 
     }
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
-  mRequester = new nsContentPermissionRequester(window.get());
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
+  mRequester = new nsContentPermissionRequester(window);
 }
 
 // nsIContentPermissionRequest methods
@@ -196,8 +196,8 @@ MediaPermissionRequest::GetPrincipal(nsIPrincipal **aRequestingPrincipal)
 {
   NS_ENSURE_ARG_POINTER(aRequestingPrincipal);
 
-  nsCOMPtr<nsPIDOMWindow> window = static_cast<nsPIDOMWindow*>
-      (nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID()));
+  nsCOMPtr<nsPIDOMWindowInner> window =
+      nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID())->AsInner();
   NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
@@ -208,11 +208,11 @@ MediaPermissionRequest::GetPrincipal(nsIPrincipal **aRequestingPrincipal)
 }
 
 NS_IMETHODIMP
-MediaPermissionRequest::GetWindow(nsIDOMWindow** aRequestingWindow)
+MediaPermissionRequest::GetWindow(mozIDOMWindow** aRequestingWindow)
 {
   NS_ENSURE_ARG_POINTER(aRequestingWindow);
-  nsCOMPtr<nsPIDOMWindow> window = static_cast<nsPIDOMWindow*>
-      (nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID()));
+  nsCOMPtr<nsPIDOMWindowInner> window =
+      nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID())->AsInner();
   window.forget(aRequestingWindow);
   return NS_OK;
 }
@@ -243,9 +243,12 @@ MediaPermissionRequest::Allow(JS::HandleValue aChoices)
     return NS_ERROR_INVALID_ARG;
   }
   // iterate through audio-capture and video-capture
-  AutoSafeJSContext cx;
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(&aChoices.toObject())) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  JSContext* cx = jsapi.cx();
   JS::Rooted<JSObject*> obj(cx, &aChoices.toObject());
-  JSAutoCompartment ac(cx, obj);
   JS::Rooted<JS::Value> v(cx);
 
   // get selected audio device name
@@ -315,11 +318,11 @@ MediaPermissionRequest::DoAllow(const nsString &audioDevice,
   return NotifyPermissionAllow(callID, selectedDevices);
 }
 
-already_AddRefed<nsPIDOMWindow>
+already_AddRefed<nsPIDOMWindowInner>
 MediaPermissionRequest::GetOwner()
 {
-  nsCOMPtr<nsPIDOMWindow> window = static_cast<nsPIDOMWindow*>
-      (nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID()));
+  nsCOMPtr<nsPIDOMWindowInner> window =
+    nsGlobalWindow::GetInnerWindowWithId(mRequest->InnerWindowID())->AsInner();
   return window.forget();
 }
 
@@ -330,7 +333,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIGETUSERMEDIADEVICESSUCCESSCALLBACK
 
-  MediaDeviceSuccessCallback(RefPtr<dom::GetUserMediaRequest> &aRequest)
+  explicit MediaDeviceSuccessCallback(RefPtr<dom::GetUserMediaRequest> &aRequest)
     : mRequest(aRequest) {}
 
 protected:
@@ -384,7 +387,7 @@ MediaDeviceSuccessCallback::OnSuccess(nsIVariant* aDevices)
 nsresult
 MediaDeviceSuccessCallback::DoPrompt(RefPtr<MediaPermissionRequest> &req)
 {
-  nsCOMPtr<nsPIDOMWindow> window(req->GetOwner());
+  nsCOMPtr<nsPIDOMWindowInner> window(req->GetOwner());
   return dom::nsContentPermissionUtils::AskPermission(req, window);
 }
 
@@ -395,7 +398,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMGETUSERMEDIAERRORCALLBACK
 
-  MediaDeviceErrorCallback(const nsAString &aCallID)
+  explicit MediaDeviceErrorCallback(const nsAString &aCallID)
     : mCallID(aCallID) {}
 
 protected:
@@ -492,9 +495,10 @@ MediaPermissionManager::HandleRequest(RefPtr<dom::GetUserMediaRequest> &req)
 {
   nsString callID;
   req->GetCallID(callID);
+  uint64_t innerWindowID = req->InnerWindowID();
 
-  nsCOMPtr<nsPIDOMWindow> innerWindow = static_cast<nsPIDOMWindow*>
-      (nsGlobalWindow::GetInnerWindowWithId(req->InnerWindowID()));
+  nsCOMPtr<nsPIDOMWindowInner> innerWindow =
+      nsGlobalWindow::GetInnerWindowWithId(innerWindowID)->AsInner();
   if (!innerWindow) {
     MOZ_ASSERT(false, "No inner window");
     return NS_ERROR_FAILURE;
@@ -509,7 +513,9 @@ MediaPermissionManager::HandleRequest(RefPtr<dom::GetUserMediaRequest> &req)
   req->GetConstraints(constraints);
 
   RefPtr<MediaManager> MediaMgr = MediaManager::GetInstance();
-  nsresult rv = MediaMgr->GetUserMediaDevices(innerWindow, constraints, onSuccess, onError);
+  nsresult rv = MediaMgr->GetUserMediaDevices(innerWindow, constraints,
+                                              onSuccess, onError,
+                                              innerWindowID, callID);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;

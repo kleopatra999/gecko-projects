@@ -4,44 +4,79 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  * The origin of this IDL file is
- * http://w3c.github.io/web-animations/#the-keyframeeffect-interfaces
+ * https://w3c.github.io/web-animations/#the-keyframeeffect-interfaces
  *
  * Copyright © 2015 W3C® (MIT, ERCIM, Keio), All Rights Reserved. W3C
  * liability, trademark and document use rules apply.
  */
 
-// For the constructor:
-//
-// 1. We use Element? for the first argument since we don't support Animatable
-//    for pseudo-elements yet.
-//
-// 2. We use object? instead of
-//
-//    (PropertyIndexedKeyframes or sequence<Keyframe> or SharedKeyframeList)
-//
-//    for the second argument so that we can get the property-value pairs from
-//    the PropertyIndexedKeyframes or Keyframe objects.  We also don't support
-//    SharedKeyframeList yet.
-//
-// 3. We use unrestricted double instead of
-//
-//    (unrestricted double or KeyframeEffectOptions)
-//
-//    since we don't support KeyframeEffectOptions yet.
+enum IterationCompositeOperation {
+  "replace",
+  "accumulate"
+};
+
+dictionary KeyframeEffectOptions : AnimationEffectTimingProperties {
+  IterationCompositeOperation iterationComposite = "replace";
+  CompositeOperation          composite = "replace";
+  DOMString                   spacing = "distribute";
+};
+
+// Bug 1241783: For the constructor we use (Element or CSSPseudoElement)? for
+// the first argument since we cannot convert a mixin into a union type
+// automatically.
 [HeaderFile="mozilla/dom/KeyframeEffect.h",
  Func="nsDocument::IsWebAnimationsEnabled",
- Constructor(Element? target,
-             optional object? frames,
-             optional unrestricted double options)]
+ Constructor((Element or CSSPseudoElement)? target,
+             object? frames,
+             optional (unrestricted double or KeyframeEffectOptions) options)]
 interface KeyframeEffectReadOnly : AnimationEffectReadOnly {
-  readonly attribute Element?  target;
+  // Bug 1241783: As with the constructor, we use (Element or CSSPseudoElement)?
+  // for the type of |target| instead of Animatable?
+  readonly attribute (Element or CSSPseudoElement)?  target;
+  readonly attribute IterationCompositeOperation iterationComposite;
+  readonly attribute CompositeOperation          composite;
+  readonly attribute DOMString                   spacing;
+
   // Not yet implemented:
-  // readonly attribute IterationCompositeOperation iterationComposite;
-  // readonly attribute CompositeOperation          composite;
-  // readonly attribute DOMString                   spacing;
   // KeyframeEffect             clone();
 
   // We use object instead of ComputedKeyframe so that we can put the
   // property-value pairs on the object.
   [Throws] sequence<object> getFrames();
+};
+
+// Non-standard extensions
+dictionary AnimationPropertyValueDetails {
+  required double             offset;
+  required DOMString          value;
+           DOMString          easing;
+  required CompositeOperation composite;
+};
+
+dictionary AnimationPropertyDetails {
+  required DOMString                               property;
+  required boolean                                 runningOnCompositor;
+           DOMString                               warning;
+  required sequence<AnimationPropertyValueDetails> values;
+};
+
+partial interface KeyframeEffectReadOnly {
+  [ChromeOnly, Throws] sequence<AnimationPropertyDetails> getProperties();
+};
+
+[Func="nsDocument::IsWebAnimationsEnabled",
+ Constructor ((Element or CSSPseudoElement)? target,
+              object? frames,
+              optional (unrestricted double or KeyframeEffectOptions) options)]
+interface KeyframeEffect : KeyframeEffectReadOnly {
+  // Bug 1067769 - Allow setting KeyframeEffect.target
+  // inherit attribute Animatable?                 target;
+  // Bug 1216843 - implement animation composition
+  // inherit attribute IterationCompositeOperation iterationComposite;
+  // Bug 1216844 - implement additive animation
+  // inherit attribute CompositeOperation          composite;
+  // Bug 1244590 - implement spacing modes
+  // inherit attribute DOMString                   spacing;
+  // Bug 1244591 - implement setFrames
+  // void setFrames (object? frames);
 };

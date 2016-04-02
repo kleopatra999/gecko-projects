@@ -79,6 +79,12 @@ nsHTMLReflowState::nsHTMLReflowState(nsPresContext*       aPresContext,
   if (aFlags & DUMMY_PARENT_REFLOW_STATE) {
     mFlags.mDummyParentReflowState = true;
   }
+  if (aFlags & COMPUTE_SIZE_SHRINK_WRAP) {
+    mFlags.mShrinkWrap = true;
+  }
+  if (aFlags & STATIC_POS_IS_CB_ORIGIN) {
+    mFlags.mStaticPosIsCBOrigin = true;
+  }
 
   if (!(aFlags & CALLER_WILL_INIT)) {
     Init(aPresContext);
@@ -219,6 +225,8 @@ nsHTMLReflowState::nsHTMLReflowState(
   mFlags.mIsColumnBalancing = false;
   mFlags.mIsFlexContainerMeasuringHeight = false;
   mFlags.mDummyParentReflowState = false;
+  mFlags.mShrinkWrap = !!(aFlags & COMPUTE_SIZE_SHRINK_WRAP);
+  mFlags.mStaticPosIsCBOrigin = !!(aFlags & STATIC_POS_IS_CB_ORIGIN);
 
   mDiscoveredClearance = nullptr;
   mPercentBSizeObserver = (aParentReflowState.mPercentBSizeObserver &&
@@ -240,7 +248,7 @@ inline nscoord
 nsCSSOffsetState::ComputeISizeValue(nscoord aContainingBlockISize,
                                     nscoord aContentEdgeToBoxSizing,
                                     nscoord aBoxSizingToMarginEdge,
-                                    const nsStyleCoord& aCoord)
+                                    const nsStyleCoord& aCoord) const
 {
   return nsLayoutUtils::ComputeISizeValue(rendContext, frame,
                                           aContainingBlockISize,
@@ -251,18 +259,21 @@ nsCSSOffsetState::ComputeISizeValue(nscoord aContainingBlockISize,
 
 nscoord
 nsCSSOffsetState::ComputeISizeValue(nscoord aContainingBlockISize,
-                                    uint8_t aBoxSizing,
-                                    const nsStyleCoord& aCoord)
+                                    StyleBoxSizing aBoxSizing,
+                                    const nsStyleCoord& aCoord) const
 {
   WritingMode wm = GetWritingMode();
   nscoord inside = 0, outside = ComputedLogicalBorderPadding().IStartEnd(wm) +
                                 ComputedLogicalMargin().IStartEnd(wm);
   switch (aBoxSizing) {
-    case NS_STYLE_BOX_SIZING_BORDER:
+    case StyleBoxSizing::Border:
       inside = ComputedLogicalBorderPadding().IStartEnd(wm);
       break;
-    case NS_STYLE_BOX_SIZING_PADDING:
+    case StyleBoxSizing::Padding:
       inside = ComputedLogicalPadding().IStartEnd(wm);
+      break;
+    case StyleBoxSizing::Content:
+      // nothing
       break;
   }
   outside -= inside;
@@ -273,17 +284,20 @@ nsCSSOffsetState::ComputeISizeValue(nscoord aContainingBlockISize,
 
 nscoord
 nsCSSOffsetState::ComputeBSizeValue(nscoord aContainingBlockBSize,
-                                    uint8_t aBoxSizing,
-                                    const nsStyleCoord& aCoord)
+                                    StyleBoxSizing aBoxSizing,
+                                    const nsStyleCoord& aCoord) const
 {
   WritingMode wm = GetWritingMode();
   nscoord inside = 0;
   switch (aBoxSizing) {
-    case NS_STYLE_BOX_SIZING_BORDER:
+    case StyleBoxSizing::Border:
       inside = ComputedLogicalBorderPadding().BStartEnd(wm);
       break;
-    case NS_STYLE_BOX_SIZING_PADDING:
+    case StyleBoxSizing::Padding:
       inside = ComputedLogicalPadding().BStartEnd(wm);
+      break;
+    case StyleBoxSizing::Content:
+      // nothing
       break;
   }
   return nsLayoutUtils::ComputeBSizeValue(aContainingBlockBSize,
@@ -556,7 +570,7 @@ nsHTMLReflowState::InitResizeFlags(nsPresContext* aPresContext, nsIAtom* aFrameT
       if (frame->GetType() == nsGkAtoms::svgForeignObjectFrame) {
         // Foreign object frames use dirty bits in a special way.
         frame->AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
-        nsIFrame *kid = frame->GetFirstPrincipalChild();
+        nsIFrame *kid = frame->PrincipalChildList().FirstChild();
         if (kid) {
           kid->AddStateBits(NS_FRAME_IS_DIRTY);
         }
@@ -584,7 +598,7 @@ nsHTMLReflowState::InitResizeFlags(nsPresContext* aPresContext, nsIAtom* aFrameT
       // frame tree geometry (the width on an ancestor) rather than
       // style.
 
-      nsAutoTArray<nsIFrame*, 32> stack;
+      AutoTArray<nsIFrame*, 32> stack;
       stack.AppendElement(frame);
 
       do {
@@ -781,6 +795,7 @@ nsHTMLReflowState::InitFrameType(nsIAtom* aFrameType)
     case NS_STYLE_DISPLAY_TABLE:
     case NS_STYLE_DISPLAY_TABLE_CAPTION:
     case NS_STYLE_DISPLAY_FLEX:
+    case NS_STYLE_DISPLAY_WEBKIT_BOX:
     case NS_STYLE_DISPLAY_GRID:
     case NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER:
       frameType = NS_CSS_FRAME_TYPE_BLOCK;
@@ -793,6 +808,7 @@ nsHTMLReflowState::InitFrameType(nsIAtom* aFrameType)
     case NS_STYLE_DISPLAY_INLINE_XUL_GRID:
     case NS_STYLE_DISPLAY_INLINE_STACK:
     case NS_STYLE_DISPLAY_INLINE_FLEX:
+    case NS_STYLE_DISPLAY_WEBKIT_INLINE_BOX:
     case NS_STYLE_DISPLAY_INLINE_GRID:
     case NS_STYLE_DISPLAY_RUBY:
     case NS_STYLE_DISPLAY_RUBY_BASE:
@@ -995,7 +1011,7 @@ nsHTMLReflowState::ApplyRelativePositioning(nsIFrame* aFrame,
 nsIFrame*
 nsHTMLReflowState::GetHypotheticalBoxContainer(nsIFrame*    aFrame,
                                                nscoord&     aCBIStartEdge,
-                                               LogicalSize& aCBSize)
+                                               LogicalSize& aCBSize) const
 {
   aFrame = aFrame->GetContainingBlock();
   NS_ASSERTION(aFrame != frame, "How did that happen?");
@@ -1072,7 +1088,7 @@ nsHTMLReflowState::CalculateBorderPaddingMargin(
                        LogicalAxis aAxis,
                        nscoord aContainingBlockSize,
                        nscoord* aInsideBoxSizing,
-                       nscoord* aOutsideBoxSizing)
+                       nscoord* aOutsideBoxSizing) const
 {
   WritingMode wm = GetWritingMode();
   mozilla::css::Side startSide =
@@ -1133,11 +1149,15 @@ nsHTMLReflowState::CalculateBorderPaddingMargin(
   nscoord outside = paddingStartEnd + borderStartEnd + marginStartEnd;
   nscoord inside = 0;
   switch (mStylePosition->mBoxSizing) {
-    case NS_STYLE_BOX_SIZING_BORDER:
+    case StyleBoxSizing::Border:
       inside += borderStartEnd;
-      // fall through
-    case NS_STYLE_BOX_SIZING_PADDING:
+      MOZ_FALLTHROUGH;
+    case StyleBoxSizing::Padding:
       inside += paddingStartEnd;
+      MOZ_FALLTHROUGH;
+    case StyleBoxSizing::Content:
+      // nothing
+      break;
   }
   outside -= inside;
   *aInsideBoxSizing = inside;
@@ -1184,7 +1204,7 @@ nsHTMLReflowState::CalculateHypotheticalPosition
                       nsIFrame*                aPlaceholderFrame,
                       const nsHTMLReflowState* cbrs,
                       nsHypotheticalPosition&  aHypotheticalPos,
-                      nsIAtom*                 aFrameType)
+                      nsIAtom*                 aFrameType) const
 {
   NS_ASSERTION(mStyleDisplay->mOriginalDisplay != NS_STYLE_DISPLAY_NONE,
                "mOriginalDisplay has not been properly initialized");
@@ -1456,8 +1476,8 @@ nsHTMLReflowState::CalculateHypotheticalPosition
       // We need to compute it. It's important we do this, because if it's
       // percentage-based this computed value may be different from the
       // computed value calculated using the absolute containing block height.
-      boxBSize = ComputeBSizeValue(blockContentSize.BSize(wm),
-                                   insideBoxSizing, styleBSize) +
+      boxBSize = nsLayoutUtils::ComputeBSizeValue(blockContentSize.BSize(wm),
+                                                  insideBoxSizing, styleBSize) +
                  insideBoxSizing + outsideBoxSizing;
     }
 
@@ -1492,50 +1512,48 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
   NS_ASSERTION(frame->GetStateBits() & NS_FRAME_OUT_OF_FLOW,
                "Why are we here?");
 
-  // Get the placeholder frame
-  nsIFrame*     placeholderFrame;
-
-  placeholderFrame = aPresContext->PresShell()->GetPlaceholderFrameFor(frame);
-  NS_ASSERTION(nullptr != placeholderFrame, "no placeholder frame");
+  const auto& styleOffset = mStylePosition->mOffset;
+  bool iStartIsAuto = styleOffset.GetIStartUnit(cbwm) == eStyleUnit_Auto;
+  bool iEndIsAuto   = styleOffset.GetIEndUnit(cbwm) == eStyleUnit_Auto;
+  bool bStartIsAuto = styleOffset.GetBStartUnit(cbwm) == eStyleUnit_Auto;
+  bool bEndIsAuto   = styleOffset.GetBEndUnit(cbwm) == eStyleUnit_Auto;
 
   // If both 'left' and 'right' are 'auto' or both 'top' and 'bottom' are
   // 'auto', then compute the hypothetical box position where the element would
   // have been if it had been in the flow
   nsHypotheticalPosition hypotheticalPos;
-  if (((eStyleUnit_Auto == mStylePosition->mOffset.GetLeftUnit()) &&
-       (eStyleUnit_Auto == mStylePosition->mOffset.GetRightUnit())) ||
-      ((eStyleUnit_Auto == mStylePosition->mOffset.GetTopUnit()) &&
-       (eStyleUnit_Auto == mStylePosition->mOffset.GetBottomUnit()))) {
-    CalculateHypotheticalPosition(aPresContext, placeholderFrame, cbrs,
-                                  hypotheticalPos, aFrameType);
+  if ((iStartIsAuto && iEndIsAuto) || (bStartIsAuto && bEndIsAuto)) {
+    if (mFlags.mStaticPosIsCBOrigin) {
+      hypotheticalPos.mWritingMode = cbwm;
+      hypotheticalPos.mIStart = nscoord(0);
+      hypotheticalPos.mBStart = nscoord(0);
+    } else {
+      nsIFrame* placeholderFrame =
+        aPresContext->PresShell()->GetPlaceholderFrameFor(frame);
+      NS_ASSERTION(placeholderFrame, "no placeholder frame");
+      CalculateHypotheticalPosition(aPresContext, placeholderFrame, cbrs,
+                                    hypotheticalPos, aFrameType);
+    }
   }
 
   // Initialize the 'left' and 'right' computed offsets
   // XXX Handle new 'static-position' value...
 
-  bool iStartIsAuto = false, iEndIsAuto = false;
-  bool bStartIsAuto = false, bEndIsAuto = false;
-
   // Size of the containing block in its writing mode
   LogicalSize cbSize = aCBSize;
-
   LogicalMargin offsets = ComputedLogicalOffsets().ConvertTo(cbwm, wm);
 
-  if (eStyleUnit_Auto == mStylePosition->mOffset.GetIStartUnit(cbwm)) {
+  if (iStartIsAuto) {
     offsets.IStart(cbwm) = 0;
-    iStartIsAuto = true;
   } else {
     offsets.IStart(cbwm) = nsLayoutUtils::
-      ComputeCBDependentValue(cbSize.ISize(cbwm),
-                              mStylePosition->mOffset.GetIStart(cbwm));
+      ComputeCBDependentValue(cbSize.ISize(cbwm), styleOffset.GetIStart(cbwm));
   }
-  if (eStyleUnit_Auto == mStylePosition->mOffset.GetIEndUnit(cbwm)) {
+  if (iEndIsAuto) {
     offsets.IEnd(cbwm) = 0;
-    iEndIsAuto = true;
   } else {
     offsets.IEnd(cbwm) = nsLayoutUtils::
-      ComputeCBDependentValue(cbSize.ISize(cbwm),
-                              mStylePosition->mOffset.GetIEnd(cbwm));
+      ComputeCBDependentValue(cbSize.ISize(cbwm), styleOffset.GetIEnd(cbwm));
   }
 
   if (iStartIsAuto && iEndIsAuto) {
@@ -1548,21 +1566,19 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
     }
   }
 
-  if (eStyleUnit_Auto == mStylePosition->mOffset.GetBStartUnit(cbwm)) {
+  if (bStartIsAuto) {
     offsets.BStart(cbwm) = 0;
-    bStartIsAuto = true;
   } else {
     offsets.BStart(cbwm) = nsLayoutUtils::
       ComputeBSizeDependentValue(cbSize.BSize(cbwm),
-                                 mStylePosition->mOffset.GetBStart(cbwm));
+                                 styleOffset.GetBStart(cbwm));
   }
-  if (eStyleUnit_Auto == mStylePosition->mOffset.GetBEndUnit(cbwm)) {
+  if (bEndIsAuto) {
     offsets.BEnd(cbwm) = 0;
-    bEndIsAuto = true;
   } else {
     offsets.BEnd(cbwm) = nsLayoutUtils::
       ComputeBSizeDependentValue(cbSize.BSize(cbwm),
-                                 mStylePosition->mOffset.GetBEnd(cbwm));
+                                 styleOffset.GetBEnd(cbwm));
   }
 
   if (bStartIsAuto && bEndIsAuto) {
@@ -1573,11 +1589,12 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
 
   SetComputedLogicalOffsets(offsets.ConvertTo(wm, cbwm));
 
-  bool iSizeIsAuto = eStyleUnit_Auto == mStylePosition->ISize(cbwm).GetUnit();
-  bool bSizeIsAuto = eStyleUnit_Auto == mStylePosition->BSize(cbwm).GetUnit();
-
   typedef nsIFrame::ComputeSizeFlags ComputeSizeFlags;
   ComputeSizeFlags computeSizeFlags = ComputeSizeFlags::eDefault;
+  if (mFlags.mShrinkWrap) {
+    computeSizeFlags =
+      ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
+  }
   if (wm.IsOrthogonalTo(cbwm)) {
     if (bStartIsAuto || bEndIsAuto) {
       computeSizeFlags =
@@ -1618,6 +1635,7 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
   const LogicalMargin borderPadding =
     ComputedLogicalBorderPadding().ConvertTo(cbwm, wm);
 
+  bool iSizeIsAuto = eStyleUnit_Auto == mStylePosition->ISize(cbwm).GetUnit();
   if (iStartIsAuto) {
     // We know 'right' is not 'auto' anymore thanks to the hypothetical
     // box code above.
@@ -1728,6 +1746,7 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
     }
   }
 
+  bool bSizeIsAuto = eStyleUnit_Auto == mStylePosition->BSize(cbwm).GetUnit();
   if (bStartIsAuto) {
     // solve for block-start
     if (bSizeIsAuto) {
@@ -1782,15 +1801,10 @@ nsHTMLReflowState::InitAbsoluteConstraints(nsPresContext* aPresContext,
 
     if (marginBStartIsAuto) {
       if (marginBEndIsAuto) {
-        if (availMarginSpace < 0) {
-          // FIXME: Note that the spec doesn't actually say we should do this!
-          margin.BEnd(cbwm) = availMarginSpace;
-        } else {
-          // Both margin-block-start and -end are 'auto', so they get
-          // equal values
-          margin.BStart(cbwm) = availMarginSpace / 2;
-          margin.BEnd(cbwm) = availMarginSpace - margin.BStart(cbwm);
-        }
+        // Both 'margin-top' and 'margin-bottom' are 'auto', so they get
+        // equal values
+        margin.BStart(cbwm) = availMarginSpace / 2;
+        margin.BEnd(cbwm) = availMarginSpace - margin.BStart(cbwm);
       } else {
         // Just margin-block-start is 'auto'
         margin.BStart(cbwm) = availMarginSpace;
@@ -2278,37 +2292,56 @@ nsHTMLReflowState::InitConstraints(nsPresContext*     aPresContext,
       typedef nsIFrame::ComputeSizeFlags ComputeSizeFlags;
       ComputeSizeFlags computeSizeFlags =
         isBlock ? ComputeSizeFlags::eDefault : ComputeSizeFlags::eShrinkWrap;
-
-      // Make sure legend frames with display:block and width:auto still
-      // shrink-wrap.
-      // Also shrink-wrap blocks that are orthogonal to their container.
-      if (isBlock &&
-          ((aFrameType == nsGkAtoms::legendFrame &&
-            frame->StyleContext()->GetPseudo() != nsCSSAnonBoxes::scrolledContent) ||
-           (aFrameType == nsGkAtoms::scrollFrame &&
-            frame->GetContentInsertionFrame()->GetType() == nsGkAtoms::legendFrame) ||
-           (mCBReflowState &&
-            mCBReflowState->GetWritingMode().IsOrthogonalTo(mWritingMode)))) {
+      if (mFlags.mShrinkWrap) {
         computeSizeFlags =
           ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
       }
 
       nsIFrame* parent = frame->GetParent();
       nsIAtom* parentFrameType = parent ? parent->GetType() : nullptr;
-      if (parentFrameType == nsGkAtoms::flexContainerFrame) {
-        computeSizeFlags =
-          ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
-
-        // If we're inside of a flex container that needs to measure our
-        // auto height, pass that information along to ComputeSize().
-        if (mFlags.mIsFlexContainerMeasuringHeight) {
+      if (parentFrameType == nsGkAtoms::gridContainerFrame) {
+        // Shrink-wrap grid items that will be aligned (rather than stretched)
+        // in its inline axis.
+        auto inlineAxisAlignment = wm.IsOrthogonalTo(cbwm) ?
+          mStylePosition->ComputedAlignSelf(frame->StyleContext()->GetParent()) :
+          mStylePosition->ComputedJustifySelf(frame->StyleContext()->GetParent());
+        if ((inlineAxisAlignment != NS_STYLE_ALIGN_STRETCH &&
+             inlineAxisAlignment != NS_STYLE_ALIGN_NORMAL) ||
+            mStyleMargin->mMargin.GetIStartUnit(wm) == eStyleUnit_Auto ||
+            mStyleMargin->mMargin.GetIEndUnit(wm) == eStyleUnit_Auto) {
           computeSizeFlags =
-            ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eUseAutoHeight);
+            ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
         }
       } else {
-        MOZ_ASSERT(!mFlags.mIsFlexContainerMeasuringHeight,
-                   "We're not in a flex container, so the flag "
-                   "'mIsFlexContainerMeasuringHeight' shouldn't be set");
+        // Make sure legend frames with display:block and width:auto still
+        // shrink-wrap.
+        // Also shrink-wrap blocks that are orthogonal to their container.
+        if (isBlock &&
+            ((aFrameType == nsGkAtoms::legendFrame &&
+              frame->StyleContext()->GetPseudo() != nsCSSAnonBoxes::scrolledContent) ||
+             (aFrameType == nsGkAtoms::scrollFrame &&
+              frame->GetContentInsertionFrame()->GetType() == nsGkAtoms::legendFrame) ||
+             (mCBReflowState &&
+              mCBReflowState->GetWritingMode().IsOrthogonalTo(mWritingMode)))) {
+          computeSizeFlags =
+            ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
+        }
+
+        if (parentFrameType == nsGkAtoms::flexContainerFrame) {
+          computeSizeFlags =
+            ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eShrinkWrap);
+
+          // If we're inside of a flex container that needs to measure our
+          // auto height, pass that information along to ComputeSize().
+          if (mFlags.mIsFlexContainerMeasuringHeight) {
+            computeSizeFlags =
+              ComputeSizeFlags(computeSizeFlags | ComputeSizeFlags::eUseAutoHeight);
+          }
+        } else {
+          MOZ_ASSERT(!mFlags.mIsFlexContainerMeasuringHeight,
+                     "We're not in a flex container, so the flag "
+                     "'mIsFlexContainerMeasuringHeight' shouldn't be set");
+        }
       }
 
       if (cbSize.ISize(wm) == NS_UNCONSTRAINEDSIZE) {
@@ -2346,12 +2379,12 @@ nsHTMLReflowState::InitConstraints(nsPresContext*     aPresContext,
 
 static void
 UpdateProp(FrameProperties& aProps,
-           const FramePropertyDescriptor* aProperty,
+           const FramePropertyDescriptor<nsMargin>* aProperty,
            bool aNeeded,
            nsMargin& aNewValue)
 {
   if (aNeeded) {
-    nsMargin* propValue = static_cast<nsMargin*>(aProps.Get(aProperty));
+    nsMargin* propValue = aProps.Get(aProperty);
     if (propValue) {
       *propValue = aNewValue;
     } else {
@@ -2662,10 +2695,8 @@ ComputeLineHeight(nsStyleContext* aStyleContext,
     }
   }
 
-  RefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForStyleContext(aStyleContext,
-                                               getter_AddRefs(fm),
-                                               aFontSizeInflation);
+  RefPtr<nsFontMetrics> fm = nsLayoutUtils::
+    GetFontMetricsForStyleContext(aStyleContext, aFontSizeInflation);
   return GetNormalLineHeight(fm);
 }
 
@@ -2889,9 +2920,14 @@ void
 nsHTMLReflowState::SetTruncated(const nsHTMLReflowMetrics& aMetrics,
                                 nsReflowStatus* aStatus) const
 {
-  if (AvailableHeight() != NS_UNCONSTRAINEDSIZE &&
-      AvailableHeight() < aMetrics.Height() &&
-      !mFlags.mIsTopOfPage) {
+  const WritingMode containerWM = aMetrics.GetWritingMode();
+  if (GetWritingMode().IsOrthogonalTo(containerWM)) {
+    // Orthogonal flows are always reflowed with an unconstrained dimension,
+    // so should never end up truncated (see nsHTMLReflowState::Init()).
+    *aStatus &= ~NS_FRAME_TRUNCATED;
+  } else if (AvailableBSize() != NS_UNCONSTRAINEDSIZE &&
+             AvailableBSize() < aMetrics.BSize(containerWM) &&
+             !mFlags.mIsTopOfPage) {
     *aStatus |= NS_FRAME_TRUNCATED;
   } else {
     *aStatus &= ~NS_FRAME_TRUNCATED;

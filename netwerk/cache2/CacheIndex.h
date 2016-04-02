@@ -16,7 +16,7 @@
 #include "nsThreadUtils.h"
 #include "nsWeakReference.h"
 #include "mozilla/SHA1.h"
-#include "mozilla/Mutex.h"
+#include "mozilla/StaticMutex.h"
 #include "mozilla/Endian.h"
 #include "mozilla/TimeStamp.h"
 
@@ -64,7 +64,7 @@ struct CacheIndexRecord {
   /*
    *    1000 0000 0000 0000 0000 0000 0000 0000 : initialized
    *    0100 0000 0000 0000 0000 0000 0000 0000 : anonymous
-   *    0010 0000 0000 0000 0000 0000 0000 0000 : inBrowser
+   *    0010 0000 0000 0000 0000 0000 0000 0000 : inIsolatedMozBrowser
    *    0001 0000 0000 0000 0000 0000 0000 0000 : removed
    *    0000 1000 0000 0000 0000 0000 0000 0000 : dirty
    *    0000 0100 0000 0000 0000 0000 0000 0000 : fresh
@@ -148,7 +148,7 @@ public:
     mRec->mFlags = 0;
   }
 
-  void Init(uint32_t aAppId, bool aAnonymous, bool aInBrowser, bool aPinned)
+  void Init(uint32_t aAppId, bool aAnonymous, bool aInIsolatedMozBrowser, bool aPinned)
   {
     MOZ_ASSERT(mRec->mFrecency == 0);
     MOZ_ASSERT(mRec->mExpirationTime == nsICacheEntry::NO_EXPIRATION_TIME);
@@ -161,8 +161,8 @@ public:
     if (aAnonymous) {
       mRec->mFlags |= kAnonymousMask;
     }
-    if (aInBrowser) {
-      mRec->mFlags |= kInBrowserMask;
+    if (aInIsolatedMozBrowser) {
+      mRec->mFlags |= kInIsolatedMozBrowserMask;
     }
     if (aPinned) {
       mRec->mFlags |= kPinnedMask;
@@ -175,7 +175,10 @@ public:
 
   uint32_t AppId() const { return mRec->mAppId; }
   bool     Anonymous() const { return !!(mRec->mFlags & kAnonymousMask); }
-  bool     InBrowser() const { return !!(mRec->mFlags & kInBrowserMask); }
+  bool     InIsolatedMozBrowser() const
+  {
+    return !!(mRec->mFlags & kInIsolatedMozBrowserMask);
+  }
 
   bool IsRemoved() const { return !!(mRec->mFlags & kRemovedMask); }
   void MarkRemoved() { mRec->mFlags |= kRemovedMask; }
@@ -256,11 +259,12 @@ public:
   }
 
   void Log() const {
-    LOG(("CacheIndexEntry::Log() [this=%p, hash=%08x%08x%08x%08x%08x, fresh=%u,"
-         " initialized=%u, removed=%u, dirty=%u, anonymous=%u, inBrowser=%u, "
-         "appId=%u, frecency=%u, expirationTime=%u, size=%u]",
+    LOG(("CacheIndexEntry::Log() [this=%p, hash=%08x%08x%08x%08x%08x, "
+         "fresh=%u, initialized=%u, removed=%u, dirty=%u, anonymous=%u, "
+         "inIsolatedMozBrowser=%u, appId=%u, frecency=%u, expirationTime=%u, "
+         "size=%u]",
          this, LOGSHA1(mRec->mHash), IsFresh(), IsInitialized(), IsRemoved(),
-         IsDirty(), Anonymous(), InBrowser(), AppId(), GetFrecency(),
+         IsDirty(), Anonymous(), InIsolatedMozBrowser(), AppId(), GetFrecency(),
          GetExpirationTime(), GetFileSize()));
   }
 
@@ -270,7 +274,7 @@ public:
     if (!aInfo->IsPrivate() &&
         aInfo->OriginAttributesPtr()->mAppId == aRec->mAppId &&
         aInfo->IsAnonymous() == !!(aRec->mFlags & kAnonymousMask) &&
-        aInfo->OriginAttributesPtr()->mInBrowser == !!(aRec->mFlags & kInBrowserMask)) {
+        aInfo->OriginAttributesPtr()->mInIsolatedMozBrowser == !!(aRec->mFlags & kInIsolatedMozBrowserMask)) {
       return true;
     }
 
@@ -295,7 +299,7 @@ private:
 
   static const uint32_t kInitializedMask = 0x80000000;
   static const uint32_t kAnonymousMask   = 0x40000000;
-  static const uint32_t kInBrowserMask   = 0x20000000;
+  static const uint32_t kInIsolatedMozBrowserMask   = 0x20000000;
 
   // This flag is set when the entry was removed. We need to keep this
   // information in memory until we write the index file.
@@ -622,7 +626,7 @@ public:
   static nsresult InitEntry(const SHA1Sum::Hash *aHash,
                             uint32_t             aAppId,
                             bool                 aAnonymous,
-                            bool                 aInBrowser,
+                            bool                 aInIsolatedMozBrowser,
                             bool                 aPinned);
 
   // Remove entry from index. The entry should be present in index.
@@ -696,8 +700,6 @@ public:
 
 private:
   friend class CacheIndexEntryAutoManage;
-  friend class CacheIndexAutoLock;
-  friend class CacheIndexAutoUnlock;
   friend class FileOpenHelper;
   friend class CacheIndexIterator;
 
@@ -713,10 +715,6 @@ private:
   NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult) override;
   NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult) override;
 
-  void     Lock();
-  void     Unlock();
-  void     AssertOwnsLock();
-
   nsresult InitInternal(nsIFile *aCacheDirectory);
   void     PreShutdownInternal();
 
@@ -730,7 +728,7 @@ private:
   static bool IsCollision(CacheIndexEntry *aEntry,
                           uint32_t         aAppId,
                           bool             aAnonymous,
-                          bool             aInBrowser);
+                          bool             aInIsolatedMozBrowser);
 
   // Checks whether any of the information about the entry has changed.
   static bool HasEntryChanged(CacheIndexEntry *aEntry,
@@ -931,10 +929,10 @@ private:
   void ReportHashStats();
 
   static CacheIndex *gInstance;
+  static StaticMutex sLock;
 
   nsCOMPtr<nsIFile> mCacheDirectory;
 
-  mozilla::Mutex mLock;
   EState         mState;
   // Timestamp of time when the index was initialized. We use it to delay
   // initial update or build of index.
@@ -1026,6 +1024,7 @@ private:
   // and such entries are stored at the end of the array. Uninitialized entries
   // and entries marked as deleted are not present in this array.
   nsTArray<CacheIndexRecord *>  mFrecencyArray;
+  bool                          mFrecencyArraySorted;
 
   nsTArray<CacheIndexIterator *> mIterators;
 
@@ -1052,16 +1051,7 @@ private:
       : mObserver(aWeakObserver) { }
     virtual ~DiskConsumptionObserver() {
       if (mObserver && !NS_IsMainThread()) {
-        nsIWeakReference *obs;
-        mObserver.forget(&obs);
-
-        nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
-        if (mainThread) {
-          NS_ProxyRelease(mainThread, obs);
-        } else {
-          NS_WARNING("Cannot get main thread, leaking weak reference to "
-                     "CacheStorageConsumptionObserver.");
-        }
+        NS_ReleaseOnMainThread(mObserver.forget());
       }
     }
 
@@ -1087,70 +1077,6 @@ private:
 
   // List of async observers that want to get disk consumption information
   nsTArray<RefPtr<DiskConsumptionObserver> > mDiskConsumptionObservers;
-};
-
-class CacheIndexAutoLock {
-public:
-  explicit CacheIndexAutoLock(CacheIndex *aIndex)
-    : mIndex(aIndex)
-    , mLocked(true)
-  {
-    mIndex->Lock();
-  }
-  ~CacheIndexAutoLock()
-  {
-    if (mLocked) {
-      mIndex->Unlock();
-    }
-  }
-  void Lock()
-  {
-    MOZ_ASSERT(!mLocked);
-    mIndex->Lock();
-    mLocked = true;
-  }
-  void Unlock()
-  {
-    MOZ_ASSERT(mLocked);
-    mIndex->Unlock();
-    mLocked = false;
-  }
-
-private:
-  RefPtr<CacheIndex> mIndex;
-  bool mLocked;
-};
-
-class CacheIndexAutoUnlock {
-public:
-  explicit CacheIndexAutoUnlock(CacheIndex *aIndex)
-    : mIndex(aIndex)
-    , mLocked(false)
-  {
-    mIndex->Unlock();
-  }
-  ~CacheIndexAutoUnlock()
-  {
-    if (!mLocked) {
-      mIndex->Lock();
-    }
-  }
-  void Lock()
-  {
-    MOZ_ASSERT(!mLocked);
-    mIndex->Lock();
-    mLocked = true;
-  }
-  void Unlock()
-  {
-    MOZ_ASSERT(mLocked);
-    mIndex->Unlock();
-    mLocked = false;
-  }
-
-private:
-  RefPtr<CacheIndex> mIndex;
-  bool mLocked;
 };
 
 } // namespace net

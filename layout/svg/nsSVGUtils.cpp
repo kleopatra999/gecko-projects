@@ -18,6 +18,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PatternHelpers.h"
 #include "mozilla/Preferences.h"
+#include "nsCSSClipPathInstance.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsDisplayList.h"
 #include "nsFilterInstance.h"
@@ -383,8 +384,10 @@ nsSVGUtils::GetOuterSVGFrameAndCoveredRegion(nsIFrame* aFrame, nsRect* aRect)
   if (outer == svg) {
     return nullptr;
   }
-  *aRect = (aFrame->GetStateBits() & NS_FRAME_IS_NONDISPLAY) ?
-             nsRect(0, 0, 0, 0) : svg->GetCoveredRegion();
+  nsMargin bp = outer->GetUsedBorderAndPadding();
+  *aRect = ((aFrame->GetStateBits() & NS_FRAME_IS_NONDISPLAY) ?
+             nsRect(0, 0, 0, 0) : svg->GetCoveredRegion()) +
+                 nsPoint(bp.left, bp.top);
   return outer;
 }
 
@@ -424,7 +427,7 @@ nsSVGUtils::GetUserToCanvasTM(nsIFrame *aFrame)
     nsSVGElement *content = static_cast<nsSVGElement*>(aFrame->GetContent());
     tm = content->PrependLocalTransformsTo(
                     GetCanvasTM(aFrame->GetParent()),
-                    nsSVGElement::eUserSpaceToParent);
+                    eUserSpaceToParent);
   }
   return tm;
 }
@@ -432,9 +435,7 @@ nsSVGUtils::GetUserToCanvasTM(nsIFrame *aFrame)
 void 
 nsSVGUtils::NotifyChildrenOfSVGChange(nsIFrame *aFrame, uint32_t aFlags)
 {
-  nsIFrame *kid = aFrame->GetFirstPrincipalChild();
-
-  while (kid) {
+  for (nsIFrame* kid : aFrame->PrincipalChildList()) {
     nsISVGChildFrame* SVGFrame = do_QueryFrame(kid);
     if (SVGFrame) {
       SVGFrame->NotifySVGChanged(aFlags); 
@@ -447,7 +448,6 @@ nsSVGUtils::NotifyChildrenOfSVGChange(nsIFrame *aFrame, uint32_t aFlags)
         NotifyChildrenOfSVGChange(kid, aFlags);
       }
     }
-    kid = kid->GetNextSibling();
   }
 }
 
@@ -664,7 +664,7 @@ nsSVGUtils::PaintFrameWithEffects(nsIFrame *aFrame,
    */
   if (clipPathFrame && isTrivialClip) {
     aContext.Save();
-    clipPathFrame->ApplyClipOrPaintClipMask(aContext, aFrame, aTransform);
+    clipPathFrame->ApplyClipPath(aContext, aFrame, aTransform);
   }
 
   /* Paint the child */
@@ -690,8 +690,9 @@ nsSVGUtils::PaintFrameWithEffects(nsIFrame *aFrame,
       dirtyRegion = &tmpDirtyRegion;
     }
     SVGPaintCallback paintCallback;
-    nsFilterInstance::PaintFilteredFrame(aFrame, *target, aTransform,
-                                         &paintCallback, dirtyRegion);
+    nsFilterInstance::PaintFilteredFrame(aFrame, target->GetDrawTarget(),
+                                         aTransform, &paintCallback,
+                                         dirtyRegion);
   } else {
     svgChildFrame->PaintSVG(*target, aTransform, aDirtyRect);
   }
@@ -727,8 +728,13 @@ nsSVGUtils::HitTestClip(nsIFrame *aFrame, const gfxPoint &aPoint)
 {
   nsSVGEffects::EffectProperties props =
     nsSVGEffects::GetEffectProperties(aFrame);
-  if (!props.mClipPath)
+  if (!props.mClipPath) {
+    const nsStyleSVGReset *style = aFrame->StyleSVGReset();
+    if (style->HasClipPath()) {
+      return nsCSSClipPathInstance::HitTestBasicShapeClip(aFrame, aPoint);
+    }
     return true;
+  }
 
   bool isOK = true;
   nsSVGClipPathFrame *clipPathFrame = props.GetClipPathFrame(&isOK);
@@ -755,7 +761,7 @@ nsSVGUtils::HitTestChildren(nsSVGDisplayContainerFrame* aFrame,
   if (aFrame->GetContent()->IsSVGElement()) { // must check before cast
     gfxMatrix m = static_cast<const nsSVGElement*>(aFrame->GetContent())->
                     PrependLocalTransformsTo(gfxMatrix(),
-                                             nsSVGElement::eChildToUserSpace);
+                                             eChildToUserSpace);
     if (!m.IsIdentity()) {
       if (!m.Invert()) {
         return nullptr;
@@ -783,7 +789,7 @@ nsSVGUtils::HitTestChildren(nsSVGDisplayContainerFrame* aFrame,
       if (content->IsSVGElement()) { // must check before cast
         gfxMatrix m = static_cast<const nsSVGElement*>(content)->
                         PrependLocalTransformsTo(gfxMatrix(),
-                                                 nsSVGElement::eUserSpaceToParent);
+                                                 eUserSpaceToParent);
         if (!m.IsIdentity()) {
           if (!m.Invert()) {
             continue;
@@ -970,8 +976,7 @@ nsSVGUtils::GetBBox(nsIFrame *aFrame, uint32_t aFlags)
       // also update nsSVGUtils::FrameSpaceInCSSPxToUserSpaceOffset.
       MOZ_ASSERT(content->IsSVGElement(), "bad cast");
       nsSVGElement *element = static_cast<nsSVGElement*>(content);
-      matrix = element->PrependLocalTransformsTo(matrix,
-                          nsSVGElement::eChildToUserSpace);
+      matrix = element->PrependLocalTransformsTo(matrix, eChildToUserSpace);
     }
     bbox = svg->GetBBoxContribution(ToMatrix(matrix), aFlags).ToThebesRect();
     // Account for 'clipped'.
@@ -1061,8 +1066,7 @@ nsSVGUtils::FrameSpaceInCSSPxToUserSpaceOffset(nsIFrame *aFrame)
   if (aFrame->GetType() == nsGkAtoms::svgForeignObjectFrame ||
       aFrame->GetType() == nsGkAtoms::svgUseFrame) {
     gfxMatrix transform = static_cast<nsSVGElement*>(aFrame->GetContent())->
-        PrependLocalTransformsTo(gfxMatrix(),
-                                 nsSVGElement::eChildToUserSpace);
+        PrependLocalTransformsTo(gfxMatrix(), eChildToUserSpace);
     NS_ASSERTION(!transform.HasNonTranslation(), "we're relying on this being an offset-only transform");
     return transform.GetTranslation();
   }
@@ -1476,7 +1480,7 @@ nsSVGUtils::GetStrokeWidth(nsIFrame* aFrame, gfxTextContextPaint *aContextPaint)
 
 static bool
 GetStrokeDashData(nsIFrame* aFrame,
-                  FallibleTArray<gfxFloat>& aDashes,
+                  nsTArray<gfxFloat>& aDashes,
                   gfxFloat* aDashOffset,
                   gfxTextContextPaint *aContextPaint)
 {
@@ -1580,7 +1584,7 @@ nsSVGUtils::SetupCairoStrokeGeometry(nsIFrame* aFrame,
     break;
   }
 
-  AutoFallibleTArray<gfxFloat, 10> dashes;
+  AutoTArray<gfxFloat, 10> dashes;
   gfxFloat dashOffset;
   if (GetStrokeDashData(aFrame, dashes, &dashOffset, aContextPaint)) {
     aContext->SetDash(dashes.Elements(), dashes.Length(), dashOffset);
@@ -1663,7 +1667,7 @@ nsSVGUtils::PaintSVGGlyph(Element* aElement, gfxContext* aContext,
     // PaintSVG() expects the passed transform to be the transform to its own
     // SVG user space, so we need to account for any 'transform' attribute:
     m = static_cast<nsSVGElement*>(frame->GetContent())->
-          PrependLocalTransformsTo(gfxMatrix(), nsSVGElement::eUserSpaceToParent);
+          PrependLocalTransformsTo(gfxMatrix(), eUserSpaceToParent);
   }
   nsresult rv = svgFrame->PaintSVG(*aContext, m);
   return NS_SUCCEEDED(rv);

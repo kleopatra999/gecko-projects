@@ -11,6 +11,7 @@
 #include "nsIObserverService.h"
 #include "mozilla/Services.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/TimeStamp.h"
 #include "nsServiceManagerUtils.h"
 #include "prsystem.h"
 #include <time.h>
@@ -50,7 +51,8 @@ int32_t CacheObserver::sMemoryCacheCapacity = kDefaultMemoryCacheCapacity;
 int32_t CacheObserver::sAutoMemoryCacheCapacity = -1;
 
 static uint32_t const kDefaultDiskCacheCapacity = 250 * 1024; // 250 MB
-uint32_t CacheObserver::sDiskCacheCapacity = kDefaultDiskCacheCapacity;
+Atomic<uint32_t,Relaxed> CacheObserver::sDiskCacheCapacity
+                                           (kDefaultDiskCacheCapacity);
 
 static uint32_t const kDefaultDiskFreeSpaceSoftLimit = 5 * 1024; // 5MB
 uint32_t CacheObserver::sDiskFreeSpaceSoftLimit = kDefaultDiskFreeSpaceSoftLimit;
@@ -90,6 +92,9 @@ bool CacheObserver::sCacheFSReported = kDefaultCacheFSReported;
 
 static bool kDefaultHashStatsReported = false;
 bool CacheObserver::sHashStatsReported = kDefaultHashStatsReported;
+
+static int32_t const kDefaultMaxShutdownIOLag = 2; // seconds
+int32_t CacheObserver::sMaxShutdownIOLag = kDefaultMaxShutdownIOLag;
 
 NS_IMPL_ISUPPORTS(CacheObserver,
                   nsIObserver,
@@ -154,7 +159,7 @@ CacheObserver::AttachToPreferences()
   mozilla::Preferences::AddUintVarCache(
     &sMetadataMemoryLimit, "browser.cache.disk.metadata_memory_limit", kDefaultMetadataMemoryLimit);
 
-  mozilla::Preferences::AddUintVarCache(
+  mozilla::Preferences::AddAtomicUintVarCache(
     &sDiskCacheCapacity, "browser.cache.disk.capacity", kDefaultDiskCacheCapacity);
   mozilla::Preferences::AddBoolVarCache(
     &sSmartCacheSizeEnabled, "browser.cache.disk.smart_size.enabled", kDefaultSmartCacheSizeEnabled);
@@ -237,10 +242,13 @@ CacheObserver::AttachToPreferences()
     &sSanitizeOnShutdown, "privacy.sanitize.sanitizeOnShutdown", kDefaultSanitizeOnShutdown);
   mozilla::Preferences::AddBoolVarCache(
     &sClearCacheOnShutdown, "privacy.clearOnShutdown.cache", kDefaultClearCacheOnShutdown);
+
+  mozilla::Preferences::AddIntVarCache(
+    &sMaxShutdownIOLag, "browser.cache.max_shutdown_io_lag", kDefaultMaxShutdownIOLag);
 }
 
 // static
-uint32_t const CacheObserver::MemoryCacheCapacity()
+uint32_t CacheObserver::MemoryCacheCapacity()
 {
   if (sMemoryCacheCapacity >= 0)
     return sMemoryCacheCapacity << 10;
@@ -278,7 +286,7 @@ uint32_t const CacheObserver::MemoryCacheCapacity()
 }
 
 // static
-bool const CacheObserver::UseNewCache()
+bool CacheObserver::UseNewCache()
 {
   uint32_t useNewCache = sUseNewCache;
 
@@ -395,7 +403,7 @@ namespace CacheStorageEvictHelper {
 
 nsresult ClearStorage(bool const aPrivate,
                       bool const aAnonymous,
-                      OriginAttributes const &aOa)
+                      NeckoOriginAttributes const &aOa)
 {
   nsresult rv;
 
@@ -420,7 +428,7 @@ nsresult ClearStorage(bool const aPrivate,
   return NS_OK;
 }
 
-nsresult Run(OriginAttributes const &aOa)
+nsresult Run(NeckoOriginAttributes const &aOa)
 {
   nsresult rv;
 
@@ -441,7 +449,7 @@ nsresult Run(OriginAttributes const &aOa)
 } // anon
 
 // static
-bool const CacheObserver::EntryIsTooBig(int64_t aSize, bool aUsingDisk)
+bool CacheObserver::EntryIsTooBig(int64_t aSize, bool aUsingDisk)
 {
   // If custom limit is set, check it.
   int64_t preferredLimit = aUsingDisk ? sMaxDiskEntrySize : sMaxMemoryEntrySize;
@@ -464,6 +472,13 @@ bool const CacheObserver::EntryIsTooBig(int64_t aSize, bool aUsingDisk)
     return true;
 
   return false;
+}
+
+// static
+TimeDuration const& CacheObserver::MaxShutdownIOLag()
+{
+  static TimeDuration period = TimeDuration::FromSeconds(sMaxShutdownIOLag);
+  return period;
 }
 
 NS_IMETHODIMP
@@ -489,18 +504,13 @@ CacheObserver::Observe(nsISupports* aSubject,
     return NS_OK;
   }
 
-  if (!strcmp(aTopic, "profile-before-change")) {
+  if (!strcmp(aTopic, "profile-change-net-teardown") ||
+      !strcmp(aTopic, "profile-before-change") ||
+      !strcmp(aTopic, "xpcom-shutdown")) {
     RefPtr<CacheStorageService> service = CacheStorageService::Self();
-    if (service)
+    if (service) {
       service->Shutdown();
-
-    return NS_OK;
-  }
-
-  if (!strcmp(aTopic, "xpcom-shutdown")) {
-    RefPtr<CacheStorageService> service = CacheStorageService::Self();
-    if (service)
-      service->Shutdown();
+    }
 
     CacheFileIOManager::Shutdown();
     return NS_OK;
@@ -508,16 +518,17 @@ CacheObserver::Observe(nsISupports* aSubject,
 
   if (!strcmp(aTopic, "last-pb-context-exited")) {
     RefPtr<CacheStorageService> service = CacheStorageService::Self();
-    if (service)
+    if (service) {
       service->DropPrivateBrowsingEntries();
+    }
 
     return NS_OK;
   }
 
   if (!strcmp(aTopic, "clear-origin-data")) {
-    OriginAttributes oa;
+    NeckoOriginAttributes oa;
     if (!oa.Init(nsDependentString(aData))) {
-      NS_ERROR("Could not parse OriginAttributes JSON in clear-origin-data notification");
+      NS_ERROR("Could not parse NeckoOriginAttributes JSON in clear-origin-data notification");
       return NS_OK;
     }
 

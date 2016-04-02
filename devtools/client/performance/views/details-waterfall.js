@@ -1,6 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* import-globals-from ../performance-controller.js */
+/* import-globals-from ../performance-view.js */
+/* globals window */
 "use strict";
 
 const WATERFALL_RESIZE_EVENTS_DRAIN = 100; // ms
@@ -61,6 +64,8 @@ var WaterfallView = Heritage.extend(DetailsSubview, {
   destroy: function () {
     DetailsSubview.destroy.call(this);
 
+    clearNamedTimeout("waterfall-resize");
+
     this._cache = null;
 
     this.details.off("resize", this._onResize);
@@ -83,7 +88,7 @@ var WaterfallView = Heritage.extend(DetailsSubview, {
     let rootMarkerNode = this._prepareWaterfallTree(markers);
 
     this._populateWaterfallTree(rootMarkerNode, { startTime, endTime });
-    this.emit(EVENTS.WATERFALL_RENDERED);
+    this.emit(EVENTS.UI_WATERFALL_RENDERED);
   },
 
   /**

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests basic file search functionality.
@@ -39,7 +41,7 @@ function test() {
 function performSimpleSearch() {
   let finished = promise.all([
     ensureSourceIs(gPanel, "-02.js"),
-    ensureCaretAt(gPanel, 1),
+    ensureCaretAt(gPanel, 6),
     waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FILE_SEARCH_MATCH_FOUND),
     waitForSourceShown(gPanel, "-01.js")
   ]);

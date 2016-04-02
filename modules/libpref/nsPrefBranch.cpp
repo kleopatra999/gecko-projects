@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -126,7 +127,21 @@ NS_IMETHODIMP nsPrefBranch::GetPrefType(const char *aPrefName, int32_t *_retval)
 {
   NS_ENSURE_ARG(aPrefName);
   const char *pref = getPrefName(aPrefName);
-  *_retval = PREF_GetPrefType(pref);
+  switch (PREF_GetPrefType(pref)) {
+    case PrefType::String:
+      *_retval = PREF_STRING;
+      break;
+    case PrefType::Int:
+      *_retval = PREF_INT;
+      break;
+    case PrefType::Bool:
+      *_retval = PREF_BOOL;
+        break;
+    case PrefType::Invalid:
+    default:
+      *_retval = PREF_INVALID;
+      break;
+  }
   return NS_OK;
 }
 
@@ -533,7 +548,7 @@ NS_IMETHODIMP nsPrefBranch::GetChildList(const char *aStartingAt, uint32_t *aCou
   char            **outArray;
   int32_t         numPrefs;
   int32_t         dwIndex;
-  nsAutoTArray<nsCString, 32> prefArray;
+  AutoTArray<nsCString, 32> prefArray;
 
   NS_ENSURE_ARG(aStartingAt);
   NS_ENSURE_ARG_POINTER(aCount);
@@ -635,8 +650,8 @@ NS_IMETHODIMP nsPrefBranch::RemoveObserver(const char *aDomain, nsIObserver *aOb
   // it hasn't been already.
   //
   // It's important that we don't touch mObservers in any way -- even a Get()
-  // which retuns null might cause the hashtable to resize itself, which will
-  // break the Enumerator in freeObserverList.
+  // which returns null might cause the hashtable to resize itself, which will
+  // break the iteration in freeObserverList.
   if (mFreeingObserverList)
     return NS_OK;
 
@@ -686,32 +701,29 @@ void nsPrefBranch::NotifyObserver(const char *newpref, void *data)
                     NS_ConvertASCIItoUTF16(suffix).get());
 }
 
-PLDHashOperator
-FreeObserverFunc(PrefCallback *aKey,
-                 nsAutoPtr<PrefCallback> &aCallback,
-                 void *aArgs)
+size_t
+nsPrefBranch::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
-  // Calling NS_RELEASE below might trigger a call to
-  // nsPrefBranch::RemoveObserver, since some classes remove themselves from
-  // the pref branch on destruction.  We don't need to worry about this causing
-  // double-frees, however, because freeObserverList sets mFreeingObserverList
-  // to true, which prevents RemoveObserver calls from doing anything.
-
-  nsPrefBranch *prefBranch = aCallback->GetPrefBranch();
-  const char *pref = prefBranch->getPrefName(aCallback->GetDomain().get());
-  PREF_UnregisterCallback(pref, nsPrefBranch::NotifyObserver, aCallback);
-
-  return PL_DHASH_REMOVE;
+  size_t n = aMallocSizeOf(this);
+  n += mPrefRoot.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+  n += mObservers.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  return n;
 }
 
 void nsPrefBranch::freeObserverList(void)
 {
-  // We need to prevent anyone from modifying mObservers while we're
-  // enumerating over it.  In particular, some clients will call
-  // RemoveObserver() when they're destructed; we need to keep those calls from
-  // touching mObservers.
+  // We need to prevent anyone from modifying mObservers while we're iterating
+  // over it. In particular, some clients will call RemoveObserver() when
+  // they're removed and destructed via the iterator; we set
+  // mFreeingObserverList to keep those calls from touching mObservers.
   mFreeingObserverList = true;
-  mObservers.Enumerate(&FreeObserverFunc, nullptr);
+  for (auto iter = mObservers.Iter(); !iter.Done(); iter.Next()) {
+    nsAutoPtr<PrefCallback>& callback = iter.Data();
+    nsPrefBranch *prefBranch = callback->GetPrefBranch();
+    const char *pref = prefBranch->getPrefName(callback->GetDomain().get());
+    PREF_UnregisterCallback(pref, nsPrefBranch::NotifyObserver, callback);
+    iter.Remove();
+  }
   mFreeingObserverList = false;
 }
 

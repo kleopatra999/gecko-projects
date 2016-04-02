@@ -18,7 +18,8 @@
 #include "nsTArray.h"
 #include "nsTHashtable.h"
 #include "nsUnicodeProperties.h"
-#include "prprf.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 
 namespace mozilla {
 
@@ -122,7 +123,7 @@ GetAlphabeticCounterText(CounterValue aOrdinal,
   // The precise length of this array should be
   // ceil(log((double) aOrdinal / n * (n - 1) + 1) / log(n)).
   // The max length is slightly smaller than which defined below.
-  nsAutoTArray<int32_t, std::numeric_limits<CounterValue>::digits> indexes;
+  AutoTArray<int32_t, std::numeric_limits<CounterValue>::digits> indexes;
   while (aOrdinal > 0) {
     --aOrdinal;
     indexes.AppendElement(aOrdinal % n);
@@ -151,7 +152,7 @@ GetNumericCounterText(CounterValue aOrdinal,
   }
 
   auto n = aSymbols.Length();
-  nsAutoTArray<int32_t, std::numeric_limits<CounterValue>::digits> indexes;
+  AutoTArray<int32_t, std::numeric_limits<CounterValue>::digits> indexes;
   while (aOrdinal > 0) {
     indexes.AppendElement(aOrdinal % n);
     aOrdinal /= n;
@@ -210,10 +211,7 @@ GetAdditiveCounterText(CounterValue aOrdinal,
 static bool
 DecimalToText(CounterValue aOrdinal, nsSubstring& aResult)
 {
-  // 3 for additional digit, negative sign, and null
-  char cbuf[std::numeric_limits<CounterValue>::digits10 + 3];
-  PR_snprintf(cbuf, sizeof(cbuf), "%ld", aOrdinal);
-  aResult.AssignASCII(cbuf);
+  aResult.AppendInt(aOrdinal);
   return true;
 }
 
@@ -2013,8 +2011,13 @@ CounterStyleManager::BuildCounterStyle(const nsSubstring& aName)
 
   // It is intentional that the predefined names are case-insensitive
   // but the user-defined names case-sensitive.
-  nsCSSCounterStyleRule* rule =
-    mPresContext->StyleSet()->CounterStyleRuleForName(aName);
+  // XXXheycam ServoStyleSets do not support custom counter styles yet.
+  StyleSetHandle styleSet = mPresContext->StyleSet();
+  NS_ASSERTION(styleSet->IsGecko(),
+               "stylo: ServoStyleSets do not support custom counter "
+               "styles yet");
+  nsCSSCounterStyleRule* rule = styleSet->IsGecko() ?
+    styleSet->AsGecko()->CounterStyleRuleForName(aName) : nullptr;
   if (rule) {
     data = new (mPresContext) CustomCounterStyle(this, rule);
   } else {
@@ -2045,74 +2048,59 @@ CounterStyleManager::GetBuiltinStyle(int32_t aStyle)
   return &gBuiltinStyleTable[aStyle];
 }
 
-struct InvalidateOldStyleData
-{
-  explicit InvalidateOldStyleData(nsPresContext* aPresContext)
-    : mPresContext(aPresContext),
-      mChanged(false)
-  {
-  }
-
-  nsPresContext* mPresContext;
-  nsTArray<RefPtr<CounterStyle>> mToBeRemoved;
-  bool mChanged;
-};
-
-static PLDHashOperator
-InvalidateOldStyle(const nsSubstring& aKey,
-                   RefPtr<CounterStyle>& aStyle,
-                   void* aArg)
-{
-  InvalidateOldStyleData* data = static_cast<InvalidateOldStyleData*>(aArg);
-  bool toBeUpdated = false;
-  bool toBeRemoved = false;
-  nsCSSCounterStyleRule* newRule = data->mPresContext->
-    StyleSet()->CounterStyleRuleForName(aKey);
-  if (!newRule) {
-    if (aStyle->IsCustomStyle()) {
-      toBeRemoved = true;
-    }
-  } else {
-    if (!aStyle->IsCustomStyle()) {
-      toBeRemoved = true;
-    } else {
-      CustomCounterStyle* style =
-        static_cast<CustomCounterStyle*>(aStyle.get());
-      if (style->GetRule() != newRule) {
-        toBeRemoved = true;
-      } else if (style->GetRuleGeneration() != newRule->GetGeneration()) {
-        toBeUpdated = true;
-        style->ResetCachedData();
-      }
-    }
-  }
-  data->mChanged = data->mChanged || toBeUpdated || toBeRemoved;
-  if (toBeRemoved) {
-    if (aStyle->IsDependentStyle()) {
-      if (aStyle->IsCustomStyle()) {
-        // Since |aStyle| is being removed from mCacheTable, it won't be visited
-        // by our post-removal iteration. So, we have to give it a manual
-        // ResetDependentData() call. (This only really matters if something
-        // else is holding a reference and keeping it alive.)
-        static_cast<CustomCounterStyle*>(aStyle.get())->ResetDependentData();
-      }
-      // The object has to be held here so that it will not be released
-      // before all pointers that refer to it are reset. It will be
-      // released when the MarkAndCleanData goes out of scope at the end
-      // of NotifyRuleChanged().
-      data->mToBeRemoved.AppendElement(aStyle);
-    }
-    return PL_DHASH_REMOVE;
-  }
-  return PL_DHASH_NEXT;
-}
-
 bool
 CounterStyleManager::NotifyRuleChanged()
 {
-  InvalidateOldStyleData data(mPresContext);
-  mCacheTable.Enumerate(InvalidateOldStyle, &data);
-  if (data.mChanged) {
+  bool changed = false;
+  nsTArray<RefPtr<CounterStyle>> kungFuDeathGrip;
+  for (auto iter = mCacheTable.Iter(); !iter.Done(); iter.Next()) {
+    RefPtr<CounterStyle>& style = iter.Data();
+    bool toBeUpdated = false;
+    bool toBeRemoved = false;
+    // XXXheycam ServoStyleSets do not support custom counter styles yet.
+    StyleSetHandle styleSet = mPresContext->StyleSet();
+    NS_ASSERTION(styleSet->IsGecko(),
+                 "stylo: ServoStyleSets do not support custom counter "
+                 "styles yet");
+    nsCSSCounterStyleRule* newRule = styleSet->IsGecko() ?
+        styleSet->AsGecko()->CounterStyleRuleForName(iter.Key()) : nullptr;
+    if (!newRule) {
+      if (style->IsCustomStyle()) {
+        toBeRemoved = true;
+      }
+    } else {
+      if (!style->IsCustomStyle()) {
+        toBeRemoved = true;
+      } else {
+        auto custom = static_cast<CustomCounterStyle*>(style.get());
+        if (custom->GetRule() != newRule) {
+          toBeRemoved = true;
+        } else if (custom->GetRuleGeneration() != newRule->GetGeneration()) {
+          toBeUpdated = true;
+          custom->ResetCachedData();
+        }
+      }
+    }
+    changed = changed || toBeUpdated || toBeRemoved;
+    if (toBeRemoved) {
+      if (style->IsDependentStyle()) {
+        if (style->IsCustomStyle()) {
+          // Since |style| is being removed from mCacheTable, it won't be
+          // visited by our post-removal iteration. So, we have to give it a
+          // manual ResetDependentData() call. (This only really matters if
+          // something else is holding a reference and keeping it alive.)
+          static_cast<CustomCounterStyle*>(style.get())->ResetDependentData();
+        }
+        // The object has to be held here so that it will not be released
+        // before all pointers that refer to it are reset. It will be released
+        // when kungFuDeathGrip goes out of scope at the end of this function.
+        kungFuDeathGrip.AppendElement(style);
+      }
+      iter.Remove();
+    }
+  }
+
+  if (changed) {
     for (auto iter = mCacheTable.Iter(); !iter.Done(); iter.Next()) {
       CounterStyle* style = iter.UserData();
       if (style->IsCustomStyle()) {
@@ -2123,7 +2111,7 @@ CounterStyleManager::NotifyRuleChanged()
       // instances, so we don't need to reset their data.
     }
   }
-  return data.mChanged;
+  return changed;
 }
 
 } // namespace mozilla

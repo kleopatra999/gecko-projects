@@ -88,6 +88,18 @@ AssemblerMIPSShared::finish()
     isFinished = true;
 }
 
+bool
+AssemblerMIPSShared::asmMergeWith(const AssemblerMIPSShared& other)
+{
+    if (!AssemblerShared::asmMergeWith(size(), other))
+        return false;
+    for (size_t i = 0; i < other.numLongJumps(); i++) {
+        size_t off = other.longJumps_[i];
+        addLongJump(BufferOffset(size() + off));
+    }
+    return m_buffer.appendBuffer(other.m_buffer);
+}
+
 uint32_t
 AssemblerMIPSShared::actualIndex(uint32_t idx_) const
 {
@@ -126,7 +138,7 @@ AssemblerMIPSShared::processCodeLabels(uint8_t* rawCode)
 {
     for (size_t i = 0; i < codeLabels_.length(); i++) {
         CodeLabel label = codeLabels_[i];
-        Bind(rawCode, label.dest(), rawCode + label.src()->offset());
+        Bind(rawCode, label.patchAt(), rawCode + label.target()->offset());
     }
 }
 
@@ -207,6 +219,12 @@ AssemblerMIPSShared::InvertCondition(DoubleCondition cond)
 BOffImm16::BOffImm16(InstImm inst)
   : data(inst.encode() & Imm16Mask)
 {
+}
+
+Instruction*
+BOffImm16::getDest(Instruction* src) const
+{
+    return &src[(((int32_t)data << 16) >> 16) + 1];
 }
 
 bool
@@ -1285,6 +1303,36 @@ AssemblerMIPSShared::as_cule(FloatFormat fmt, FloatRegister fs, FloatRegister ft
     return writeInst(InstReg(op_cop1, rs, ft, fs, fcc << FccShift, ff_c_ule_fmt).encode());
 }
 
+// FP conditional move.
+BufferOffset
+AssemblerMIPSShared::as_movt(FloatFormat fmt, FloatRegister fd, FloatRegister fs, FPConditionBit fcc)
+{
+    RSField rs = fmt == DoubleFloat ? rs_d : rs_s;
+    Register rt = Register::FromCode(fcc << 2 | 1);
+    return writeInst(InstReg(op_cop1, rs, rt, fs, fd, ff_movf_fmt).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_movf(FloatFormat fmt, FloatRegister fd, FloatRegister fs, FPConditionBit fcc)
+{
+    RSField rs = fmt == DoubleFloat ? rs_d : rs_s;
+    Register rt = Register::FromCode(fcc << 2 | 0);
+    return writeInst(InstReg(op_cop1, rs, rt, fs, fd, ff_movf_fmt).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_movz(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt)
+{
+    RSField rs = fmt == DoubleFloat ? rs_d : rs_s;
+    return writeInst(InstReg(op_cop1, rs, rt, fs, fd, ff_movz_fmt).encode());
+}
+
+BufferOffset
+AssemblerMIPSShared::as_movn(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt)
+{
+    RSField rs = fmt == DoubleFloat ? rs_d : rs_s;
+    return writeInst(InstReg(op_cop1, rs, rt, fs, fd, ff_movn_fmt).encode());
+}
 
 void
 AssemblerMIPSShared::bind(Label* label, BufferOffset boff)
@@ -1312,6 +1360,26 @@ AssemblerMIPSShared::bind(Label* label, BufferOffset boff)
         } while (next != LabelBase::INVALID_OFFSET);
     }
     label->bind(dest.getOffset());
+}
+
+void
+AssemblerMIPSShared::bindLater(Label* label, wasm::JumpTarget target)
+{
+    if (label->used()) {
+        int32_t next;
+
+        BufferOffset b(label);
+        do {
+            Instruction* inst = editSrc(b);
+
+            append(target, b.getOffset());
+            next = inst[1].encode();
+            inst[1].makeNop();
+
+            b = BufferOffset(next);
+        } while (next != LabelBase::INVALID_OFFSET);
+    }
+    label->reset();
 }
 
 void

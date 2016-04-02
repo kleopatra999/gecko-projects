@@ -14,9 +14,9 @@
     function doTest()
     {
       testTextAtOffset("line_test_1", BOUNDARY_LINE_START,
-                       [[0, 5, "Line 1", 0, 6],
-                        [6, 6, "", 6, 6],
-                        [7, 13, "Line 3", 7, 13]]);
+                       [[0, 6, "Line 1 ", 0, 7],
+                        [7, 7, "", 7, 7],
+                        [8, 15, "Line 3 ", 8, 15]]);
 
       //////////////////////////////////////////////////////////////////////////
       // __h__e__l__l__o__ __m__y__ __f__r__i__e__n__d__
@@ -114,10 +114,10 @@
                        [ [ 0, 3, "foo\n", 0, 4 ], [ 4, 4, "", 4, 4 ] ]);
 
       //////////////////////////////////////////////////////////////////////////
-      // 'Hello world'
+      // 'Hello world ' (\n is rendered as space)
 
       testTextAtOffset([ "ht_4" ], BOUNDARY_LINE_START,
-                       [ [ 0, 11, "Hello world", 0, 11 ] ]);
+                       [ [ 0, 12, "Hello world ", 0, 12 ] ]);
 
       //////////////////////////////////////////////////////////////////////////
       // list items
@@ -236,7 +236,7 @@ two words
   <ul id="ul1">
     <li id="li1">Item</li>
     <li id="li2"></li>
-    <li id="li3" style="width:10ex; font-family:monospace; font-size:10pt;">a long and winding road that lead me to your door</li>
+    <li id="li3" style="font-family:monospace; font-size:10pt; width:8ch;">a long and winding road that lead me to your door</li>
     <li id="li4">a <a href=''>b</a> c</li>
     <li id="li5"><br>hello</li>
   </ul>
@@ -244,7 +244,7 @@ two words
   <ol id="ol1">
     <li id="li6">Item</li>
     <li id="li7"></li>
-    <li id="li8" style="width:10ex; font-family:monospace; font-size:10pt;">a long and winding road that lead me to your door</li>
+    <li id="li8" style="font-family:monospace; font-size:10pt; width:8ch;">a long and winding road that lead me to your door</li>
     <li id="li9">a <a href=''>b</a> c</li>
     <li id="li10"><br>hello</li>
   </ol>

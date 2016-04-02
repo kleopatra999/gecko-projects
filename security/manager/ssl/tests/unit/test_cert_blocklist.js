@@ -2,6 +2,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 // This test checks a number of things:
 // * it ensures that data loaded from revocations.txt on startup is present
@@ -11,69 +12,49 @@
 // * it does a sanity check to ensure other cert verifier behavior is
 //   unmodified
 
-var { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
-
 // First, we need to setup appInfo for the blocklist service to work
 var id = "xpcshell@tests.mozilla.org";
 var appName = "XPCShell";
 var version = "1";
 var platformVersion = "1.9.2";
-var appInfo = {
-  // nsIXULAppInfo
-  vendor: "Mozilla",
+Cu.import("resource://testing-common/AppInfo.jsm", this);
+/*global updateAppInfo:false*/ // Imported via AppInfo.jsm.
+updateAppInfo({
   name: appName,
   ID: id,
   version: version,
-  appBuildID: "2007010101",
   platformVersion: platformVersion ? platformVersion : "1.0",
-  platformBuildID: "2007010101",
-
-  // nsIXULRuntime
-  inSafeMode: false,
-  logConsoleErrors: true,
-  OS: "XPCShell",
-  XPCOMABI: "noarch-spidermonkey",
-  invalidateCachesOnRestart: function invalidateCachesOnRestart() {
-    // Do nothing
-  },
-
-  // nsICrashReporter
-  annotations: {},
-
-  annotateCrashReport: function(key, data) {
-    this.annotations[key] = data;
-  },
-
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIXULAppInfo,
-                                         Ci.nsIXULRuntime,
-                                         Ci.nsICrashReporter,
-                                         Ci.nsISupports])
-};
-
-var XULAppInfoFactory = {
-  createInstance: function (outer, iid) {
-    appInfo.QueryInterface(iid);
-    if (outer != null) {
-      throw Cr.NS_ERROR_NO_AGGREGATION;
-    }
-    return appInfo.QueryInterface(iid);
-  }
-};
-
-var registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-const XULAPPINFO_CONTRACTID = "@mozilla.org/xre/app-info;1";
-const XULAPPINFO_CID = Components.ID("{c763b610-9d49-455a-bbd2-ede71682a1ac}");
-registrar.registerFactory(XULAPPINFO_CID, "XULAppInfo",
-                          XULAPPINFO_CONTRACTID, XULAppInfoFactory);
+  crashReporter: true,
+});
 
 // we need to ensure we setup revocation data before certDB, or we'll start with
 // no revocation.txt in the profile
 var profile = do_get_profile();
+
+// Write out an empty blocklist.xml file to the profile to ensure nothing
+// is blocklisted by default
+var blockFile = profile.clone();
+blockFile.append("blocklist.xml");
+var stream = Cc["@mozilla.org/network/file-output-stream;1"]
+               .createInstance(Ci.nsIFileOutputStream);
+stream.init(blockFile,
+  FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE | FileUtils.MODE_TRUNCATE,
+  FileUtils.PERMS_FILE, 0);
+
+var data = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+           "<blocklist xmlns=\"http://www.mozilla.org/2006/addons-blocklist\">\n" +
+           "</blocklist>\n";
+stream.write(data, data.length);
+stream.close();
+
+const PREF_KINTO_UPDATE_ENABLED = "services.kinto.update_enabled";
+const PREF_ONECRL_VIA_AMO = "security.onecrl.via.amo";
+
 var revocations = profile.clone();
 revocations.append("revocations.txt");
 if (!revocations.exists()) {
   let existing = do_get_file("test_onecrl/sample_revocations.txt", false);
-  existing.copyTo(profile,"revocations.txt");
+  existing.copyTo(profile, "revocations.txt");
 }
 
 var certDB = Cc["@mozilla.org/security/x509certdb;1"]
@@ -82,8 +63,7 @@ var certDB = Cc["@mozilla.org/security/x509certdb;1"]
 // set up a test server to serve the blocklist.xml
 var testserver = new HttpServer();
 
-var blocklist_contents =
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+var initialBlocklist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
     "<blocklist xmlns=\"http://www.mozilla.org/2006/addons-blocklist\">" +
     // test with some bad data ...
     "<certItems><certItem issuerName='Some nonsense in issuer'>" +
@@ -112,15 +92,33 @@ var blocklist_contents =
     // also in the blocklist
     "<certItem issuerName='YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy'>" +
     "<serialNumber>c2VyaWFsMi4=</serialNumber>" +
-    "<serialNumber>YW5vdGhlciBzZXJpYWwu</serialNumber>" +
+    "<serialNumber>YW5vdGhlciBzZXJpYWwu</serialNumber></certItem>" +
     // This item revokes same-issuer-ee.pem by subject and pubKeyHash.
-    "</certItem><certItem subject='MCIxIDAeBgNVBAMMF0Fub3RoZXIgVGVzdCBFbmQtZW50aXR5'"+
+    "<certItem subject='MCIxIDAeBgNVBAMMF0Fub3RoZXIgVGVzdCBFbmQtZW50aXR5'" +
     " pubKeyHash='VCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8='>" +
     "</certItem></certItems></blocklist>";
-testserver.registerPathHandler("/push_blocked_cert/",
-  function serveResponse(request, response) {
-    response.write(blocklist_contents);
-  });
+
+var updatedBlocklist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+    "<blocklist xmlns=\"http://www.mozilla.org/2006/addons-blocklist\">" +
+    "<certItems>" +
+    "<certItem issuerName='something new in both the issuer'>" +
+    "<serialNumber>and the serial number</serialNumber></certItem>" +
+    "</certItems></blocklist>";
+
+
+var blocklists = {
+  "/initialBlocklist/" : initialBlocklist,
+  "/updatedBlocklist/" : updatedBlocklist
+};
+
+function serveResponse(request, response) {
+  do_print("Serving for path " + request.path + "\n");
+  response.write(blocklists[request.path]);
+}
+
+for (var path in blocklists) {
+  testserver.registerPathHandler(path, serveResponse);
+}
 
 // start the test server
 testserver.start(-1);
@@ -170,6 +168,42 @@ function test_is_revoked(certList, issuerString, serialString, subjectString,
                                 pubKeyString ? pubKeyString.length : 0);
 }
 
+function fetch_blocklist(blocklistPath) {
+  do_print("path is " + blocklistPath + "\n");
+  let certblockObserver = {
+    observe: function(aSubject, aTopic, aData) {
+      Services.obs.removeObserver(this, "blocklist-updated");
+      run_next_test();
+    }
+  };
+
+  Services.obs.addObserver(certblockObserver, "blocklist-updated", false);
+  Services.prefs.setCharPref("extensions.blocklist.url",
+                              `http://localhost:${port}/${blocklistPath}`);
+  let blocklist = Cc["@mozilla.org/extensions/blocklist;1"]
+                    .getService(Ci.nsITimerCallback);
+  blocklist.notify(null);
+}
+
+function check_revocations_txt_contents(expected) {
+  let profile = do_get_profile();
+  let revocations = profile.clone();
+  revocations.append("revocations.txt");
+  ok(revocations.exists(), "the revocations file should exist");
+  let inputStream = Cc["@mozilla.org/network/file-input-stream;1"]
+                      .createInstance(Ci.nsIFileInputStream);
+  inputStream.init(revocations, -1, -1, 0);
+  inputStream.QueryInterface(Ci.nsILineInputStream);
+  let contents = "";
+  let hasmore = false;
+  do {
+    var line = {};
+    hasmore = inputStream.readLine(line);
+    contents = contents + (contents.length == 0 ? "" : "\n") + line.value;
+  } while (hasmore);
+  equal(contents, expected, "revocations.txt should be as expected");
+}
+
 function run_test() {
   // import the certificates we need
   load_cert("test-ca", "CTu,CTu,CTu");
@@ -177,61 +211,68 @@ function run_test() {
   load_cert("other-test-ca", "CTu,CTu,CTu");
 
   let certList = Cc["@mozilla.org/security/certblocklist;1"]
-                   .getService(Ci.nsICertBlocklist);
+                  .getService(Ci.nsICertBlocklist);
 
-  // check some existing items in revocations.txt are blocked. Since the
-  // CertBlocklistItems don't know about the data they contain, we can use
-  // arbitrary data (not necessarily DER) to test if items are revoked or not.
-  // This test corresponds to:
-  // issuer: c29tZSBpbWFnaW5hcnkgaXNzdWVy
-  // serial: c2VyaWFsLg==
-  ok(test_is_revoked(certList, "some imaginary issuer", "serial."),
-     "issuer / serial pair should be blocked");
+  let expected = "# Auto generated contents. Do not edit.\n" +
+                 "MCIxIDAeBgNVBAMMF0Fub3RoZXIgVGVzdCBFbmQtZW50aXR5\n" +
+                 "\tVCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=\n" +
+                 "MBIxEDAOBgNVBAMMB1Rlc3QgQ0E=\n" +
+                 " BVio/iQ21GCi2iUven8oJ/gae74=\n" +
+                 "MBgxFjAUBgNVBAMMDU90aGVyIHRlc3QgQ0E=\n" +
+                 " exJUIJpq50jgqOwQluhVrAzTF74=\n" +
+                 "YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy\n" +
+                 " YW5vdGhlciBzZXJpYWwu\n" +
+                 " c2VyaWFsMi4=";
 
-  // This test corresponds to:
-  // issuer: YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy
-  // serial: c2VyaWFsLg==
-  ok(test_is_revoked(certList, "another imaginary issuer", "serial."),
-     "issuer / serial pair should be blocked");
+  // This test assumes OneCRL updates via AMO
+  Services.prefs.setBoolPref(PREF_KINTO_UPDATE_ENABLED, false);
+  Services.prefs.setBoolPref(PREF_ONECRL_VIA_AMO, true);
 
-  // And this test corresponds to:
-  // issuer: YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy
-  // serial: c2VyaWFsMi4=
-  // (we test this issuer twice to ensure we can read multiple serials)
-  ok(test_is_revoked(certList, "another imaginary issuer", "serial2."),
-     "issuer / serial pair should be blocked");
+  add_test(function () {
+    // check some existing items in revocations.txt are blocked. Since the
+    // CertBlocklistItems don't know about the data they contain, we can use
+    // arbitrary data (not necessarily DER) to test if items are revoked or not.
+    // This test corresponds to:
+    // issuer: c29tZSBpbWFnaW5hcnkgaXNzdWVy
+    // serial: c2VyaWFsLg==
+    ok(test_is_revoked(certList, "some imaginary issuer", "serial."),
+      "issuer / serial pair should be blocked");
 
-  // Soon we'll load a blocklist which revokes test-int.pem, which issued
-  // test-int-ee.pem.
-  // Check the cert validates before we load the blocklist
-  let file = "test_onecrl/test-int-ee.pem";
-  verify_cert(file, PRErrorCodeSuccess);
+    // This test corresponds to:
+    // issuer: YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy
+    // serial: c2VyaWFsLg==
+    ok(test_is_revoked(certList, "another imaginary issuer", "serial."),
+      "issuer / serial pair should be blocked");
 
-  // The blocklist also revokes other-test-ca.pem, which issued other-ca-ee.pem.
-  // Check the cert validates before we load the blocklist
-  file = "bad_certs/other-issuer-ee.pem";
-  verify_cert(file, PRErrorCodeSuccess);
+    // And this test corresponds to:
+    // issuer: YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy
+    // serial: c2VyaWFsMi4=
+    // (we test this issuer twice to ensure we can read multiple serials)
+    ok(test_is_revoked(certList, "another imaginary issuer", "serial2."),
+      "issuer / serial pair should be blocked");
 
-  // The blocklist will revoke same-issuer-ee.pem via subject / pubKeyHash.
-  // Check the cert validates before we load the blocklist
-  file = "test_onecrl/same-issuer-ee.pem";
-  verify_cert(file, PRErrorCodeSuccess);
+    // Soon we'll load a blocklist which revokes test-int.pem, which issued
+    // test-int-ee.pem.
+    // Check the cert validates before we load the blocklist
+    let file = "test_onecrl/test-int-ee.pem";
+    verify_cert(file, PRErrorCodeSuccess);
+
+    // The blocklist also revokes other-test-ca.pem, which issued
+    // other-ca-ee.pem. Check the cert validates before we load the blocklist
+    file = "bad_certs/other-issuer-ee.pem";
+    verify_cert(file, PRErrorCodeSuccess);
+
+    // The blocklist will revoke same-issuer-ee.pem via subject / pubKeyHash.
+    // Check the cert validates before we load the blocklist
+    file = "test_onecrl/same-issuer-ee.pem";
+    verify_cert(file, PRErrorCodeSuccess);
+
+    run_next_test();
+  });
 
   // blocklist load is async so we must use add_test from here
   add_test(function() {
-    let certblockObserver = {
-      observe: function(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(this, "blocklist-updated");
-        run_next_test();
-      }
-    }
-
-    Services.obs.addObserver(certblockObserver, "blocklist-updated", false);
-    Services.prefs.setCharPref("extensions.blocklist.url", "http://localhost:" +
-                               port + "/push_blocked_cert/");
-    let blocklist = Cc["@mozilla.org/extensions/blocklist;1"]
-                      .getService(Ci.nsITimerCallback);
-    blocklist.notify(null);
+    fetch_blocklist("initialBlocklist/");
   });
 
   add_test(function() {
@@ -255,32 +296,7 @@ function run_test() {
 
     // Check the blocklist entry has been persisted properly to the backing
     // file
-    let profile = do_get_profile();
-    let revocations = profile.clone();
-    revocations.append("revocations.txt");
-    ok(revocations.exists(), "the revocations file should exist");
-    let inputStream = Cc["@mozilla.org/network/file-input-stream;1"]
-                        .createInstance(Ci.nsIFileInputStream);
-    inputStream.init(revocations,-1, -1, 0);
-    inputStream.QueryInterface(Ci.nsILineInputStream);
-    let contents = "";
-    let hasmore = false;
-    do {
-      var line = {};
-      hasmore = inputStream.readLine(line);
-      contents = contents + (contents.length == 0 ? "" : "\n") + line.value;
-    } while (hasmore);
-    let expected = "# Auto generated contents. Do not edit.\n" +
-                  "MCIxIDAeBgNVBAMMF0Fub3RoZXIgVGVzdCBFbmQtZW50aXR5\n"+
-                  "\tVCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=\n"+
-                  "MBIxEDAOBgNVBAMMB1Rlc3QgQ0E=\n" +
-                  " BVio/iQ21GCi2iUven8oJ/gae74=\n" +
-                  "MBgxFjAUBgNVBAMMDU90aGVyIHRlc3QgQ0E=\n" +
-                  " exJUIJpq50jgqOwQluhVrAzTF74=\n" +
-                  "YW5vdGhlciBpbWFnaW5hcnkgaXNzdWVy\n" +
-                  " YW5vdGhlciBzZXJpYWwu\n" +
-                  " c2VyaWFsMi4=";
-    equal(contents, expected, "revocations.txt should be as expected");
+    check_revocations_txt_contents(expected);
 
     // Check the blocklisted intermediate now causes a failure
     let file = "test_onecrl/test-int-ee.pem";
@@ -315,6 +331,18 @@ function run_test() {
     run_next_test();
   });
 
-  // we need to start the async portions of the test
+  // disable AMO cert blocklist - and check blocklist.xml changes do not
+  // affect the data stored.
+  add_test(function() {
+    Services.prefs.setBoolPref("security.onecrl.via.amo", false);
+    fetch_blocklist("updatedBlocklist/");
+  });
+
+  add_test(function() {
+    // Check the blocklist entry has not changed
+    check_revocations_txt_contents(expected);
+    run_next_test();
+  });
+
   run_next_test();
 }

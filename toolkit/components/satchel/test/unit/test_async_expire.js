@@ -48,7 +48,7 @@ function next_test()
   iter.next();
 }
 
-function tests()
+function* tests()
 {
   Services.obs.addObserver(TestObserver, "satchel-storage-changed", true);
 
@@ -165,4 +165,4 @@ function tests()
   yield countEntries(null, null, function(num) { do_check_eq(3, num); next_test(); });
 
   test_finished();
-};
+}

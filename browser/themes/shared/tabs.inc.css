@@ -92,6 +92,7 @@
   height: 16px;
   margin-top: -8px;
   margin-inline-start: -15px;
+  margin-inline-end: -1px;
   position: relative;
 }
 
@@ -130,7 +131,7 @@
 }
 
 .tab-throbber[progress] {
-  list-style-image: url("chrome://browser/skin/tabbrowser/loading.png");
+  list-style-image: url("chrome://global/skin/icons/loading.png");
 }
 
 .tab-label {
@@ -444,7 +445,7 @@
   position: absolute;
 }
 
-.tabbrowser-tab[image] > .tab-stack > .tab-content[attention]:not([visuallyselected="true"]),
+.tabbrowser-tab:-moz-any([image], [pinned]) > .tab-stack > .tab-content[attention]:not([visuallyselected="true"]),
 .tabbrowser-tab > .tab-stack > .tab-content[pinned][titlechanged]:not([visuallyselected="true"]) {
   background-image: radial-gradient(farthest-corner at center bottom, rgb(255,255,255) 3%, rgba(186,221,251,0.75) 20%, rgba(127,179,255,0.25) 40%, transparent 70%);
   background-position: center bottom var(--tab-toolbar-navbar-overlap);

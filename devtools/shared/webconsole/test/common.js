@@ -1,5 +1,8 @@
-/* Any copyright is dedicated to the Public Domain.
- * http://creativecommons.org/publicdomain/zero/1.0/ */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft= javascript ts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 
@@ -7,13 +10,13 @@ var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
-Cu.import("resource://gre/modules/Services.jsm");
 const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
 
 // This gives logging to stdout for tests
 var {console} = Cu.import("resource://gre/modules/Console.jsm", {});
 
 var {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var Services = require("Services");
 var WebConsoleUtils = require("devtools/shared/webconsole/utils").Utils;
 
 var ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
@@ -47,7 +50,7 @@ function connectToDebugger(aCallback)
   let client = new DebuggerClient(transport);
 
   let dbgState = { dbgClient: client };
-  client.connect(aCallback.bind(null, dbgState));
+  client.connect().then(response => aCallback(dbgState, response));
 }
 
 function attachConsole(aListeners, aCallback) {
@@ -131,6 +134,16 @@ function closeDebugger(aState, aCallback)
   aState.dbgClient.close(aCallback);
   aState.dbgClient = null;
   aState.client = null;
+}
+
+function checkConsoleAPICalls(consoleCalls, expectedConsoleCalls)
+{
+  is(consoleCalls.length, expectedConsoleCalls.length,
+    'received correct number of console calls');
+  expectedConsoleCalls.forEach(function(aMessage, aIndex) {
+    info("checking received console call #" + aIndex);
+    checkConsoleAPICall(consoleCalls[aIndex], expectedConsoleCalls[aIndex]);
+  });
 }
 
 function checkConsoleAPICall(aCall, aExpected)
@@ -242,4 +255,77 @@ function runTests(aTests, aEndCallback)
 function nextTest(aMessage)
 {
   return gTestState.driver.next(aMessage);
+}
+
+function withFrame(url) {
+  return new Promise(resolve => {
+    let iframe = document.createElement("iframe");
+    iframe.onload = function() {
+      resolve(iframe);
+    };
+    iframe.src = url;
+    document.body.appendChild(iframe);
+  });
+}
+
+function navigateFrame(iframe, url) {
+  return new Promise(resolve => {
+    iframe.onload = function() {
+      resolve(iframe);
+    };
+    iframe.src = url;
+  });
+}
+
+function forceReloadFrame(iframe) {
+  return new Promise(resolve => {
+    iframe.onload = function() {
+      resolve(iframe);
+    };
+    iframe.contentWindow.location.reload(true);
+  });
+}
+
+function withActiveServiceWorker(win, url, scope) {
+  let opts = {};
+  if (scope) {
+    opts.scope = scope;
+  }
+  return win.navigator.serviceWorker.register(url, opts).then(swr => {
+    if (swr.active) {
+      return swr;
+    }
+
+    // Unfortunately we can't just use navigator.serviceWorker.ready promise
+    // here.  If the service worker is for a scope that does not cover the window
+    // then the ready promise will never resolve.  Instead monitor the service
+    // workers state change events to determine when its activated.
+    return new Promise(resolve => {
+      let sw = swr.waiting || swr.installing;
+      sw.addEventListener('statechange', function stateHandler(evt) {
+        if (sw.state === 'activated') {
+          sw.removeEventListener('statechange', stateHandler);
+          resolve(swr);
+        }
+      });
+    });
+  });
+}
+
+function messageServiceWorker(win, scope, message) {
+  return win.navigator.serviceWorker.getRegistration(scope).then(swr => {
+    return new Promise(resolve => {
+      win.navigator.serviceWorker.onmessage = evt => {
+        resolve();
+      };
+      let sw = swr.active || swr.waiting || swr.installing;
+      sw.postMessage({ type: 'PING', message: message });
+    });
+  })
+}
+
+function unregisterServiceWorker(win) {
+  return win.navigator.serviceWorker.ready.then(swr => {
+    return swr.unregister();
+  });
 }

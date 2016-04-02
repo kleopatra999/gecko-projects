@@ -47,7 +47,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaKeys)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-MediaKeys::MediaKeys(nsPIDOMWindow* aParent,
+MediaKeys::MediaKeys(nsPIDOMWindowInner* aParent,
                      const nsAString& aKeySystem,
                      const nsAString& aCDMVersion)
   : mParent(aParent)
@@ -110,7 +110,7 @@ MediaKeys::Shutdown()
   mPromises.Clear();
 }
 
-nsPIDOMWindow*
+nsPIDOMWindowInner*
 MediaKeys::GetParentObject() const
 {
   return mParent;
@@ -125,7 +125,7 @@ MediaKeys::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 void
 MediaKeys::GetKeySystem(nsString& aOutKeySystem) const
 {
-  ConstructKeySystem(mKeySystem, mCDMVersion, aOutKeySystem);
+  aOutKeySystem.Assign(mKeySystem);
 }
 
 already_AddRefed<DetailedPromise>
@@ -145,9 +145,10 @@ MediaKeys::SetServerCertificate(const ArrayBufferViewOrArrayBuffer& aCert, Error
   }
 
   nsTArray<uint8_t> data;
-  if (!CopyArrayBufferViewOrArrayBufferData(aCert, data)) {
-    promise->MaybeReject(NS_ERROR_DOM_INVALID_ACCESS_ERR,
-                         NS_LITERAL_CSTRING("Invalid argument to MediaKeys.setServerCertificate()"));
+  CopyArrayBufferViewOrArrayBufferData(aCert, data);
+  if (data.IsEmpty()) {
+    promise->MaybeReject(NS_ERROR_DOM_TYPE_ERR,
+      NS_LITERAL_CSTRING("Empty certificate passed to MediaKeys.setServerCertificate()"));
     return promise.forget();
   }
 
@@ -306,14 +307,13 @@ MediaKeys::Init(ErrorResult& aRv)
 
   // Determine principal of the "top-level" window; the principal of the
   // page that will display in the URL bar.
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(GetParentObject());
+  nsCOMPtr<nsPIDOMWindowInner> window = GetParentObject();
   if (!window) {
     promise->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR,
                          NS_LITERAL_CSTRING("Couldn't get top-level window in MediaKeys::Init"));
     return promise.forget();
   }
-  window = window->GetOuterWindow();
-  nsCOMPtr<nsPIDOMWindow> top = window->GetTop();
+  nsCOMPtr<nsPIDOMWindowOuter> top = window->GetOuterWindow()->GetTop();
   if (!top || !top->GetExtantDoc()) {
     promise->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR,
                          NS_LITERAL_CSTRING("Couldn't get document in MediaKeys::Init"));
@@ -367,6 +367,7 @@ MediaKeys::Init(ErrorResult& aRv)
   mProxy->Init(mCreatePromiseId,
                origin,
                topLevelOrigin,
+               KeySystemToGMPName(mKeySystem),
                inPrivateBrowsing);
 
   return promise.forget();
@@ -502,22 +503,11 @@ MediaKeys::Bind(HTMLMediaElement* aElement)
   return NS_OK;
 }
 
-bool
-CopyArrayBufferViewOrArrayBufferData(const ArrayBufferViewOrArrayBuffer& aBufferOrView,
-                                     nsTArray<uint8_t>& aOutData)
+void
+MediaKeys::Unbind()
 {
-  if (aBufferOrView.IsArrayBuffer()) {
-    const ArrayBuffer& buffer = aBufferOrView.GetAsArrayBuffer();
-    buffer.ComputeLengthAndData();
-    aOutData.AppendElements(buffer.Data(), buffer.Length());
-  } else if (aBufferOrView.IsArrayBufferView()) {
-    const ArrayBufferView& bufferview = aBufferOrView.GetAsArrayBufferView();
-    bufferview.ComputeLengthAndData();
-    aOutData.AppendElements(bufferview.Data(), bufferview.Length());
-  } else {
-    return false;
-  }
-  return true;
+  MOZ_ASSERT(NS_IsMainThread());
+  mElement = nullptr;
 }
 
 } // namespace dom

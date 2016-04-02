@@ -64,20 +64,18 @@ function* onViewSourceWindowOpen(aWindow, aIsTab) {
   gCopyEmailMenuItem = aWindow.document.getElementById(aIsTab ? "context-copyemail" : "context-copyEmail");
 
   let browser = aIsTab ? gBrowser.selectedBrowser : gViewSourceWindow.gBrowser;
-  let items = yield ContentTask.spawn(browser, { }, function* (arg) {
+  yield ContentTask.spawn(browser, null, function* (arg) {
     let tags = content.document.querySelectorAll("a[href]");
-    return [tags[0].href, tags[1].href];
+    Assert.equal(tags[0].href, "view-source:http://example.com/", "Link has correct href");
+    Assert.equal(tags[1].href, "mailto:abc@def.ghi", "Link has correct href");
   });
-
-  is(items[0], "view-source:http://example.com/", "Link has correct href");
-  is(items[1], "mailto:abc@def.ghi", "Link has correct href");
 
   expectedData.push(["a[href]", true, false, "http://example.com/"]);
   expectedData.push(["a[href^=mailto]", false, true, "abc@def.ghi"]);
   expectedData.push(["span", false, false, null]);
 }
 
-function checkMenuItems(contextMenu, isTab, selector, copyLinkExpected, copyEmailExpected, expectedClipboardContent) {
+function* checkMenuItems(contextMenu, isTab, selector, copyLinkExpected, copyEmailExpected, expectedClipboardContent) {
 
   let browser = isTab ? gBrowser.selectedBrowser : gViewSourceWindow.gBrowser;
   yield ContentTask.spawn(browser, { selector: selector }, function* (arg) {

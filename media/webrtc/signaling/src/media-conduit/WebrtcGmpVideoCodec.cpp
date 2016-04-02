@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "mozilla/Move.h"
-#include "mozilla/Scoped.h"
 #include "mozilla/SyncRunnable.h"
 #include "VideoConduit.h"
 #include "AudioConduit.h"
@@ -33,7 +32,7 @@ namespace mozilla {
 #endif
 
 #ifdef MOZILLA_INTERNAL_API
-extern PRLogModuleInfo* GetGMPLog();
+extern mozilla::LogModule* GetGMPLog();
 #else
 // For CPP unit tests
 PRLogModuleInfo*
@@ -486,7 +485,9 @@ int32_t
 WebrtcGmpVideoEncoder::SetRates(uint32_t aNewBitRate, uint32_t aFrameRate)
 {
   MOZ_ASSERT(mGMPThread);
-  MOZ_ASSERT(!NS_IsMainThread());
+  if (aFrameRate == 0) {
+    aFrameRate = 30; // Assume 30fps if we don't know the rate
+  }
   mGMPThread->Dispatch(WrapRunnableNM(&WebrtcGmpVideoEncoder::SetRates_g,
                                       RefPtr<WebrtcGmpVideoEncoder>(this),
                                       aNewBitRate,
@@ -577,7 +578,7 @@ WebrtcGmpVideoEncoder::Encoded(GMPVideoEncodedFrame* aEncodedFrame,
       uint32_t offset;
       uint32_t size;
     };
-    nsAutoTArray<nal_entry, 1> nals;
+    AutoTArray<nal_entry, 1> nals;
     uint32_t size;
     // make sure we don't read past the end of the buffer getting the size
     while (buffer+size_bytes < end) {
@@ -926,11 +927,8 @@ WebrtcGmpVideoDecoder::Decoded(GMPVideoi420Frame* aDecodedFrame)
   MutexAutoLock lock(mCallbackMutex);
   if (mCallback) {
     webrtc::I420VideoFrame image;
-    int ret = image.CreateFrame(aDecodedFrame->AllocatedSize(kGMPYPlane),
-                                aDecodedFrame->Buffer(kGMPYPlane),
-                                aDecodedFrame->AllocatedSize(kGMPUPlane),
+    int ret = image.CreateFrame(aDecodedFrame->Buffer(kGMPYPlane),
                                 aDecodedFrame->Buffer(kGMPUPlane),
-                                aDecodedFrame->AllocatedSize(kGMPVPlane),
                                 aDecodedFrame->Buffer(kGMPVPlane),
                                 aDecodedFrame->Width(),
                                 aDecodedFrame->Height(),

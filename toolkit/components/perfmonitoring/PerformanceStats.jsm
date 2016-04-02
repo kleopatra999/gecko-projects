@@ -19,6 +19,9 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
  *
  * Data is collected by "Performance Group". Typically, a Performance Group
  * is an add-on, or a frame, or the internals of the application.
+ *
+ * Generally, if you have the choice between PerformanceStats and PerformanceWatcher,
+ * you should favor PerformanceWatcher.
  */
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
@@ -92,7 +95,15 @@ Probe.prototype = {
   release: function() {
     this._counter--;
     if (this._counter == 0) {
-      this._impl.isActive = false;
+      try {
+        this._impl.isActive = false;
+      } catch (ex) {
+        if (ex && typeof ex == "object" && ex.result == Components.results.NS_ERROR_NOT_AVAILABLE) {
+          // The service has already been shutdown. Ignore further shutdown requests.
+          return;
+        }
+        throw ex;
+      }
       Process.broadcast("release", [this._name]);
     }
   },
@@ -382,7 +393,7 @@ var Probes = {
  */
 function PerformanceMonitor(probes) {
   this._probes = probes;
-  
+
   // Activate low-level features as needed
   for (let probe of probes) {
     probe.acquire();
@@ -400,7 +411,7 @@ PerformanceMonitor.prototype = {
    * The names of probes activated in this monitor.
    */
   get probeNames() {
-    return [for (probe of this._probes) probe.name];
+    return this._probes.map(probe => probe.name);
   },
 
   /**
@@ -418,7 +429,7 @@ PerformanceMonitor.prototype = {
    * `promiseSnapshot()` and `subtract()`.
    *
    * On the other hand, numeric values are also monotonic across several instances
-   * of a PerformanceMonitor with the same probes. 
+   * of a PerformanceMonitor with the same probes.
    *  let a = PerformanceStats.getMonitor(someProbes);
    *  let snapshot1 = yield a.promiseSnapshot();
    *
@@ -468,7 +479,7 @@ PerformanceMonitor.prototype = {
   promiseSnapshot: function(options = null) {
     let probes = this._checkBeforeSnapshot(options);
     return Task.spawn(function*() {
-      let childProcesses = yield Process.broadcastAndCollect("collect", {probeNames: [for (probe of probes) probe.name]});
+      let childProcesses = yield Process.broadcastAndCollect("collect", {probeNames: probes.map(p => p.name)});
       let xpcom = performanceStatsService.getSnapshot();
       return new ApplicationSnapshot({
         xpcom,
@@ -749,7 +760,7 @@ function PerformanceDiff(current, old = null) {
       // The stats don't contain data from this probe.
       continue;
     }
-    let data = [for (item of this._all) item[k]];
+    let data = this._all.map(item => item[k]);
     let probe = Probes[k];
     this[k] = probe.compose(data);
   }
@@ -759,10 +770,10 @@ PerformanceDiff.prototype = {
     return `[PerformanceDiff] ${this.key}`;
   },
   get windowIds() {
-    return [for (item of this._all) item.windowId].filter(x => !!x);
+    return this._all.map(item => item.windowId).filter(x => !!x);
   },
   get groupIds() {
-    return [for (item of this._all) item.groupId];
+    return this._all.map(item => item.groupId);
   },
   get key() {
     if (this.addonId) {
@@ -774,10 +785,10 @@ PerformanceDiff.prototype = {
     return this._all[0].groupId;
   },
   get names() {
-    return [for (item of this._all) item.name];
+    return this._all.map(item => item.name);
   },
   get processes() {
-    return [for (item of this._all) { isChildProcess: item.isChildProcess, processId: item.processId}];
+    return this._all.map(item => ({ isChildProcess: item.isChildProcess, processId: item.processId}));
   }
 };
 

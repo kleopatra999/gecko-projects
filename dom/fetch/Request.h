@@ -36,8 +36,6 @@ public:
 
   static bool
   RequestContextEnabled(JSContext* aCx, JSObject* aObj);
-  static bool
-  RequestCacheEnabled(JSContext* aCx, JSObject* aObj);
 
   JSObject*
   WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
@@ -97,6 +95,12 @@ public:
   GetReferrer(nsAString& aReferrer) const
   {
     mRequest->GetReferrer(aReferrer);
+  }
+
+  ReferrerPolicy
+  ReferrerPolicy_() const
+  {
+    return mRequest->ReferrerPolicy_();
   }
 
   InternalHeaders*

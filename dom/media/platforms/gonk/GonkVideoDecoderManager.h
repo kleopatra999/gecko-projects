@@ -13,8 +13,8 @@
 #include "I420ColorConverterHelper.h"
 #include "MediaCodecProxy.h"
 #include "GonkNativeWindow.h"
-#include "GonkNativeWindowClient.h"
 #include "mozilla/layers/FenceUtils.h"
+#include "mozilla/UniquePtr.h"
 #include <ui/Fence.h>
 
 using namespace android;
@@ -48,6 +48,11 @@ public:
                           RefPtr<MediaData>& aOutput) override;
 
   nsresult Shutdown() override;
+
+  const char* GetDescriptionName() const override
+  {
+    return "gonk video decoder";
+  }
 
   static void RecycleCallback(TextureClient* aClient, void* aClosure);
 
@@ -112,10 +117,14 @@ private:
 
   // color converter
   android::I420ColorConverterHelper mColorConverter;
-  nsAutoArrayPtr<uint8_t> mColorConverterBuffer;
+  UniquePtr<uint8_t[]> mColorConverterBuffer;
   size_t mColorConverterBufferSize;
 
   android::sp<android::GonkNativeWindow> mNativeWindow;
+#if ANDROID_VERSION >= 21
+  android::sp<android::IGraphicBufferProducer> mGraphicBufferProducer;
+#endif
+
   enum {
     kNotifyPostReleaseBuffer = 'nprb',
   };

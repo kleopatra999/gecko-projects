@@ -42,7 +42,7 @@ UIEvent::UIEvent(EventTarget* aOwner,
   }
   else {
     mEventIsInternal = true;
-    mEvent->time = PR_Now();
+    mEvent->mTime = PR_Now();
   }
   
   // Fill mDetail and mView according to the mEvent (widget-generated
@@ -50,14 +50,14 @@ UIEvent::UIEvent(EventTarget* aOwner,
   switch(mEvent->mClass) {
     case eUIEventClass:
     {
-      mDetail = mEvent->AsUIEvent()->detail;
+      mDetail = mEvent->AsUIEvent()->mDetail;
       break;
     }
 
     case eScrollPortEventClass:
     {
       InternalScrollPortEvent* scrollEvent = mEvent->AsScrollPortEvent();
-      mDetail = (int32_t)scrollEvent->orient;
+      mDetail = static_cast<int32_t>(scrollEvent->mOrient);
       break;
     }
 
@@ -87,8 +87,8 @@ UIEvent::Constructor(const GlobalObject& aGlobal,
   nsCOMPtr<EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
   RefPtr<UIEvent> e = new UIEvent(t, nullptr, nullptr);
   bool trusted = e->Init(t);
-  aRv = e->InitUIEvent(aType, aParam.mBubbles, aParam.mCancelable, aParam.mView,
-                       aParam.mDetail);
+  e->InitUIEvent(aType, aParam.mBubbles, aParam.mCancelable, aParam.mView,
+                 aParam.mDetail);
   e->SetTrusted(trusted);
   return e.forget();
 }
@@ -136,7 +136,7 @@ UIEvent::GetMovementPoint()
 }
 
 NS_IMETHODIMP
-UIEvent::GetView(nsIDOMWindow** aView)
+UIEvent::GetView(mozIDOMWindowProxy** aView)
 {
   *aView = mView;
   NS_IF_ADDREF(*aView);
@@ -150,22 +150,29 @@ UIEvent::GetDetail(int32_t* aDetail)
   return NS_OK;
 }
 
+void
+UIEvent::InitUIEvent(const nsAString& typeArg,
+                     bool canBubbleArg,
+                     bool cancelableArg,
+                     nsGlobalWindow* viewArg,
+                     int32_t detailArg)
+{
+  auto* view = viewArg ? viewArg->AsInner() : nullptr;
+  InitUIEvent(typeArg, canBubbleArg, cancelableArg, view, detailArg);
+}
+
 NS_IMETHODIMP
 UIEvent::InitUIEvent(const nsAString& typeArg,
                      bool canBubbleArg,
                      bool cancelableArg,
-                     nsIDOMWindow* viewArg,
+                     mozIDOMWindow* viewArg,
                      int32_t detailArg)
 {
-  if (viewArg) {
-    nsCOMPtr<nsPIDOMWindow> view = do_QueryInterface(viewArg);
-    NS_ENSURE_TRUE(view, NS_ERROR_INVALID_ARG);
-  }
-  nsresult rv = Event::InitEvent(typeArg, canBubbleArg, cancelableArg);
-  NS_ENSURE_SUCCESS(rv, rv);
-  
+  Event::InitEvent(typeArg, canBubbleArg, cancelableArg);
+
   mDetail = detailArg;
-  mView = viewArg;
+  mView = viewArg ? nsPIDOMWindowInner::From(viewArg)->GetOuterWindow() :
+                    nullptr;
 
   return NS_OK;
 }
@@ -348,6 +355,12 @@ UIEvent::IsChar() const
   return keyEvent ? keyEvent->isChar : false;
 }
 
+mozilla::dom::Event*
+UIEvent::AsEvent(void)
+{
+  return this;
+}
+
 NS_IMETHODIMP
 UIEvent::DuplicatePrivateData()
 {
@@ -455,7 +468,7 @@ UIEvent::GetModifierStateInternal(const nsAString& aKey)
 {
   WidgetInputEvent* inputEvent = mEvent->AsInputEvent();
   MOZ_ASSERT(inputEvent, "mEvent must be WidgetInputEvent or derived class");
-  return ((inputEvent->modifiers & WidgetInputEvent::GetModifier(aKey)) != 0);
+  return ((inputEvent->mModifiers & WidgetInputEvent::GetModifier(aKey)) != 0);
 }
 
 void
@@ -471,11 +484,11 @@ UIEvent::InitModifiers(const EventModifierInit& aParam)
     return;
   }
 
-  inputEvent->modifiers = MODIFIER_NONE;
+  inputEvent->mModifiers = MODIFIER_NONE;
 
 #define SET_MODIFIER(aName, aValue) \
   if (aParam.m##aName) { \
-    inputEvent->modifiers |= aValue; \
+    inputEvent->mModifiers |= aValue; \
   } \
 
   SET_MODIFIER(CtrlKey,                 MODIFIER_CONTROL)

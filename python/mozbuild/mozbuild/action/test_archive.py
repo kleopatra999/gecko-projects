@@ -16,6 +16,7 @@ import os
 import sys
 import time
 
+from mozbuild.util import ensureParentDir
 from mozpack.files import FileFinder
 from mozpack.mozjar import JarWriter
 import mozpack.path as mozpath
@@ -23,6 +24,52 @@ import mozpack.path as mozpath
 import buildconfig
 
 STAGE = mozpath.join(buildconfig.topobjdir, 'dist', 'test-stage')
+
+TEST_HARNESS_BINS = [
+    'BadCertServer',
+    'GenerateOCSPResponse',
+    'OCSPStaplingServer',
+    'SmokeDMD',
+    'certutil',
+    'crashinject',
+    'fileid',
+    'minidumpwriter',
+    'pk12util',
+    'screenshot',
+    'screentopng',
+    'ssltunnel',
+    'xpcshell',
+]
+
+# The fileid utility depends on mozglue. See bug 1069556.
+TEST_HARNESS_DLLS = [
+    'crashinjectdll',
+    'mozglue'
+]
+
+TEST_PLUGIN_DLLS = [
+    'npctrltest',
+    'npsecondtest',
+    'npswftest',
+    'nptest',
+    'nptestjava',
+    'npthirdtest',
+]
+
+TEST_PLUGIN_DIRS = [
+    'JavaTest.plugin/**',
+    'SecondTest.plugin/**',
+    'Test.plugin/**',
+    'ThirdTest.plugin/**',
+    'npctrltest.plugin/**',
+    'npswftest.plugin/**',
+]
+
+GMP_TEST_PLUGIN_DIRS = [
+    'gmp-clearkey/**',
+    'gmp-fake/**',
+    'gmp-fakeopenh264/**',
+]
 
 
 ARCHIVE_FILES = {
@@ -33,6 +80,7 @@ ARCHIVE_FILES = {
             'pattern': '**',
             'ignore': [
                 'cppunittest/**',
+                'gtest/**',
                 'mochitest/**',
                 'reftest/**',
                 'talos/**',
@@ -49,6 +97,17 @@ ARCHIVE_FILES = {
             'source': buildconfig.topobjdir,
             'base': '_tests',
             'pattern': 'mozbase/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'firefox-ui/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'dom/media/test/external',
+            'pattern': '**',
+            'dest': 'external-media-tests',
         },
         {
             'source': buildconfig.topsrcdir,
@@ -83,6 +142,11 @@ ARCHIVE_FILES = {
         {
             'source': buildconfig.topsrcdir,
             'base': 'testing',
+            'pattern': 'puppeteer/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
             'pattern': 'tps/**',
         },
         {
@@ -96,6 +160,77 @@ ARCHIVE_FILES = {
             'pattern': '**',
             'dest': 'tps/tests',
         },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing/web-platform/tests/tools/wptserve',
+            'pattern': '**',
+            'dest': 'tools/wptserve',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': '',
+            'pattern': 'mozinfo.json',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/bin',
+            'patterns': [
+                '%s%s' % (f, buildconfig.substs['BIN_SUFFIX'])
+                for f in TEST_HARNESS_BINS
+            ] + [
+                '%s%s%s' % (buildconfig.substs['DLL_PREFIX'], f, buildconfig.substs['DLL_SUFFIX'])
+                for f in TEST_HARNESS_DLLS
+            ],
+            'dest': 'bin',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/plugins',
+            'patterns': [
+                '%s%s%s' % (buildconfig.substs['DLL_PREFIX'], f, buildconfig.substs['DLL_SUFFIX'])
+                for f in TEST_PLUGIN_DLLS
+            ],
+            'dest': 'bin/plugins',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/plugins',
+            'patterns': TEST_PLUGIN_DIRS,
+            'dest': 'bin/plugins',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/bin',
+            'patterns': GMP_TEST_PLUGIN_DIRS,
+            'dest': 'bin/plugins',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/bin',
+            'patterns': [
+                'dmd.py',
+                'fix_linux_stack.py',
+                'fix_macosx_stack.py',
+                'fix_stack_using_bpsyms.py',
+            ],
+            'dest': 'bin',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'dist/bin/components',
+            'patterns': [
+                'httpd.js',
+                'httpd.manifest',
+                'test_necko.xpt',
+            ],
+            'dest': 'bin/components',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'build/pgo/certs',
+            'pattern': '**',
+            'dest': 'certs',
+        }
     ],
     'cppunittest': [
         {
@@ -136,6 +271,13 @@ ARCHIVE_FILES = {
             'dest': 'cppunittest',
         },
     ],
+    'gtest': [
+        {
+            'source': STAGE,
+            'base': '',
+            'pattern': 'gtest/**',
+        },
+    ],
     'mochitest': [
         {
             'source': buildconfig.topobjdir,
@@ -147,6 +289,12 @@ ARCHIVE_FILES = {
             'base': '',
             'pattern': 'mochitest/**',
         },
+        {
+            'source': buildconfig.topobjdir,
+            'base': '',
+            'pattern': 'mozinfo.json',
+            'dest': 'mochitest'
+        }
     ],
     'mozharness': [
         {
@@ -177,6 +325,21 @@ ARCHIVE_FILES = {
     ],
     'web-platform': [
         {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'web-platform/meta/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'web-platform/mozilla/**',
+        },
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'web-platform/tests/**',
+        },
+        {
             'source': buildconfig.topobjdir,
             'base': '_tests',
             'pattern': 'web-platform/**',
@@ -196,9 +359,37 @@ ARCHIVE_FILES = {
             'dest': 'xpcshell/tests',
         },
         {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing/xpcshell',
+            'patterns': [
+                'head.js',
+                'moz-http2/**',
+                'moz-spdy/**',
+                'node-http2/**',
+                'node-spdy/**',
+                'remotexpcshelltests.py',
+                'runtestsb2g.py',
+                'runxpcshelltests.py',
+                'xpcshellcommandline.py',
+            ],
+            'dest': 'xpcshell',
+        },
+        {
             'source': STAGE,
             'base': '',
             'pattern': 'xpcshell/**',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': '',
+            'pattern': 'mozinfo.json',
+            'dest': 'xpcshell',
+        },
+        {
+            'source': buildconfig.topobjdir,
+            'base': 'build',
+            'pattern': 'automation.py',
+            'dest': 'xpcshell',
         },
     ],
 }
@@ -224,6 +415,9 @@ def find_files(archive):
         source = entry['source']
         base = entry.get('base', '')
         pattern = entry.get('pattern')
+        patterns = entry.get('patterns', [])
+        if pattern:
+            patterns.append(pattern)
         dest = entry.get('dest')
         ignore = list(entry.get('ignore', []))
         ignore.append('**/.mkdir.done')
@@ -237,10 +431,11 @@ def find_files(archive):
 
         finder = FileFinder(os.path.join(source, base), **common_kwargs)
 
-        for p, f in finder.find(pattern):
-            if dest:
-                p = mozpath.join(dest, p)
-            yield p, f
+        for pattern in patterns:
+            for p, f in finder.find(pattern):
+                if dest:
+                    p = mozpath.join(dest, p)
+                yield p, f
 
 
 def find_reftest_dirs(topsrcdir, manifests):
@@ -310,6 +505,7 @@ def main(argv):
 
     file_count = 0
     t_start = time.time()
+    ensureParentDir(args.outputfile)
     with open(args.outputfile, 'wb') as fh:
         # Experimentation revealed that level 5 is significantly faster and has
         # marginally larger sizes than higher values and is the sweet spot

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that the 'dbg blackbox' and 'dbg unblackbox' commands work as
@@ -22,12 +24,13 @@ function* spawnTest() {
 
   let toolbox = yield gDevTools.showToolbox(options.target, "jsdebugger");
   let panel = toolbox.getCurrentPanel();
+  let constants = panel.panelWin.require('./content/constants');
 
   yield waitForDebuggerEvents(panel, panel.panelWin.EVENTS.SOURCE_SHOWN);
 
   function cmd(aTyped, aEventRepeat = 1, aOutput = "") {
     return promise.all([
-      waitForThreadEvents(panel, "blackboxchange", aEventRepeat),
+      waitForDispatch(panel, constants.BLACKBOX, aEventRepeat),
       helpers.audit(options, [{ setup: aTyped, output: aOutput, exec: {} }])
     ]);
   }

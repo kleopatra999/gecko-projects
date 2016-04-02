@@ -20,6 +20,10 @@ EXPORTS += [
 ]
 
 if CONFIG['MOZ_WEBRTC']:
+    if CONFIG['OS_TARGET'] == 'WINNT':
+        DEFINES['WEBRTC_WIN'] = True
+    else:
+        DEFINES['WEBRTC_POSIX'] = True
     EXPORTS += ['AudioOutputObserver.h',
                 'MediaEngineRemoteVideoSource.h',
                 'MediaEngineWebRTC.h']
@@ -88,5 +92,7 @@ FINAL_LIBRARY = 'xul'
 if CONFIG['_MSC_VER']:
     CXXFLAGS += [
         '-wd4275', # non dll-interface class used as base for dll-interface class
+        '-wd4312', # This is intended as a temporary hack to support building with VS2015
+                   # 'reinterpret_cast': conversion from 'DWORD' to 'HANDLE' of greater size
     ]
     DEFINES['__PRETTY_FUNCTION__'] = '__FUNCSIG__'

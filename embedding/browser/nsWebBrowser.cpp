@@ -358,13 +358,13 @@ nsWebBrowser::SetParentURIContentListener(
 }
 
 NS_IMETHODIMP
-nsWebBrowser::GetContentDOMWindow(nsIDOMWindow** aResult)
+nsWebBrowser::GetContentDOMWindow(mozIDOMWindowProxy** aResult)
 {
   if (!mDocShell) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  nsCOMPtr<nsIDOMWindow> retval = mDocShell->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> retval = mDocShell->GetWindow();
   retval.forget(aResult);
   return *aResult ? NS_OK : NS_ERROR_FAILURE;
 }
@@ -533,7 +533,7 @@ nsWebBrowser::GetDocument()
   return mDocShell ? mDocShell->GetDocument() : nullptr;
 }
 
-nsPIDOMWindow*
+nsPIDOMWindowOuter*
 nsWebBrowser::GetWindow()
 {
   return mDocShell ? mDocShell->GetWindow() : nullptr;
@@ -1176,7 +1176,8 @@ nsWebBrowser::Create()
     widgetInit.clipChildren = true;
 
     widgetInit.mWindowType = eWindowType_child;
-    nsIntRect bounds(mInitInfo->x, mInitInfo->y, mInitInfo->cx, mInitInfo->cy);
+    LayoutDeviceIntRect bounds(mInitInfo->x, mInitInfo->y,
+                               mInitInfo->cx, mInitInfo->cy);
 
     mInternalWidget->SetWidgetListener(this);
     mInternalWidget->Create(nullptr, mParentNativeWindow, bounds, &widgetInit);
@@ -1253,7 +1254,7 @@ nsWebBrowser::Create()
 
   // Hook into the OnSecurityChange() notification for lock/unlock icon
   // updates
-  nsCOMPtr<nsIDOMWindow> domWindow;
+  nsCOMPtr<mozIDOMWindowProxy> domWindow;
   rv = GetContentDOMWindow(getter_AddRefs(domWindow));
   if (NS_SUCCEEDED(rv)) {
     // this works because the implementation of nsISecureBrowserUI
@@ -1291,6 +1292,29 @@ nsWebBrowser::GetUnscaledDevicePixelsPerCSSPixel(double* aScale)
 {
   *aScale = mParentWidget ? mParentWidget->GetDefaultScale().scale : 1.0;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsWebBrowser::GetDevicePixelsPerDesktopPixel(double* aScale)
+{
+  *aScale = mParentWidget ? mParentWidget->GetDesktopToDeviceScale().scale
+                          : 1.0;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsWebBrowser::SetPositionDesktopPix(int32_t aX, int32_t aY)
+{
+  // XXX jfkthame
+  // It's not clear to me whether this will be fully correct across
+  // potential multi-screen, mixed-DPI configurations for all platforms;
+  // we might need to add code paths that make it possible to pass the
+  // desktop-pix parameters all the way through to the native widget,
+  // to avoid the risk of device-pixel coords mapping to the wrong
+  // display on OS X with mixed retina/non-retina screens.
+  double scale = 1.0;
+  GetDevicePixelsPerDesktopPixel(&scale);
+  return SetPosition(NSToIntRound(aX * scale), NSToIntRound(aY * scale));
 }
 
 NS_IMETHODIMP
@@ -1532,7 +1556,7 @@ nsWebBrowser::GetMainWidget(nsIWidget** aMainWidget)
 NS_IMETHODIMP
 nsWebBrowser::SetFocus()
 {
-  nsCOMPtr<nsIDOMWindow> window = GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
   NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
@@ -1728,7 +1752,7 @@ nsWebBrowser::WindowLowered(nsIWidget* aWidget)
 }
 
 bool
-nsWebBrowser::PaintWindow(nsIWidget* aWidget, nsIntRegion aRegion)
+nsWebBrowser::PaintWindow(nsIWidget* aWidget, LayoutDeviceIntRegion aRegion)
 {
   LayerManager* layerManager = aWidget->GetLayerManager();
   NS_ASSERTION(layerManager, "Must be in paint event");
@@ -1736,17 +1760,17 @@ nsWebBrowser::PaintWindow(nsIWidget* aWidget, nsIntRegion aRegion)
   layerManager->BeginTransaction();
   RefPtr<PaintedLayer> root = layerManager->CreatePaintedLayer();
   if (root) {
-    nsIntRect dirtyRect = aRegion.GetBounds();
-    root->SetVisibleRegion(dirtyRect);
+    nsIntRect dirtyRect = aRegion.GetBounds().ToUnknownRect();
+    root->SetVisibleRegion(LayerIntRegion::FromUnknownRegion(dirtyRect));
     layerManager->SetRoot(root);
   }
 
   layerManager->EndTransaction(DrawPaintedLayer, &mBackgroundColor);
   return true;
 }
-
+/*
 NS_IMETHODIMP
-nsWebBrowser::GetPrimaryContentWindow(nsIDOMWindow** aDOMWindow)
+nsWebBrowser::GetPrimaryContentWindow(mozIDOMWindowProxy** aDOMWindow)
 {
   *aDOMWindow = nullptr;
 
@@ -1759,14 +1783,14 @@ nsWebBrowser::GetPrimaryContentWindow(nsIDOMWindow** aDOMWindow)
   docShell = do_QueryInterface(item);
   NS_ENSURE_TRUE(docShell, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsIDOMWindow> domWindow = docShell->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> domWindow = docShell->GetWindow();
   NS_ENSURE_TRUE(domWindow, NS_ERROR_FAILURE);
 
   *aDOMWindow = domWindow;
   NS_ADDREF(*aDOMWindow);
   return NS_OK;
 }
-
+*/
 //*****************************************************************************
 // nsWebBrowser::nsIWebBrowserFocus
 //*****************************************************************************
@@ -1775,7 +1799,7 @@ NS_IMETHODIMP
 nsWebBrowser::Activate(void)
 {
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
-  nsCOMPtr<nsIDOMWindow> window = GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
   if (fm && window) {
     return fm->WindowRaised(window);
   }
@@ -1786,7 +1810,7 @@ NS_IMETHODIMP
 nsWebBrowser::Deactivate(void)
 {
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
-  nsCOMPtr<nsIDOMWindow> window = GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
   if (fm && window) {
     return fm->WindowLowered(window);
   }
@@ -1806,14 +1830,14 @@ nsWebBrowser::SetFocusAtLastElement(void)
 }
 
 NS_IMETHODIMP
-nsWebBrowser::GetFocusedWindow(nsIDOMWindow** aFocusedWindow)
+nsWebBrowser::GetFocusedWindow(mozIDOMWindowProxy** aFocusedWindow)
 {
   NS_ENSURE_ARG_POINTER(aFocusedWindow);
   *aFocusedWindow = nullptr;
 
   NS_ENSURE_TRUE(mDocShell, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsIDOMWindow> window = mDocShell->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow();
   NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIDOMElement> focusedElement;
@@ -1824,7 +1848,7 @@ nsWebBrowser::GetFocusedWindow(nsIDOMWindow** aFocusedWindow)
 }
 
 NS_IMETHODIMP
-nsWebBrowser::SetFocusedWindow(nsIDOMWindow* aFocusedWindow)
+nsWebBrowser::SetFocusedWindow(mozIDOMWindowProxy* aFocusedWindow)
 {
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
   return fm ? fm->SetFocusedWindow(aFocusedWindow) : NS_OK;
@@ -1836,7 +1860,7 @@ nsWebBrowser::GetFocusedElement(nsIDOMElement** aFocusedElement)
   NS_ENSURE_ARG_POINTER(aFocusedElement);
   NS_ENSURE_TRUE(mDocShell, NS_ERROR_FAILURE);
 
-  nsCOMPtr<nsIDOMWindow> window = mDocShell->GetWindow();
+  nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow();
   NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);

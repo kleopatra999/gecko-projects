@@ -22,12 +22,14 @@ Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
 Cu.import('resource://gre/modules/AppConstants.jsm');
 
-#ifdef MOZ_WIDGET_GONK
-XPCOMUtils.defineLazyGetter(this, "libcutils", function () {
-  Cu.import("resource://gre/modules/systemlibs.js");
-  return libcutils;
-});
-#endif
+const isGonk = AppConstants.platform === 'gonk';
+
+if (isGonk) {
+  XPCOMUtils.defineLazyGetter(this, "libcutils", function () {
+    Cu.import("resource://gre/modules/systemlibs.js");
+    return libcutils;
+  });
+}
 
 XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
@@ -121,15 +123,7 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
   Services.prefs.setCharPref(prefName, value);
 
   if (shell.hasStarted() == false) {
-    // On b2gdroid at first run we need to synchronize our wallpaper with
-    // Android one's before bootstrapping.
-    if (AppConstants.MOZ_B2GDROID) {
-      Cc["@mozilla.org/b2g/b2gdroid-setup;1"]
-        .getService().wrappedJSObject.setWallpaper()
-        .then(() => { shell.bootstrap(); });
-    } else {
-      shell.bootstrap();
-    }
+    shell.bootstrap();
   }
 });
 
@@ -152,10 +146,8 @@ Components.utils.import('resource://gre/modules/ctypes.jsm');
 (function DeviceInfoToSettings() {
   // MOZ_B2G_VERSION is set in b2g/confvars.sh, and is output as a #define value
   // from configure.in, defaults to 1.0.0 if this value is not exist.
-#filter attemptSubstitution
-  let os_version = '@MOZ_B2G_VERSION@';
-  let os_name = '@MOZ_B2G_OS_NAME@';
-#unfilter attemptSubstitution
+  let os_version = AppConstants.MOZ_B2G_VERSION;
+  let os_name = AppConstants.MOZ_B2G_OS_NAME;
 
   let appInfo = Cc["@mozilla.org/xre/app-info;1"]
                   .getService(Ci.nsIXULAppInfo);
@@ -167,14 +159,14 @@ Components.utils.import('resource://gre/modules/ctypes.jsm');
   let product_model = null;
   let product_device = null;
   let build_number = null;
-#ifdef MOZ_WIDGET_GONK
+  if (isGonk) {
     hardware_info = libcutils.property_get('ro.hardware');
     firmware_revision = libcutils.property_get('ro.firmware_revision');
     product_manufacturer = libcutils.property_get('ro.product.manufacturer');
     product_model = libcutils.property_get('ro.product.model');
     product_device = libcutils.property_get('ro.product.device');
     build_number = libcutils.property_get('ro.build.version.incremental');
-#endif
+  }
 
   // Populate deviceinfo settings,
   // copying any existing deviceinfo.os into deviceinfo.previous_os
@@ -218,32 +210,31 @@ SettingsListener.observe('devtools.overlay', false, (value) => {
   }
 });
 
-#ifdef MOZ_WIDGET_GONK
+if (isGonk) {
+  var LogShake;
+  (function() {
+    let scope = {};
+    Cu.import('resource://gre/modules/LogShake.jsm', scope);
+    LogShake = scope.LogShake;
+    LogShake.init();
+  })();
 
-var LogShake;
-(function() {
-  let scope = {};
-  Cu.import('resource://gre/modules/LogShake.jsm', scope);
-  LogShake = scope.LogShake;
-  LogShake.init();
-})();
+  SettingsListener.observe('devtools.logshake.enabled', false, value => {
+    if (value) {
+      LogShake.enableDeviceMotionListener();
+    } else {
+      LogShake.disableDeviceMotionListener();
+    }
+  });
 
-SettingsListener.observe('devtools.logshake.enabled', false, value => {
-  if (value) {
-    LogShake.enableDeviceMotionListener();
-  } else {
-    LogShake.disableDeviceMotionListener();
-  }
-});
-
-SettingsListener.observe('devtools.logshake.qa_enabled', false, value => {
-  if (value) {
-    LogShake.enableQAMode();
-  } else {
-    LogShake.disableQAMode();
-  }
-});
-#endif
+  SettingsListener.observe('devtools.logshake.qa_enabled', false, value => {
+    if (value) {
+      LogShake.enableQAMode();
+    } else {
+      LogShake.disableQAMode();
+    }
+  });
+}
 
 // =================== Device Storage ====================
 SettingsListener.observe('device.storage.writable.name', 'sdcard', function(value) {
@@ -360,8 +351,7 @@ setUpdateTrackingId();
     });
   }
 
-  syncPrefDefault(AppConstants.MOZ_B2GDROID ? 'app.update.url.android'
-                                            : 'app.update.url');
+  syncPrefDefault('app.update.url');
   syncPrefDefault('app.update.channel');
 })();
 
@@ -380,15 +370,13 @@ setUpdateTrackingId();
       var enabled = false;
       if (Services.prefs.getPrefType('layers.composer2d.enabled') == Ci.nsIPrefBranch.PREF_BOOL) {
         enabled = Services.prefs.getBoolPref('layers.composer2d.enabled');
-      } else {
-#ifdef MOZ_WIDGET_GONK
+      } else if (isGonk) {
         let androidVersion = libcutils.property_get("ro.build.version.sdk");
         if (androidVersion >= 17 ) {
           enabled = true;
         } else {
           enabled = (libcutils.property_get('ro.display.colorfill') === '1');
         }
-#endif
       }
       navigator.mozSettings.createLock().set({'layers.composer2d.enabled': enabled });
     }
@@ -443,11 +431,7 @@ setUpdateTrackingId();
       return;
     }
     // Gaia setting has not been set; set the gaia setting to default.
-#ifdef MOZ_TELEMETRY_ON_BY_DEFAULT
-    let prefValue = true;
-#else
-    let prefValue = false;
-#endif
+    let prefValue = AppConstants.MOZ_TELEMETRY_ON_BY_DEFAULT;
     try {
       prefValue = Services.prefs.getBoolPref(geckoPrefName);
     } catch (e) {
@@ -571,47 +555,47 @@ SettingsListener.observe("theme.selected",
   setPAC();
 })();
 
-#ifdef MOZ_B2G_RIL
-XPCOMUtils.defineLazyModuleGetter(this, "AppsUtils",
-                                  "resource://gre/modules/AppsUtils.jsm");
-
 // ======================= Dogfooders FOTA ==========================
-SettingsListener.observe('debug.performance_data.dogfooding', false,
-  isDogfooder => {
-    if (!isDogfooder) {
-      dump('AUS:Settings: Not a dogfooder!\n');
-      return;
-    }
+if (AppConstants.MOZ_B2G_RIL) {
+  XPCOMUtils.defineLazyModuleGetter(this, "AppsUtils",
+                                    "resource://gre/modules/AppsUtils.jsm");
 
-    if (!('mozTelephony' in navigator)) {
-      dump('AUS:Settings: There is no mozTelephony!\n');
-      return;
-    }
-
-    if (!('mozMobileConnections' in navigator)) {
-      dump('AUS:Settings: There is no mozMobileConnections!\n');
-      return;
-    }
-
-    let conn = navigator.mozMobileConnections[0];
-    conn.addEventListener('radiostatechange', function onradiostatechange() {
-      if (conn.radioState !== 'enabled') {
+  SettingsListener.observe('debug.performance_data.dogfooding', false,
+    isDogfooder => {
+      if (!isDogfooder) {
+        dump('AUS:Settings: Not a dogfooder!\n');
         return;
       }
 
-      conn.removeEventListener('radiostatechange', onradiostatechange);
-      navigator.mozTelephony.dial('*#06#').then(call => {
-        return call.result.then(res => {
-          if (res.success && res.statusMessage
-              && (res.serviceCode === 'scImei')) {
-            Services.prefs.setCharPref("app.update.imei_hash",
-                                       AppsUtils.computeHash(res.statusMessage, "SHA512"));
-          }
+      if (!('mozTelephony' in navigator)) {
+        dump('AUS:Settings: There is no mozTelephony!\n');
+        return;
+      }
+
+      if (!('mozMobileConnections' in navigator)) {
+        dump('AUS:Settings: There is no mozMobileConnections!\n');
+        return;
+      }
+
+      let conn = navigator.mozMobileConnections[0];
+      conn.addEventListener('radiostatechange', function onradiostatechange() {
+        if (conn.radioState !== 'enabled') {
+          return;
+        }
+
+        conn.removeEventListener('radiostatechange', onradiostatechange);
+        navigator.mozTelephony.dial('*#06#').then(call => {
+          return call.result.then(res => {
+            if (res.success && res.statusMessage
+                && (res.serviceCode === 'scImei')) {
+              Services.prefs.setCharPref("app.update.imei_hash",
+                                         AppsUtils.computeHash(res.statusMessage, "SHA512"));
+            }
+          });
         });
       });
     });
-  });
-#endif
+}
 
 // =================== Various simple mapping  ======================
 var settingsToObserve = {
@@ -657,24 +641,16 @@ var settingsToObserve = {
   'dom.mozApps.signed_apps_installable_from': 'https://marketplace.firefox.com',
   'dom.presentation.discovery.enabled': false,
   'dom.presentation.discoverable': false,
-  'dom.serviceWorkers.interception.enabled': true,
   'dom.serviceWorkers.testing.enabled': false,
   'gfx.layerscope.enabled': false,
   'layers.draw-borders': false,
   'layers.draw-tile-borders': false,
   'layers.dump': false,
-#ifdef XP_WIN
-  'layers.enable-tiles': false,
-#else
+  'layers.enable-tiles': AppConstants.platform !== "win",
   'layers.enable-tiles': true,
-#endif
   'layers.effect.invert': false,
   'layers.effect.grayscale': false,
   'layers.effect.contrast': '0.0',
-#ifdef MOZ_GRAPHENE
-  // Restart required
-  'layers.async-pan-zoom.enabled': false,
-#endif
   'layout.display-list.dump': false,
   'mms.debugging.enabled': false,
   'network.debugging.enabled': false,
@@ -728,6 +704,11 @@ var settingsToObserve = {
   'wap.UAProf.tagname': 'x-wap-profile',
   'wap.UAProf.url': ''
 };
+
+if (AppConstants.MOZ_GRAPHENE) {
+  // Restart required
+  settingsToObserve['layers.async-pan-zoom.enabled'] = false;
+}
 
 function settingObserver(setPref, prefName, setting) {
   return value => {

@@ -11,6 +11,7 @@
 
 #include "base/message_loop.h"
 #include "nsAutoPtr.h"
+#include "mozilla/UniquePtr.h"
 
 namespace mozilla {
 namespace ipc {
@@ -72,6 +73,26 @@ public:
     return Read(&aValue, sizeof(aValue));
   }
 
+  nsresult Read(int64_t& aValue)
+  {
+    return Read(&aValue, sizeof(aValue));
+  }
+
+  nsresult Read(uint64_t& aValue)
+  {
+    return Read(&aValue, sizeof(aValue));
+  }
+
+  nsresult Read(float& aValue)
+  {
+    return Read(&aValue, sizeof(aValue));
+  }
+
+  nsresult Read(double& aValue)
+  {
+    return Read(&aValue, sizeof(aValue));
+  }
+
   uint8_t* Append(size_t aLen);
 
   nsresult Write(const void* aValue, size_t aLen);
@@ -102,6 +123,26 @@ public:
   }
 
   nsresult Write(uint32_t aValue)
+  {
+    return Write(&aValue, sizeof(aValue));
+  }
+
+  nsresult Write(int64_t aValue)
+  {
+    return Write(&aValue, sizeof(aValue));
+  }
+
+  nsresult Write(uint64_t aValue)
+  {
+    return Write(&aValue, sizeof(aValue));
+  }
+
+  nsresult Write(float aValue)
+  {
+    return Write(&aValue, sizeof(aValue));
+  }
+
+  nsresult Write(double aValue)
   {
     return Write(&aValue, sizeof(aValue));
   }
@@ -229,6 +270,15 @@ public:
    * @param aSize The number of bytes in |aData|.
    */
   UnixSocketRawData(const void* aData, size_t aSize);
+
+  /**
+   * This constructor takes ownership of the data in aData.  The
+   * data is assumed to be aSize bytes in length.
+   *
+   * @param aData The buffer to take ownership of.
+   * @param aSize The number of bytes in |aData|.
+   */
+  UnixSocketRawData(UniquePtr<uint8_t[]> aData, size_t aSize);
 
   /**
    * This constructor reserves aSize bytes of space. Currently

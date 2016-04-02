@@ -1,10 +1,6 @@
-/*
-#ifdef 0
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#endif
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
  * Controls the "full zoom" setting and its site-specific preferences.
@@ -69,7 +65,6 @@ var FullZoom = {
     }
 
     // This should be nulled after initialization.
-    this._initialLocations.clear();
     this._initialLocations = null;
   },
 
@@ -116,8 +111,8 @@ var FullZoom = {
 
   // nsIContentPrefObserver
 
-  onContentPrefSet: function FullZoom_onContentPrefSet(aGroup, aName, aValue) {
-    this._onContentPrefChanged(aGroup, aValue);
+  onContentPrefSet: function FullZoom_onContentPrefSet(aGroup, aName, aValue, aIsPrivate) {
+    this._onContentPrefChanged(aGroup, aValue, aIsPrivate);
   },
 
   onContentPrefRemoved: function FullZoom_onContentPrefRemoved(aGroup, aName) {
@@ -132,7 +127,7 @@ var FullZoom = {
    * @param aValue  The new value of the changed preference.  Pass undefined to
    *                indicate the preference's removal.
    */
-  _onContentPrefChanged: function FullZoom__onContentPrefChanged(aGroup, aValue) {
+  _onContentPrefChanged: function FullZoom__onContentPrefChanged(aGroup, aValue, aIsPrivate) {
     if (this._isNextContentPrefChangeInternal) {
       // Ignore changes that FullZoom itself makes.  This works because the
       // content pref service calls callbacks before notifying observers, and it
@@ -145,9 +140,10 @@ var FullZoom = {
     if (!browser.currentURI)
       return;
 
+    let ctxt = this._loadContextFromBrowser(browser);
     let domain = this._cps2.extractDomain(browser.currentURI.spec);
     if (aGroup) {
-      if (aGroup == domain)
+      if (aGroup == domain && ctxt.usePrivateBrowsing == aIsPrivate)
         this._applyPrefToZoom(aValue, browser);
       return;
     }
@@ -159,7 +155,6 @@ var FullZoom = {
     // zoom should be set to the new global preference now that the global
     // preference has changed.
     let hasPref = false;
-    let ctxt = this._loadContextFromBrowser(browser);
     let token = this._getBrowserToken(browser);
     this._cps2.getByDomainAndName(browser.currentURI.spec, this.name, ctxt, {
       handleResult: function () { hasPref = true; },

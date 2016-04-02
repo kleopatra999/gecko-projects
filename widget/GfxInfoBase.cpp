@@ -153,9 +153,17 @@ GetPrefNameForFeature(int32_t aFeature)
     case nsIGfxInfo::FEATURE_WEBRTC_HW_ACCELERATION_DECODE:
       name = BLACKLIST_PREF_BRANCH "webrtc.hw.acceleration.decode";
       break;
-    default:
+    case nsIGfxInfo::FEATURE_CANVAS2D_ACCELERATION:
+      name = BLACKLIST_PREF_BRANCH "canvas2d.acceleration";
       break;
-  };
+    case nsIGfxInfo::FEATURE_VP8_HW_DECODE:
+    case nsIGfxInfo::FEATURE_VP9_HW_DECODE:
+      // We don't provide prefs for this features.
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected nsIGfxInfo feature?!");
+      break;
+  }
 
   return name;
 }
@@ -280,6 +288,8 @@ BlacklistOSToOperatingSystem(const nsAString& os)
     return DRIVER_OS_OS_X_10_9;
   else if (os.EqualsLiteral("Darwin 14"))
     return DRIVER_OS_OS_X_10_10;
+  else if (os.EqualsLiteral("Darwin 15"))
+    return DRIVER_OS_OS_X_10_11;
   else if (os.EqualsLiteral("Android"))
     return DRIVER_OS_ANDROID;
   else if (os.EqualsLiteral("All"))
@@ -348,6 +358,8 @@ BlacklistFeatureToGfxFeature(const nsAString& aFeature)
     return nsIGfxInfo::FEATURE_WEBRTC_HW_ACCELERATION_DECODE;
   else if (aFeature.EqualsLiteral("WEBRTC_HW_ACCELERATION"))
     return nsIGfxInfo::FEATURE_WEBRTC_HW_ACCELERATION;
+  else if (aFeature.EqualsLiteral("CANVAS2D_ACCELERATION"))
+      return nsIGfxInfo::FEATURE_CANVAS2D_ACCELERATION;
 
   // If we don't recognize the feature, it may be new, and something
   // this version doesn't understand.  So, nothing to do.  This is
@@ -564,6 +576,15 @@ BlacklistEntryToDriverInfo(nsIDOMNode* aBlacklistEntry,
     uint64_t version;
     if (ParseDriverVersion(dataValue, &version))
       aDriverInfo.mDriverVersion = version;
+  }
+
+  // <driverVersionMax> 8.52.322.2202 </driverVersionMax>
+  if (BlacklistNodeGetChildByName(element, NS_LITERAL_STRING("driverVersionMax"),
+                                  getter_AddRefs(dataNode))) {
+    BlacklistNodeToTextValue(dataNode, dataValue);
+    uint64_t version;
+    if (ParseDriverVersion(dataValue, &version))
+      aDriverInfo.mDriverVersionMax = version;
   }
 
   // <driverVersionComparator> LESS_THAN_OR_EQUAL </driverVersionComparator>
@@ -984,6 +1005,7 @@ GfxInfoBase::EvaluateDownloadedBlacklist(nsTArray<GfxDriverInfo>& aDriverInfo)
     nsIGfxInfo::FEATURE_WEBGL_MSAA,
     nsIGfxInfo::FEATURE_STAGEFRIGHT,
     nsIGfxInfo::FEATURE_WEBRTC_HW_ACCELERATION,
+    nsIGfxInfo::FEATURE_CANVAS2D_ACCELERATION,
     0
   };
 
@@ -1066,7 +1088,7 @@ NS_IMETHODIMP GfxInfoBase::GetFailures(uint32_t* failureCount,
   // and the strings in it should be small as well (the error messages in the
   // code.)  The second copy happens with the Clone() calls.  Technically,
   // we don't need the mutex lock after the StringVectorCopy() call.
-  std::vector<std::pair<int32_t,std::string> > loggedStrings = logForwarder->StringsVectorCopy();
+  LoggingRecord loggedStrings = logForwarder->LoggingRecordCopy();
   *failureCount = loggedStrings.size();
 
   if (*failureCount != 0) {
@@ -1084,11 +1106,11 @@ NS_IMETHODIMP GfxInfoBase::GetFailures(uint32_t* failureCount,
     }
 
     /* copy over the failure messages into the array we just allocated */
-    std::vector<std::pair<int32_t, std::string> >::const_iterator it;
+    LoggingRecord::const_iterator it;
     uint32_t i=0;
     for(it = loggedStrings.begin() ; it != loggedStrings.end(); ++it, i++) {
-      (*failures)[i] = (char*)nsMemory::Clone((*it).second.c_str(), (*it).second.size() + 1);
-      if (indices) (*indices)[i] = (*it).first;
+      (*failures)[i] = (char*)nsMemory::Clone(Get<1>(*it).c_str(), Get<1>(*it).size() + 1);
+      if (indices) (*indices)[i] = Get<0>(*it);
 
       if (!(*failures)[i]) {
         /* <sarcasm> I'm too afraid to use an inline function... </sarcasm> */
@@ -1133,10 +1155,11 @@ nsresult GfxInfoBase::GetInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aResu
   return NS_OK;
 }
 
+nsAutoCString gBaseAppVersion;
+
 const nsCString&
 GfxInfoBase::GetApplicationVersion()
 {
-  static nsAutoCString version;
   static bool versionInitialized = false;
   if (!versionInitialized) {
     // If we fail to get the version, we will not try again.
@@ -1145,10 +1168,10 @@ GfxInfoBase::GetApplicationVersion()
     // Get the version from xpcom/system/nsIXULAppInfo.idl
     nsCOMPtr<nsIXULAppInfo> app = do_GetService("@mozilla.org/xre/app-info;1");
     if (app) {
-      app->GetVersion(version);
+      app->GetVersion(gBaseAppVersion);
     }
   }
-  return version;
+  return gBaseAppVersion;
 }
 
 void

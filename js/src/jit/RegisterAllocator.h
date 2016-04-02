@@ -65,9 +65,13 @@ struct AllocationIntegrityState
 
         InstructionInfo(const InstructionInfo& o)
         {
-            inputs.appendAll(o.inputs);
-            temps.appendAll(o.temps);
-            outputs.appendAll(o.outputs);
+            AutoEnterOOMUnsafeRegion oomUnsafe;
+            if (!inputs.appendAll(o.inputs) ||
+                !temps.appendAll(o.temps) ||
+                !outputs.appendAll(o.outputs))
+            {
+                oomUnsafe.crash("InstructionInfo::InstructionInfo");
+            }
         }
     };
     Vector<InstructionInfo, 0, SystemAllocPolicy> instructions;
@@ -76,7 +80,9 @@ struct AllocationIntegrityState
         Vector<InstructionInfo, 5, SystemAllocPolicy> phis;
         BlockInfo() {}
         BlockInfo(const BlockInfo& o) {
-            phis.appendAll(o.phis);
+            AutoEnterOOMUnsafeRegion oomUnsafe;
+            if (!phis.appendAll(o.phis))
+                oomUnsafe.crash("BlockInfo::BlockInfo");
         }
     };
     Vector<BlockInfo, 0, SystemAllocPolicy> blocks;
@@ -265,6 +271,8 @@ class RegisterAllocator
 
     // Computed data
     InstructionDataMap insData;
+    Vector<CodePosition, 12, SystemAllocPolicy> entryPositions;
+    Vector<CodePosition, 12, SystemAllocPolicy> exitPositions;
 
     RegisterAllocator(MIRGenerator* mir, LIRGenerator* lir, LIRGraph& graph)
       : mir(mir),
@@ -325,12 +333,10 @@ class RegisterAllocator
         return CodePosition(ins->id(), CodePosition::INPUT);
     }
     CodePosition entryOf(const LBlock* block) {
-        return block->numPhis() != 0
-               ? CodePosition(block->getPhi(0)->id(), CodePosition::INPUT)
-               : inputOf(block->firstInstructionWithId());
+        return entryPositions[block->mir()->id()];
     }
     CodePosition exitOf(const LBlock* block) {
-        return outputOf(block->lastInstructionWithId());
+        return exitPositions[block->mir()->id()];
     }
 
     LMoveGroup* getInputMoveGroup(LInstruction* ins);

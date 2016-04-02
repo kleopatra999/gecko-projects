@@ -135,7 +135,7 @@ protected:
 
     // One pattern is the common case and some subclasses rely on successful
     // addition of the first element to the array.
-    AutoFallibleTArray<nsCountedRef<FcPattern>,1> mPatterns;
+    AutoTArray<nsCountedRef<FcPattern>,1> mPatterns;
 
     static cairo_user_data_key_t sFontEntryKey;
 };
@@ -189,7 +189,7 @@ public:
         cairo_font_face_reference(mFontFace);
         cairo_font_face_set_user_data(mFontFace, &sFontEntryKey, this, nullptr);
 
-        // mPatterns is an nsAutoTArray with 1 space always available, so the
+        // mPatterns is an AutoTArray with 1 space always available, so the
         // AppendElement always succeeds.
         // FIXME: Make this infallible after bug 968520 is done.
         MOZ_ALWAYS_TRUE(mPatterns.AppendElement(fallible));
@@ -216,7 +216,7 @@ public:
 
 protected:
     virtual nsresult
-    CopyFontTable(uint32_t aTableTag, FallibleTArray<uint8_t>& aBuffer) override;
+    CopyFontTable(uint32_t aTableTag, nsTArray<uint8_t>& aBuffer) override;
 
     void MaybeReleaseFTFace();
 
@@ -228,7 +228,7 @@ private:
 
 nsresult
 gfxSystemFcFontEntry::CopyFontTable(uint32_t aTableTag,
-                                    FallibleTArray<uint8_t>& aBuffer)
+                                    nsTArray<uint8_t>& aBuffer)
 {
     if (!mFTFaceInitialized) {
         mFTFaceInitialized = true;
@@ -913,7 +913,7 @@ gfxFcFontSet::SortPreferredFonts(bool &aWaitForUserFont)
     // but FcConfigSubstitute may add more values (e.g. prepending "en" to
     // "ja" will use western fonts to render Latin/Arabic numerals in Japanese
     // text.)
-    nsAutoTArray<LangSupportEntry,10> requiredLangs;
+    AutoTArray<LangSupportEntry,10> requiredLangs;
     for (int v = 0; ; ++v) {
         FcChar8 *lang;
         FcResult result = FcPatternGetString(mSortPattern, FC_LANG, v, &lang);
@@ -1258,14 +1258,15 @@ PrepareSortPattern(FcPattern *aPattern, double aFallbackSize,
 
 gfxPangoFontGroup::gfxPangoFontGroup(const FontFamilyList& aFontFamilyList,
                                      const gfxFontStyle *aStyle,
-                                     gfxUserFontSet *aUserFontSet)
-    : gfxFontGroup(aFontFamilyList, aStyle, nullptr, aUserFontSet),
+                                     gfxUserFontSet *aUserFontSet,
+                                     gfxFloat aDevToCssSize)
+    : gfxFontGroup(aFontFamilyList, aStyle, nullptr, aUserFontSet, aDevToCssSize),
       mPangoLanguage(GuessPangoLanguage(aStyle->language))
 {
     // This language is passed to the font for shaping.
     // Shaping doesn't know about lang groups so make it a real language.
     if (mPangoLanguage) {
-        mStyle.language = do_GetAtom(pango_language_to_string(mPangoLanguage));
+        mStyle.language = NS_Atomize(pango_language_to_string(mPangoLanguage));
     }
 
     // dummy entry, will be replaced when actually needed
@@ -1280,7 +1281,7 @@ gfxPangoFontGroup::~gfxPangoFontGroup()
 gfxFontGroup *
 gfxPangoFontGroup::Copy(const gfxFontStyle *aStyle)
 {
-    return new gfxPangoFontGroup(mFamilyList, aStyle, mUserFontSet);
+    return new gfxPangoFontGroup(mFamilyList, aStyle, mUserFontSet, mDevToCssSize);
 }
 
 void
@@ -1288,7 +1289,7 @@ gfxPangoFontGroup::FindGenericFontsPFG(FontFamilyType aGenericType,
                                        nsIAtom *aLanguage,
                                        void *aClosure)
 {
-    nsAutoTArray<nsString, 5> resolvedGenerics;
+    AutoTArray<nsString, 5> resolvedGenerics;
     ResolveGenericFontNamesPFG(aGenericType, aLanguage, resolvedGenerics);
     uint32_t g = 0, numGenerics = resolvedGenerics.Length();
     for (g = 0; g < numGenerics; g++) {
@@ -1490,10 +1491,10 @@ gfxPangoFontGroup::MakeFontSet(PangoLanguage *aLang, gfxFloat aSizeAdjustFactor,
     RefPtr<nsIAtom> langGroup;
     if (aLang != mPangoLanguage) {
         // Set up langGroup for Mozilla's font prefs.
-        langGroup = do_GetAtom(lang);
+        langGroup = NS_Atomize(lang);
     }
 
-    nsAutoTArray<nsString, 20> fcFamilyList;
+    AutoTArray<nsString, 20> fcFamilyList;
     EnumerateFontListPFG(langGroup ? langGroup.get() : mStyle.language.get(),
                          &fcFamilyList);
 
@@ -1624,9 +1625,14 @@ gfxPangoFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
         nextFont = 1;
     }
 
-    // Pango, GLib, and Thebes (but not harfbuzz!) all happen to use the same
-    // script codes, so we can just cast the value here.
-    const PangoScript script = static_cast<PangoScript>(aRunScript);
+    // Our MOZ_SCRIPT_* codes may not match the PangoScript enumeration values
+    // (if we're using ICU's codes), so convert by mapping through ISO 15924 tag.
+    // Note that PangoScript is defined to be compatible with GUnicodeScript:
+    // https://developer.gnome.org/pango/stable/pango-Scripts-and-Languages.html#PangoScript
+    const hb_tag_t scriptTag = GetScriptTagForCode(aRunScript);
+    const PangoScript script =
+      (const PangoScript)g_unicode_script_from_iso15924(scriptTag);
+
     // Might be nice to call pango_language_includes_script only once for the
     // run rather than for each character.
     PangoLanguage *scriptLang;
@@ -1652,19 +1658,6 @@ gfxPangoFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
 
     return nullptr;
 }
-
-// Sanity-check: spot-check a few constants to confirm that Thebes and
-// Pango script codes really do match
-#define CHECK_SCRIPT_CODE(script) \
-    PR_STATIC_ASSERT(int32_t(MOZ_SCRIPT_##script) == \
-                     int32_t(PANGO_SCRIPT_##script))
-
-CHECK_SCRIPT_CODE(COMMON);
-CHECK_SCRIPT_CODE(INHERITED);
-CHECK_SCRIPT_CODE(ARABIC);
-CHECK_SCRIPT_CODE(LATIN);
-CHECK_SCRIPT_CODE(UNKNOWN);
-CHECK_SCRIPT_CODE(NKO);
 
 /**
  ** gfxFcFont
@@ -1813,7 +1806,7 @@ gfxPangoFontGroup::GetFTLibrary()
         gfxFontStyle style;
         RefPtr<gfxPangoFontGroup> fontGroup =
             new gfxPangoFontGroup(FontFamilyList(eFamily_sans_serif),
-                                  &style, nullptr);
+                                  &style, nullptr, 1.0);
 
         gfxFcFont *font = fontGroup->GetBaseFont();
         if (!font)
@@ -2179,6 +2172,7 @@ CreateScaledFont(FcPattern *aPattern, cairo_font_face_t *aFace)
             // subpixel_order won't be used by the font as we won't use
             // CAIRO_ANTIALIAS_SUBPIXEL, but don't leave it at default for
             // caching reasons described above.  Fall through:
+            MOZ_FALLTHROUGH;
         case FC_RGBA_RGB:
             subpixel_order = CAIRO_SUBPIXEL_ORDER_RGB;
             break;
@@ -2268,7 +2262,7 @@ ApplyGdkScreenFontOptions(FcPattern *aPattern)
     cairo_ft_font_options_substitute(options, aPattern);
 }
 
-#endif // MOZ_WIDGET_GTK2
+#endif // MOZ_WIDGET_GTK
 
 #ifdef USE_SKIA
 already_AddRefed<mozilla::gfx::GlyphRenderingOptions>

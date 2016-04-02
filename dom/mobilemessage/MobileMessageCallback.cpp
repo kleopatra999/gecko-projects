@@ -7,11 +7,12 @@
 #include "MobileMessageCallback.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "nsContentUtils.h"
-#include "nsIDOMMozSmsMessage.h"
-#include "nsIDOMMozMmsMessage.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsPIDOMWindow.h"
 #include "MmsMessage.h"
+#include "MmsMessageInternal.h"
+#include "SmsMessage.h"
+#include "SmsMessageInternal.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "jsapi.h"
 #include "xpcpublic.h"
@@ -132,14 +133,36 @@ MobileMessageCallback::NotifySuccess(JS::Handle<JS::Value> aResult, bool aAsync)
 nsresult
 MobileMessageCallback::NotifySuccess(nsISupports *aMessage, bool aAsync)
 {
+  nsCOMPtr<nsPIDOMWindowInner> window = mDOMRequest->GetOwner();
+  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
+
+  nsCOMPtr<nsISupports> result;
+
+  nsCOMPtr<nsISmsMessage> internalSms =
+    do_QueryInterface(aMessage);
+  if (internalSms) {
+    SmsMessageInternal* smsMsg = static_cast<SmsMessageInternal*>(internalSms.get());
+    result = new SmsMessage(window, smsMsg);
+  }
+
+  if (!result) {
+    nsCOMPtr<nsIMmsMessage> internalMms =
+      do_QueryInterface(aMessage);
+    if (internalMms) {
+      MmsMessageInternal* mmsMsg = static_cast<MmsMessageInternal*>(internalMms.get());
+      result = new MmsMessage(window, mmsMsg);
+    }
+  }
+
   AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.Init(mDOMRequest->GetOwner()))) {
+  if (NS_WARN_IF(!jsapi.Init(window))) {
     return NS_ERROR_FAILURE;
   }
   JSContext* cx = jsapi.cx();
 
   JS::Rooted<JS::Value> wrappedMessage(cx);
-  nsresult rv = nsContentUtils::WrapNative(cx, aMessage, &wrappedMessage);
+  nsresult rv =
+    nsContentUtils::WrapNative(cx, result, &wrappedMessage);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NotifySuccess(wrappedMessage, aAsync);
@@ -182,7 +205,7 @@ MobileMessageCallback::NotifyMessageSent(nsISupports *aMessage)
 NS_IMETHODIMP
 MobileMessageCallback::NotifySendMessageFailed(int32_t aError, nsISupports *aMessage)
 {
-  nsCOMPtr<nsPIDOMWindow> window = mDOMRequest->GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = mDOMRequest->GetOwner();
   if (NS_WARN_IF(!window)) {
     return NS_ERROR_FAILURE;
   }
@@ -190,15 +213,19 @@ MobileMessageCallback::NotifySendMessageFailed(int32_t aError, nsISupports *aMes
   RefPtr<DOMMobileMessageError> domMobileMessageError;
   if (aMessage) {
     nsAutoString errorStr = ConvertErrorCodeToErrorString(aError);
-    nsCOMPtr<nsIDOMMozSmsMessage> smsMsg = do_QueryInterface(aMessage);
-    if (smsMsg) {
+    nsCOMPtr<nsISmsMessage> internalSms = do_QueryInterface(aMessage);
+    if (internalSms) {
       domMobileMessageError =
-        new DOMMobileMessageError(window, errorStr, smsMsg);
+        new DOMMobileMessageError(window, errorStr,
+                                  new SmsMessage(window,
+                                  static_cast<SmsMessageInternal*>(internalSms.get())));
     }
     else {
-      nsCOMPtr<nsIDOMMozMmsMessage> mmsMsg = do_QueryInterface(aMessage);
+      nsCOMPtr<nsIMmsMessage> internalMms = do_QueryInterface(aMessage);
       domMobileMessageError =
-        new DOMMobileMessageError(window, errorStr, mmsMsg);
+        new DOMMobileMessageError(window, errorStr,
+                                  new MmsMessage(window,
+                                  static_cast<MmsMessageInternal*>(internalMms.get())));
     }
     NS_ASSERTION(domMobileMessageError, "Invalid DOMMobileMessageError!");
   }
@@ -234,8 +261,14 @@ MobileMessageCallback::NotifyMessageDeleted(bool *aDeleted, uint32_t aSize)
   JSContext* cx = jsapi.cx();
 
   JS::Rooted<JSObject*> deleteArrayObj(cx, JS_NewArrayObject(cx, aSize));
+  if (!deleteArrayObj) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
   for (uint32_t i = 0; i < aSize; i++) {
-    JS_DefineElement(cx, deleteArrayObj, i, aDeleted[i], JSPROP_ENUMERATE);
+    if (!JS_DefineElement(cx, deleteArrayObj, i, aDeleted[i],
+                          JSPROP_ENUMERATE)) {
+      return NS_ERROR_UNEXPECTED;
+    }
   }
 
   JS::Rooted<JS::Value> deleteArrayVal(cx, JS::ObjectValue(*deleteArrayObj));
@@ -280,7 +313,7 @@ MobileMessageCallback::NotifySegmentInfoForTextGot(int32_t aSegments,
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> val(cx);
   if (!ToJSValue(cx, info, &val)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NotifyError(nsIMobileMessageCallback::INTERNAL_ERROR);
   }
 

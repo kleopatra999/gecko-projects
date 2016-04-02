@@ -12,6 +12,7 @@
  * http://www.w3.org/2012/sysapps/runtime/#extension-to-the-navigator-interface-1
  * https://dvcs.w3.org/hg/gamepad/raw-file/default/gamepad.html#navigator-interface-extension
  * http://www.w3.org/TR/beacon/#sec-beacon-method
+ * https://html.spec.whatwg.org/#navigatorconcurrenthardware
  *
  * © Copyright 2004-2011 Apple Computer, Inc., Mozilla Foundation, and
  * Opera Software ASA. You are granted a license to use, reproduce
@@ -29,6 +30,7 @@ Navigator implements NavigatorOnLine;
 Navigator implements NavigatorContentUtils;
 Navigator implements NavigatorStorageUtils;
 Navigator implements NavigatorFeatures;
+Navigator implements NavigatorConcurrentHardware;
 
 [NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorID {
@@ -41,7 +43,7 @@ interface NavigatorID {
   readonly attribute DOMString appVersion;
   [Constant, Cached]
   readonly attribute DOMString platform;
-  [Constant, Cached]
+  [Pure, Cached, Throws]
   readonly attribute DOMString userAgent;
   [Constant, Cached]
   readonly attribute DOMString product; // constant "Gecko"
@@ -54,8 +56,10 @@ interface NavigatorID {
 [NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorLanguage {
 
-  // These 2 values are cached. They are updated when pref
-  // intl.accept_languages is changed.
+  // These two attributes are cached because this interface is also implemented
+  // by Workernavigator and this way we don't have to go back to the
+  // main-thread from the worker thread anytime we need to retrieve them. They
+  // are updated when pref intl.accept_languages is changed.
 
   [Pure, Cached]
   readonly attribute DOMString? language;
@@ -98,7 +102,7 @@ interface NavigatorFeatures {
 };
 
 partial interface Navigator {
-  [Throws, Pref="dom.permissions.enabled"]
+  [Throws]
   readonly attribute Permissions permissions;
 };
 
@@ -188,7 +192,7 @@ Navigator implements NavigatorMobileId;
 
 // nsIDOMNavigator
 partial interface Navigator {
-  [Throws]
+  [Throws, Constant, Cached]
   readonly attribute DOMString oscpu;
   // WebKit/Blink support this; Trident/Presto do not.
   readonly attribute DOMString vendor;
@@ -198,7 +202,7 @@ partial interface Navigator {
   readonly attribute DOMString productSub;
   // WebKit/Blink/Trident/Presto support this.
   readonly attribute boolean cookieEnabled;
-  [Throws]
+  [Throws, Constant, Cached]
   readonly attribute DOMString buildID;
   [Throws, CheckAnyPermissions="power", UnsafeInPrerendering]
   readonly attribute MozPowerManager mozPower;
@@ -406,13 +410,19 @@ partial interface Navigator {
                               // The originating innerWindowID is needed to
                               // avoid calling the callbacks if the window has
                               // navigated away. It is optional only as legacy.
-                              optional unsigned long long innerWindowID = 0);
+                              optional unsigned long long innerWindowID = 0,
+                              // The callID is needed in case of multiple
+                              // concurrent requests to find the right one.
+                              // It is optional only as legacy.
+                              // TODO: Rewrite to not need this method anymore,
+                              // now that devices are enumerated earlier.
+                              optional DOMString callID = "");
 };
 #endif // MOZ_MEDIA_NAVIGATOR
 
 // Service Workers/Navigation Controllers
 partial interface Navigator {
-  [Func="ServiceWorkerContainer::IsEnabled"]
+  [Func="ServiceWorkerContainer::IsEnabled", SameObject]
   readonly attribute ServiceWorkerContainer serviceWorker;
 };
 
@@ -423,7 +433,7 @@ partial interface Navigator {
 };
 
 partial interface Navigator {
-  [Pref="dom.tv.enabled", CheckAnyPermissions="tv", Func="Navigator::HasTVSupport"]
+  [Pref="dom.tv.enabled", CheckAnyPermissions="tv", AvailableIn=CertifiedApps]
   readonly attribute TVManager? tv;
 };
 
@@ -457,3 +467,19 @@ partial interface Navigator {
   readonly attribute boolean mozE10sEnabled;
 };
 #endif
+
+#ifdef MOZ_PAY
+partial interface Navigator {
+  [Throws, NewObject, Pref="dom.mozPay.enabled"]
+  // The 'jwts' parameter can be either a single DOMString or an array of
+  // DOMStrings. In both cases, it represents the base64url encoded and
+  // digitally signed payment information. Each payment provider should
+  // define its supported JWT format.
+  DOMRequest mozPay(any jwts);
+};
+#endif
+
+[NoInterfaceObject, Exposed=(Window,Worker)]
+interface NavigatorConcurrentHardware {
+  readonly attribute unsigned long long hardwareConcurrency;
+};

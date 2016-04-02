@@ -9,7 +9,8 @@
 const Services = require("Services");
 const { Cc, Ci, Cu } = require("chrome");
 const { DebuggerServer, ActorPool } = require("devtools/server/main");
-const { EnvironmentActor, ThreadActor } = require("devtools/server/actors/script");
+const { EnvironmentActor } = require("devtools/server/actors/environment");
+const { ThreadActor } = require("devtools/server/actors/script");
 const { ObjectActor, LongStringActor, createValueGrip, stringIsLong } = require("devtools/server/actors/object");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 
@@ -19,6 +20,7 @@ loader.lazyRequireGetter(this, "ConsoleProgressListener", "devtools/shared/webco
 loader.lazyRequireGetter(this, "events", "sdk/event/core");
 loader.lazyRequireGetter(this, "ServerLoggingListener", "devtools/shared/webconsole/server-logger", true);
 loader.lazyRequireGetter(this, "JSPropertyProvider", "devtools/shared/webconsole/js-property-provider", true);
+loader.lazyRequireGetter(this, "Parser", "resource://devtools/shared/Parser.jsm", true);
 
 for (let name of ["WebConsoleUtils", "ConsoleServiceListener",
     "ConsoleAPIListener", "addWebConsoleCommands",
@@ -84,7 +86,7 @@ function WebConsoleActor(aConnection, aParentActor)
   };
 }
 
-WebConsoleActor.l10n = new WebConsoleUtils.l10n("chrome://global/locale/console.properties");
+WebConsoleActor.l10n = new WebConsoleUtils.L10n("chrome://global/locale/console.properties");
 
 WebConsoleActor.prototype =
 {
@@ -158,8 +160,12 @@ WebConsoleActor.prototype =
   },
 
   /**
-   * The window we work with.
-   * @type nsIDOMWindow
+   * The window or sandbox we work with.
+   * Note that even if it is named `window` it refers to the current
+   * global we are debugging, which can be a Sandbox for addons
+   * or browser content toolbox.
+   *
+   * @type nsIDOMWindow or Sandbox
    */
   get window() {
     if (this.parentActor.isRootActor) {
@@ -280,6 +286,11 @@ WebConsoleActor.prototype =
   networkMonitor: null,
 
   /**
+   * The NetworkMonitor instance living in the same (child) process.
+   */
+  networkMonitorChild: null,
+
+  /**
    * The ConsoleProgressListener instance.
    */
   consoleProgressListener: null,
@@ -338,6 +349,10 @@ WebConsoleActor.prototype =
     if (this.networkMonitor) {
       this.networkMonitor.destroy();
       this.networkMonitor = null;
+    }
+    if (this.networkMonitorChild) {
+      this.networkMonitorChild.destroy();
+      this.networkMonitorChild = null;
     }
     if (this.consoleProgressListener) {
       this.consoleProgressListener.destroy();
@@ -423,16 +438,18 @@ WebConsoleActor.prototype =
    */
   makeDebuggeeValue: function WCA_makeDebuggeeValue(aValue, aUseObjectGlobal)
   {
-    let global = this.window;
     if (aUseObjectGlobal && typeof aValue == "object") {
       try {
-        global = Cu.getGlobalForObject(aValue);
+        let global = Cu.getGlobalForObject(aValue);
+        let dbgGlobal = this.dbg.makeGlobalObjectReference(global);
+        return dbgGlobal.makeDebuggeeValue(aValue);
       }
       catch (ex) {
-        // The above can throw an exception if aValue is not an actual object.
+        // The above can throw an exception if aValue is not an actual object
+        // or 'Object in compartment marked as invisible to Debugger'
       }
     }
-    let dbgGlobal = this.dbg.makeGlobalObjectReference(global);
+    let dbgGlobal = this.dbg.makeGlobalObjectReference(this.window);
     return dbgGlobal.makeDebuggeeValue(aValue);
   },
 
@@ -581,14 +598,21 @@ WebConsoleActor.prototype =
         case "NetworkActivity":
           if (!this.networkMonitor) {
             if (appId || messageManager) {
+              // Start a network monitor in the parent process to listen to
+              // most requests than happen in parent
               this.networkMonitor =
                 new NetworkMonitorChild(appId, messageManager,
                                         this.parentActor.actorID, this);
+              this.networkMonitor.init();
+              // Spawn also one in the child to listen to service workers
+              this.networkMonitorChild = new NetworkMonitor({ window: window },
+                                                            this);
+              this.networkMonitorChild.init();
             }
             else {
               this.networkMonitor = new NetworkMonitor({ window: window }, this);
+              this.networkMonitor.init();
             }
-            this.networkMonitor.init();
           }
           startedListeners.push(listener);
           break;
@@ -671,6 +695,10 @@ WebConsoleActor.prototype =
             this.networkMonitor.destroy();
             this.networkMonitor = null;
           }
+          if (this.networkMonitorChild) {
+            this.networkMonitorChild.destroy();
+            this.networkMonitorChild = null;
+          }
           stoppedListeners.push(listener);
           break;
         case "FileActivity":
@@ -733,9 +761,21 @@ WebConsoleActor.prototype =
           if (!this.consoleAPIListener) {
             break;
           }
+
+          // See `window` definition. It isn't always a DOM Window.
+          let requestStartTime = this.window && this.window.performance ?
+            this.window.performance.timing.requestStart : 0;
+
           let cache = this.consoleAPIListener
                       .getCachedMessages(!this.parentActor.isRootActor);
           cache.forEach((aMessage) => {
+            // Filter out messages that came from a ServiceWorker but happened
+            // before the page was requested.
+            if (aMessage.innerID === "ServiceWorker" &&
+                requestStartTime > aMessage.timeStamp) {
+              return;
+            }
+
             let message = this.prepareConsoleMessageForRemote(aMessage);
             message._type = type;
             messages.push(message);
@@ -848,7 +888,7 @@ WebConsoleActor.prototype =
                                 error.unsafeDereference();
         errorMessage = unsafeDereference && unsafeDereference.toString
           ? unsafeDereference.toString()
-          : "" + error;
+          : String(error);
       }
     }
 
@@ -887,26 +927,34 @@ WebConsoleActor.prototype =
     let frameActorId = aRequest.frameActor;
     let dbgObject = null;
     let environment = null;
+    let hadDebuggee = false;
 
     // This is the case of the paused debugger
     if (frameActorId) {
       let frameActor = this.conn.getActor(frameActorId);
-      if (frameActor) {
+      try {
+        // Need to try/catch since accessing frame.environment
+        // can throw "Debugger.Frame is not live"
         let frame = frameActor.frame;
         environment = frame.environment;
-      }
-      else {
+      } catch(e) {
         DevToolsUtils.reportException("onAutocomplete",
           Error("The frame actor was not found: " + frameActorId));
       }
     }
     // This is the general case (non-paused debugger)
     else {
-      dbgObject = this.dbg.makeGlobalObjectReference(this.evalWindow);
+      hadDebuggee = this.dbg.hasDebuggee(this.evalWindow);
+      dbgObject = this.dbg.addDebuggee(this.evalWindow);
     }
 
     let result = JSPropertyProvider(dbgObject, environment, aRequest.text,
                                     aRequest.cursor, frameActorId) || {};
+
+    if (!hadDebuggee && dbgObject) {
+      this.dbg.removeDebuggee(this.evalWindow);
+    }
+
     let matches = result.matches || [];
     let reqText = aRequest.text.substr(0, aRequest.cursor);
 
@@ -987,6 +1035,9 @@ WebConsoleActor.prototype =
       if (key == "NetworkMonitor.saveRequestAndResponseBodies" &&
           this.networkMonitor) {
         this.networkMonitor.saveRequestAndResponseBodies = this._prefs[key];
+        if (this.networkMonitorChild) {
+          this.networkMonitorChild.saveRequestAndResponseBodies = this._prefs[key];
+        }
       }
     }
     return { updated: Object.keys(aRequest.preferences) };
@@ -1229,6 +1280,27 @@ WebConsoleActor.prototype =
     }
     else {
       result = dbgWindow.executeInGlobalWithBindings(aString, bindings, evalOptions);
+      // Attempt to initialize any declarations found in the evaluated string
+      // since they may now be stuck in an "initializing" state due to the
+      // error. Already-initialized bindings will be ignored.
+      if ("throw" in result) {
+        let ast;
+        // Parse errors will raise an exception. We can/should ignore the error
+        // since it's already being handled elsewhere and we are only interested
+        // in initializing bindings.
+        try {
+          ast = Parser.reflectionAPI.parse(aString);
+        } catch (ex) {
+          ast = {"body": []};
+        }
+        for (let line of ast.body) {
+          if (line.type == "VariableDeclaration" &&
+            (line.kind == "let" || line.kind == "const")) {
+            for (let decl of line.declarations)
+              dbgWindow.forceLexicalInitializationByName(decl.id.name);
+          }
+        }
+      }
     }
 
     let helperResult = helpers.helperResult;
@@ -1709,6 +1781,7 @@ NetworkEventActor.prototype =
       method: this._request.method,
       isXHR: this._isXHR,
       fromCache: this._fromCache,
+      fromServiceWorker: this._fromServiceWorker,
       private: this._private,
     };
   },
@@ -1753,6 +1826,7 @@ NetworkEventActor.prototype =
     this._startedDateTime = aNetworkEvent.startedDateTime;
     this._isXHR = aNetworkEvent.isXHR;
     this._fromCache = aNetworkEvent.fromCache;
+    this._fromServiceWorker = aNetworkEvent.fromServiceWorker;
 
     for (let prop of ['method', 'url', 'httpVersion', 'headersSize']) {
       this._request[prop] = aNetworkEvent[prop];
@@ -2080,6 +2154,7 @@ NetworkEventActor.prototype =
       updateType: "responseContent",
       mimeType: aContent.mimeType,
       contentSize: aContent.size,
+      encoding: aContent.encoding,
       transferredSize: aContent.transferredSize,
       discardResponseBody: aDiscardedResponseBody,
     };

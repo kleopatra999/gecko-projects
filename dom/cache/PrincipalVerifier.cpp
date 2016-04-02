@@ -12,6 +12,7 @@
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/PBackgroundParent.h"
 #include "mozilla/ipc/BackgroundUtils.h"
+#include "nsContentUtils.h"
 #include "nsIPrincipal.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsNetUtil.h"
@@ -40,7 +41,7 @@ PrincipalVerifier::CreateAndDispatch(Listener* aListener,
                                                                aActor,
                                                                aPrincipalInfo);
 
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToMainThread(verifier)));
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(verifier));
 
   return verifier.forget();
 }

@@ -17,21 +17,30 @@ namespace mozilla
 
 sandbox::BrokerServices *SandboxBroker::sBrokerService = nullptr;
 
-SandboxBroker::SandboxBroker()
+/* static */
+bool
+SandboxBroker::Initialize()
 {
-  // XXX: This is not thread-safe! Two threads could simultaneously try
-  // to set `sBrokerService`
+  sBrokerService = sandbox::SandboxFactory::GetBrokerServices();
   if (!sBrokerService) {
-    sBrokerService = sandbox::SandboxFactory::GetBrokerServices();
-    if (sBrokerService) {
-      sandbox::ResultCode result = sBrokerService->Init();
-      if (result != sandbox::SBOX_ALL_OK) {
-        sBrokerService = nullptr;
-      }
-    }
+    return false;
   }
 
-  mPolicy = sBrokerService->CreatePolicy();
+  if (sBrokerService->Init() != sandbox::SBOX_ALL_OK) {
+    sBrokerService = nullptr;
+    return false;
+  }
+
+  return true;
+}
+
+SandboxBroker::SandboxBroker()
+{
+  if (sBrokerService) {
+    mPolicy = sBrokerService->CreatePolicy();
+  } else {
+    mPolicy = nullptr;
+  }
 }
 
 bool
@@ -52,6 +61,21 @@ SandboxBroker::LaunchApp(const wchar_t *aPath,
   if (aEnableLogging) {
     mozilla::sandboxing::ApplyLoggingPolicy(*mPolicy);
   }
+
+#if defined(DEBUG)
+  // Allow write access to TEMP directory in debug builds for logging purposes.
+  // The path from GetTempPathW can have a length up to MAX_PATH + 1, including
+  // the null, so we need MAX_PATH + 2, so we can add an * to the end.
+  wchar_t tempPath[MAX_PATH + 2];
+  uint32_t pathLen = ::GetTempPathW(MAX_PATH + 1, tempPath);
+  if (pathLen > 0) {
+    // GetTempPath path ends with \ and returns the length without the null.
+    tempPath[pathLen] = L'*';
+    tempPath[pathLen + 1] = L'\0';
+    mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                     sandbox::TargetPolicy::FILES_ALLOW_ANY, tempPath);
+  }
+#endif
 
   // Ceate the sandboxed process
   PROCESS_INFORMATION targetInfo = {0};

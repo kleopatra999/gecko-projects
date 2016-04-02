@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 // The purpose of this test is to create a site security service state file
 // and see that the site security service reads it properly. We also verify
@@ -21,7 +22,7 @@ function run_test() {
   stateFile.append(SSS_STATE_FILE_NAME);
   // Assuming we're working with a clean slate, the file shouldn't exist
   // until we create it.
-  do_check_false(stateFile.exists());
+  ok(!stateFile.exists());
   let outputStream = FileUtils.openFileOutputStream(stateFile);
   let now = (new Date()).getTime();
   writeLine("expired.example.com:HSTS\t0\t0\t" + (now - 100000) + ",1,0\n", outputStream);
@@ -36,5 +37,5 @@ function run_test() {
   do_test_pending();
   var SSService = Cc["@mozilla.org/ssservice;1"]
                     .getService(Ci.nsISiteSecurityService);
-  do_check_true(SSService != null);
+  notEqual(SSService, null);
 }

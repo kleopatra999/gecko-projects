@@ -5,6 +5,7 @@
 "use strict";
 
 Components.utils.import("resource://gre/modules/Services.jsm");
+Components.utils.import("resource://gre/modules/NetUtil.jsm");
 
 if (typeof(Ci) == 'undefined') {
   var Ci = Components.interfaces;
@@ -186,15 +187,12 @@ SpecialPowersObserverAPI.prototype = {
     // to evaluate http:// urls...
     var scriptableStream = Cc["@mozilla.org/scriptableinputstream;1"]
                              .getService(Ci.nsIScriptableInputStream);
-    var channel = Services.io.newChannel2(aUrl,
-                                          null,
-                                          null,
-                                          null,      // aLoadingNode
-                                          Services.scriptSecurityManager.getSystemPrincipal(),
-                                          null,      // aTriggeringPrincipal
-                                          Ci.nsILoadInfo.SEC_NORMAL,
-                                          Ci.nsIContentPolicy.TYPE_OTHER);
-    var input = channel.open();
+
+    var channel = NetUtil.newChannel({
+      uri: aUrl,
+      loadUsingSystemPrincipal: true
+    });
+    var input = channel.open2();
     scriptableStream.init(input);
 
     var str;
@@ -357,10 +355,6 @@ SpecialPowersObserverAPI.prototype = {
         let Webapps = {};
         Components.utils.import("resource://gre/modules/Webapps.jsm", Webapps);
         switch (aMessage.json.op) {
-          case "set-launchable":
-            let val = Webapps.DOMApplicationRegistry.allAppsLaunchable;
-            Webapps.DOMApplicationRegistry.allAppsLaunchable = aMessage.json.launchable;
-            return val;
           case "allow-unsigned-addons":
             {
               let utils = {};
@@ -426,10 +420,20 @@ SpecialPowersObserverAPI.prototype = {
       }
 
       case "SPLoadChromeScript": {
-        let url = aMessage.json.url;
         let id = aMessage.json.id;
+        let jsScript;
+        let scriptName;
 
-        let jsScript = this._readUrlAsString(url);
+        if (aMessage.json.url) {
+          jsScript = this._readUrlAsString(aMessage.json.url);
+          scriptName = aMessage.json.url;
+        } else if (aMessage.json.function) {
+          jsScript = aMessage.json.function.body;
+          scriptName = aMessage.json.function.name
+            || "<loadChromeScript anonymous function>";
+        } else {
+          throw new SpecialPowersError("SPLoadChromeScript: Invalid script");
+        }
 
         // Setup a chrome sandbox that has access to sendAsyncMessage
         // and addMessageListener in order to communicate with
@@ -453,13 +457,13 @@ SpecialPowersObserverAPI.prototype = {
         let reporter = function (err, message, stack) {
           // Pipe assertions back to parent process
           mm.sendAsyncMessage("SPChromeScriptAssert",
-                              { id: id, url: url, err: err, message: message,
-                                stack: stack });
+                              { id, name: scriptName, err, message,
+                                stack });
         };
         Object.defineProperty(sb, "assert", {
           get: function () {
             let scope = Components.utils.createObjectIn(sb);
-            Services.scriptloader.loadSubScript("resource://specialpowers/Assert.jsm",
+            Services.scriptloader.loadSubScript("chrome://specialpowers/content/Assert.jsm",
                                                 scope);
 
             let assert = new scope.Assert(reporter);
@@ -471,10 +475,10 @@ SpecialPowersObserverAPI.prototype = {
 
         // Evaluate the chrome script
         try {
-          Components.utils.evalInSandbox(jsScript, sb, "1.8", url, 1);
+          Components.utils.evalInSandbox(jsScript, sb, "1.8", scriptName, 1);
         } catch(e) {
           throw new SpecialPowersError(
-            "Error while executing chrome script '" + url + "':\n" +
+            "Error while executing chrome script '" + scriptName + "':\n" +
             e + "\n" +
             e.fileName + ":" + e.lineNumber);
         }
@@ -485,48 +489,20 @@ SpecialPowersObserverAPI.prototype = {
         let id = aMessage.json.id;
         let name = aMessage.json.name;
         let message = aMessage.json.message;
-        this._chromeScriptListeners
-            .filter(o => (o.name == name && o.id == id))
-            .forEach(o => o.listener(message));
-        return undefined;	// See comment at the beginning of this function.
+        return this._chromeScriptListeners
+                   .filter(o => (o.name == name && o.id == id))
+                   .map(o => o.listener(message));
       }
 
-      case 'SPQuotaManager': {
-        let qm = Cc['@mozilla.org/dom/quota/manager;1']
-                   .getService(Ci.nsIQuotaManager);
-        let mm = aMessage.target
-                         .QueryInterface(Ci.nsIFrameLoaderOwner)
-                         .frameLoader
-                         .messageManager;
-        let msg = aMessage.data;
-        let principal = msg.principal;
-        let op = msg.op;
-
-        if (op != 'clear' && op != 'getUsage' && op != 'reset') {
-          throw new SpecialPowersError('Invalid operation for SPQuotaManager');
+      case "SPImportInMainProcess": {
+        var message = { hadError: false, errorMessage: null };
+        try {
+          Components.utils.import(aMessage.data);
+        } catch (e) {
+          message.hadError = true;
+          message.errorMessage = e.toString();
         }
-
-        if (op == 'clear') {
-          qm.clearStoragesForPrincipal(principal);
-        } else if (op == 'reset') {
-          qm.reset();
-        }
-
-        // We always use the getUsageForPrincipal callback even if we're clearing
-        // since we know that clear and getUsageForPrincipal are synchronized by the
-        // QuotaManager.
-        let callback = function(principal, usage, fileUsage) {
-          let reply = { id: msg.id };
-          if (op == 'getUsage') {
-            reply.usage = usage;
-            reply.fileUsage = fileUsage;
-          }
-          mm.sendAsyncMessage(aMessage.name, reply);
-        };
-
-        qm.getUsageForPrincipal(principal, callback);
-
-        return undefined;	// See comment at the beginning of this function.
+        return message;
       }
 
       case "SPCleanUpSTSData": {
@@ -580,11 +556,26 @@ SpecialPowersObserverAPI.prototype = {
       }
 
       case "SPStartupExtension": {
+        let {ExtensionData} = Components.utils.import("resource://gre/modules/Extension.jsm", {});
+
         let id = aMessage.data.id;
         let extension = this._extensions.get(id);
-        extension.startup().then(() => {
+
+        // Make sure the extension passes the packaging checks when
+        // they're run on a bare archive rather than a running instance,
+        // as the add-on manager runs them.
+        let extensionData = new ExtensionData(extension.rootURI);
+        extensionData.readManifest().then(() => {
+          return extensionData.initAllLocales();
+        }).then(() => {
+          if (extensionData.errors.length) {
+            return Promise.reject("Extension contains packaging errors");
+          }
+          return extension.startup();
+        }).then(() => {
           this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionStarted", args: []});
         }).catch(e => {
+          dump(`Extension startup failed: ${e}\n${e.stack}`);
           this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionFailed", args: []});
         });
         return undefined;

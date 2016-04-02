@@ -12,18 +12,6 @@ ifneq ($(make_min_ver),$(firstword $(sort $(make_min_ver) $(MAKE_VERSION))))
 $(error GNU Make $(make_min_ver) or higher is required)
 endif
 
-ifdef JS_HAS_CTYPES
-ifdef MOZ_NATIVE_FFI
-LOCAL_INCLUDES = $(MOZ_FFI_CFLAGS)
-endif
-
-# Windows needs this to be linked with a static library.
-ifndef MOZ_NATIVE_FFI
-DEFINES += -DFFI_BUILDING
-endif
-
-endif # JS_HAS_CTYPES
-
 DASH_R		= -r
 
 # Define keyword generator before rules.mk, see bug 323979 comment 50
@@ -52,16 +40,6 @@ symverscript: symverscript.in
 
 EXTRA_DEPS += symverscript
 endif
-
-export_files = js-config.h
-ifdef HAVE_DTRACE
-export_files += $(CURDIR)/javascript-trace.h
-endif
-
-INSTALL_TARGETS += jsconfig
-jsconfig_FILES = $(export_files)
-jsconfig_DEST = $(DIST)/include
-jsconfig_TARGET := export
 
 include $(topsrcdir)/config/rules.mk
 
@@ -185,7 +163,6 @@ endif
 endif
 
 SCRIPTS = $(JS_CONFIG_NAME)
-SDK_BINARY = $(JS_CONFIG_NAME)
 
 $(LIBRARY_NAME).pc: js.pc
 	cp $^ $@
@@ -266,7 +243,7 @@ install:: ETWProvider.mof ETWProvider.man
 endif
 
 ifdef HAVE_DTRACE
-$(CURDIR)/javascript-trace.h: $(srcdir)/devtools/javascript-trace.d
+javascript-trace.h: $(srcdir)/devtools/javascript-trace.d
 	dtrace -x nolibs -h -s $(srcdir)/devtools/javascript-trace.d -o javascript-trace.h.in
 	sed -e 's/if _DTRACE_VERSION/ifdef INCLUDE_MOZILLA_DTRACE/' \
 	    -e '/const/!s/char \*/const char */g' \

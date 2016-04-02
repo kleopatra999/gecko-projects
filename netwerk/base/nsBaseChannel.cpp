@@ -22,16 +22,7 @@
 #include "nsXULAppAPI.h"
 #include "nsContentSecurityManager.h"
 #include "LoadInfo.h"
-
-static PLDHashOperator
-CopyProperties(const nsAString &key, nsIVariant *data, void *closure)
-{
-  nsIWritablePropertyBag *bag =
-      static_cast<nsIWritablePropertyBag *>(closure);
-
-  bag->SetProperty(key, data);
-  return PL_DHASH_NEXT;
-}
+#include "nsServiceManagerUtils.h"
 
 // This class is used to suspend a request across a function scope.
 class ScopedRequestSuspender {
@@ -75,7 +66,7 @@ nsBaseChannel::nsBaseChannel()
 
 nsBaseChannel::~nsBaseChannel()
 {
-  NS_ReleaseOnMainThread(mLoadInfo);
+  NS_ReleaseOnMainThread(mLoadInfo.forget());
 }
 
 nsresult
@@ -111,7 +102,7 @@ nsBaseChannel::Redirect(nsIChannel *newChannel, uint32_t redirectFlags,
     newChannel->SetLoadInfo(nullptr);
   }
 
-  // Try to preserve the privacy bit if it has been overridden
+  // Preserve the privacy bit if it has been overridden
   if (mPrivateBrowsingOverriden) {
     nsCOMPtr<nsIPrivateBrowsingChannel> newPBChannel =
       do_QueryInterface(newChannel);
@@ -121,8 +112,11 @@ nsBaseChannel::Redirect(nsIChannel *newChannel, uint32_t redirectFlags,
   }
 
   nsCOMPtr<nsIWritablePropertyBag> bag = ::do_QueryInterface(newChannel);
-  if (bag)
-    mPropertyHash.EnumerateRead(CopyProperties, bag.get());
+  if (bag) {
+    for (auto iter = mPropertyHash.Iter(); !iter.Done(); iter.Next()) {
+      bag->SetProperty(iter.Key(), iter.UserData());
+    }
+  }
 
   // Notify consumer, giving chance to cancel redirect.  For backwards compat,
   // we support nsIHttpEventSink if we are an HTTP channel and if this is not
@@ -431,6 +425,7 @@ nsBaseChannel::SetLoadGroup(nsILoadGroup *aLoadGroup)
 
   mLoadGroup = aLoadGroup;
   CallbacksChanged();
+  UpdatePrivateBrowsing();
   return NS_OK;
 }
 
@@ -504,6 +499,7 @@ nsBaseChannel::SetNotificationCallbacks(nsIInterfaceRequestor *aCallbacks)
 
   mCallbacks = aCallbacks;
   CallbacksChanged();
+  UpdatePrivateBrowsing();
   return NS_OK;
 }
 
@@ -639,8 +635,11 @@ nsBaseChannel::Open2(nsIInputStream** aStream)
 NS_IMETHODIMP
 nsBaseChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctxt)
 {
-  MOZ_ASSERT(!mLoadInfo || mLoadInfo->GetSecurityMode() == 0 ||
-             mLoadInfo->GetInitialSecurityCheckDone(),
+  MOZ_ASSERT(!mLoadInfo ||
+             mLoadInfo->GetSecurityMode() == 0 ||
+             mLoadInfo->GetInitialSecurityCheckDone() ||
+             (mLoadInfo->GetSecurityMode() == nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL &&
+              nsContentUtils::IsSystemPrincipal(mLoadInfo->LoadingPrincipal())),
              "security flags in loadInfo but asyncOpen2() not called");
 
   NS_ENSURE_TRUE(mURI, NS_ERROR_NOT_INITIALIZED);

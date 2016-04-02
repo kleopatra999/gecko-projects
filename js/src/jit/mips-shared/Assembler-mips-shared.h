@@ -104,9 +104,8 @@ static MOZ_CONSTEXPR_VAR FloatRegister InvalidFloatReg;
 static MOZ_CONSTEXPR_VAR Register StackPointer = sp;
 static MOZ_CONSTEXPR_VAR Register FramePointer = InvalidReg;
 static MOZ_CONSTEXPR_VAR Register ReturnReg = v0;
-static MOZ_CONSTEXPR_VAR FloatRegister ReturnInt32x4Reg = InvalidFloatReg;
-static MOZ_CONSTEXPR_VAR FloatRegister ReturnFloat32x4Reg = InvalidFloatReg;
-static MOZ_CONSTEXPR_VAR FloatRegister ScratchSimdReg = InvalidFloatReg;
+static MOZ_CONSTEXPR_VAR FloatRegister ReturnSimd128Reg = InvalidFloatReg;
+static MOZ_CONSTEXPR_VAR FloatRegister ScratchSimd128Reg = InvalidFloatReg;
 
 // A bias applied to the GlobalReg to allow the use of instructions with small
 // negative immediate offsets which doubles the range of global data that can be
@@ -125,6 +124,18 @@ static MOZ_CONSTEXPR_VAR Register AsmJSIonExitRegE3 = a3;
 static MOZ_CONSTEXPR_VAR Register AsmJSIonExitRegD0 = a0;
 static MOZ_CONSTEXPR_VAR Register AsmJSIonExitRegD1 = a1;
 static MOZ_CONSTEXPR_VAR Register AsmJSIonExitRegD2 = t0;
+
+// Registerd used in RegExpMatcher instruction (do not use JSReturnOperand).
+static MOZ_CONSTEXPR_VAR Register RegExpMatcherRegExpReg = CallTempReg0;
+static MOZ_CONSTEXPR_VAR Register RegExpMatcherStringReg = CallTempReg1;
+static MOZ_CONSTEXPR_VAR Register RegExpMatcherLastIndexReg = CallTempReg2;
+static MOZ_CONSTEXPR_VAR Register RegExpMatcherStickyReg = CallTempReg3;
+
+// Registerd used in RegExpTester instruction (do not use ReturnReg).
+static MOZ_CONSTEXPR_VAR Register RegExpTesterRegExpReg = CallTempReg0;
+static MOZ_CONSTEXPR_VAR Register RegExpTesterStringReg = CallTempReg1;
+static MOZ_CONSTEXPR_VAR Register RegExpTesterLastIndexReg = CallTempReg2;
+static MOZ_CONSTEXPR_VAR Register RegExpTesterStickyReg = CallTempReg3;
 
 static MOZ_CONSTEXPR_VAR uint32_t CodeAlignment = 4;
 
@@ -416,6 +427,10 @@ enum FunctionField {
     ff_ceil_w_fmt  = 14,
     ff_floor_w_fmt = 15,
 
+    ff_movf_fmt    = 17,
+    ff_movz_fmt    = 18,
+    ff_movn_fmt    = 19,
+
     ff_cvt_s_fmt   = 32,
     ff_cvt_d_fmt   = 33,
     ff_cvt_w_fmt   = 36,
@@ -475,7 +490,7 @@ class BOffImm16
     bool isInvalid() {
         return data == INVALID;
     }
-    Instruction* getDest(Instruction* src);
+    Instruction* getDest(Instruction* src) const;
 
     BOffImm16(InstImm inst);
 };
@@ -625,6 +640,18 @@ class Operand
     }
 };
 
+inline Imm32
+Imm64::firstHalf() const
+{
+    return low();
+}
+
+inline Imm32
+Imm64::secondHalf() const
+{
+    return hi();
+}
+
 void
 PatchJump(CodeLocationJump& jump_, CodeLocationLabel label,
           ReprotectCode reprotect = DontReprotect);
@@ -645,6 +672,18 @@ class MIPSBufferWithExecutableCopy : public MIPSBuffer
             memcpy(buffer, &cur->instructions, cur->length());
             buffer += cur->length();
         }
+    }
+
+    bool appendBuffer(const MIPSBufferWithExecutableCopy& other) {
+        if (this->oom())
+            return false;
+
+        for (Slice* cur = other.head; cur != nullptr; cur = cur->getNext()) {
+            this->putBytes(cur->length(), &cur->instructions);
+            if (this->oom())
+                return false;
+        }
+        return true;
     }
 };
 
@@ -779,7 +818,7 @@ class AssemblerMIPSShared : public AssemblerShared
             dataRelocations_.writeUnsigned(nextOffset().getOffset());
         }
     }
-    void writePrebarrierOffset(CodeOffsetLabel label) {
+    void writePrebarrierOffset(CodeOffset label) {
         preBarriers_.writeUnsigned(label.offset());
     }
 
@@ -797,6 +836,7 @@ class AssemblerMIPSShared : public AssemblerShared
     bool isFinished;
   public:
     void finish();
+    bool asmMergeWith(const AssemblerMIPSShared& other);
     void executableCopy(void* buffer);
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
@@ -1028,17 +1068,29 @@ class AssemblerMIPSShared : public AssemblerShared
     BufferOffset as_cule(FloatFormat fmt, FloatRegister fs, FloatRegister ft,
                          FPConditionBit fcc = FCC0);
 
+    // FP conditional move.
+    BufferOffset as_movt(FloatFormat fmt, FloatRegister fd, FloatRegister fs,
+                         FPConditionBit fcc = FCC0);
+    BufferOffset as_movf(FloatFormat fmt, FloatRegister fd, FloatRegister fs,
+                         FPConditionBit fcc = FCC0);
+    BufferOffset as_movz(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt);
+    BufferOffset as_movn(FloatFormat fmt, FloatRegister fd, FloatRegister fs, Register rt);
+
     // label operations
     void bind(Label* label, BufferOffset boff = BufferOffset());
+    void bindLater(Label* label, wasm::JumpTarget target);
     virtual void bind(InstImm* inst, uintptr_t branch, uintptr_t target) = 0;
-    virtual void Bind(uint8_t* rawCode, AbsoluteLabel* label, const void* address) = 0;
+    virtual void Bind(uint8_t* rawCode, CodeOffset* label, const void* address) = 0;
+    void bind(CodeOffset* label) {
+        label->bind(currentOffset());
+    }
     uint32_t currentOffset() {
         return nextOffset().getOffset();
     }
     void retarget(Label* label, Label* target);
 
     // See Bind
-    size_t labelOffsetToPatchOffset(size_t offset) { return offset; }
+    size_t labelToPatchOffset(CodeOffset label) { return label.offset(); }
 
     void call(Label* label);
     void call(void* target);

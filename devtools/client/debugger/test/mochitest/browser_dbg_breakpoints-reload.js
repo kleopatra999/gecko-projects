@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure that setting a breakpoint on code that gets run on load, will get
@@ -12,11 +14,12 @@ var test = Task.async(function* () {
   requestLongerTimeout(4);
 
   const [tab,, panel] = yield initDebugger(TAB_URL);
+  const actions = bindActionCreators(panel);
 
   yield ensureSourceIs(panel, "doc_breakpoints-reload.html", true);
 
   const sources = panel.panelWin.DebuggerView.Sources;
-  yield panel.addBreakpoint({
+  yield actions.addBreakpoint({
     actor: sources.selectedValue,
     line: 10 // "break on me" string
   });

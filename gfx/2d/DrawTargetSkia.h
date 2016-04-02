@@ -6,11 +6,6 @@
 #ifndef _MOZILLA_GFX_SOURCESURFACESKIA_H
 #define _MOZILLA_GFX_SOURCESURFACESKIA_H
 
-#ifdef USE_SKIA_GPU
-#include "skia/include/gpu/GrContext.h"
-#include "skia/include/gpu/gl/GrGLInterface.h"
-#endif
-
 #include "skia/include/core/SkCanvas.h"
 
 #include "2D.h"
@@ -37,7 +32,8 @@ public:
   virtual already_AddRefed<SourceSurface> Snapshot() override;
   virtual IntSize GetSize() override { return mSize; }
   virtual bool LockBits(uint8_t** aData, IntSize* aSize,
-                        int32_t* aStride, SurfaceFormat* aFormat) override;
+                        int32_t* aStride, SurfaceFormat* aFormat,
+                        IntPoint* aOrigin = nullptr) override;
   virtual void ReleaseBits(uint8_t* aData) override;
   virtual void Flush() override;
   virtual void DrawSurface(SourceSurface *aSurface,
@@ -90,9 +86,17 @@ public:
                            SourceSurface *aMask,
                            Point aOffset,
                            const DrawOptions &aOptions = DrawOptions()) override;
+  virtual bool Draw3DTransformedSurface(SourceSurface* aSurface,
+                                        const Matrix4x4& aMatrix) override;
   virtual void PushClip(const Path *aPath) override;
   virtual void PushClipRect(const Rect& aRect) override;
   virtual void PopClip() override;
+  virtual void PushLayer(bool aOpaque, Float aOpacity,
+                         SourceSurface* aMask,
+                         const Matrix& aMaskTransform,
+                         const IntRect& aBounds = IntRect(),
+                         bool aCopyBackground = false) override;
+  virtual void PopLayer() override;
   virtual already_AddRefed<SourceSurface> CreateSourceSurfaceFromData(unsigned char *aData,
                                                             const IntSize &aSize,
                                                             int32_t aStride,
@@ -109,13 +113,25 @@ public:
   virtual void *GetNativeSurface(NativeSurfaceType aType) override;
 
   bool Init(const IntSize &aSize, SurfaceFormat aFormat);
-  void Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat);
+  void Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat, bool aUninitialized = false);
 
 #ifdef USE_SKIA_GPU
   bool InitWithGrContext(GrContext* aGrContext,
                          const IntSize &aSize,
-                         SurfaceFormat aFormat) override;
+                         SurfaceFormat aFormat,
+                         bool aCached);
+  virtual bool
+    InitWithGrContext(GrContext* aGrContext,
+                      const IntSize &aSize,
+                      SurfaceFormat aFormat) override {
+    return InitWithGrContext(aGrContext, aSize, aFormat, false);
+  }
 #endif
+
+  // Skia assumes that texture sizes fit in 16-bit signed integers.
+  static size_t GetMaxSurfaceSize() {
+    return 32767;
+  }
 
   operator std::string() const {
     std::stringstream stream;
@@ -131,13 +147,31 @@ private:
 
   bool ShouldLCDRenderText(FontType aFontType, AntialiasMode aAntialiasMode);
 
-  SkRect SkRectCoveringWholeSurface() const;
-
   bool UsingSkiaGPU() const;
+
+  struct PushedLayer
+  {
+    PushedLayer(bool aOldPermitSubpixelAA,
+                bool aOpaque,
+                Float aOpacity,
+                SourceSurface* aMask,
+                const Matrix& aMaskTransform)
+      : mOldPermitSubpixelAA(aOldPermitSubpixelAA),
+        mOpaque(aOpaque),
+        mOpacity(aOpacity),
+        mMask(aMask),
+        mMaskTransform(aMaskTransform)
+    {}
+    bool mOldPermitSubpixelAA;
+    bool mOpaque;
+    Float mOpacity;
+    RefPtr<SourceSurface> mMask;
+    Matrix mMaskTransform;
+  };
+  std::vector<PushedLayer> mPushedLayers;
 
 #ifdef USE_SKIA_GPU
   RefPtrSkia<GrContext> mGrContext;
-  uint32_t mTexture;
 #endif
 
   IntSize mSize;

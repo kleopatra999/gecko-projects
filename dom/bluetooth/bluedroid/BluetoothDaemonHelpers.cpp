@@ -456,7 +456,8 @@ Convert(uint8_t aIn, BluetoothStatus& aOut)
     [0x07] = STATUS_PARM_INVALID,
     [0x08] = STATUS_UNHANDLED,
     [0x09] = STATUS_AUTH_FAILURE,
-    [0x0a] = STATUS_RMT_DEV_DOWN
+    [0x0a] = STATUS_RMT_DEV_DOWN,
+    [0x0b] = STATUS_AUTH_REJECTED
   };
   if (MOZ_HAL_IPC_CONVERT_WARN_IF(
         aIn >= MOZ_ARRAY_LENGTH(sStatus), uint8_t, BluetoothStatus)) {
@@ -514,6 +515,78 @@ Convert(int32_t aIn, BluetoothGattStatus& aOut)
 }
 
 nsresult
+Convert(uint8_t aIn, BluetoothHidProtocolMode& aOut)
+{
+  static const BluetoothHidProtocolMode sMode[] = {
+    [0x00] = HID_PROTOCOL_MODE_REPORT,
+    [0x01] = HID_PROTOCOL_MODE_BOOT
+  };
+  if (aIn == 0xff) {
+    /* This case is handled separately to not populate
+     * |sMode| with empty entries. */
+    aOut = HID_PROTOCOL_MODE_UNSUPPORTED;
+    return NS_OK;
+  }
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sMode), uint8_t, BluetoothHidProtocolMode)) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sMode[aIn];
+  return NS_OK;
+}
+
+nsresult
+Convert(uint8_t aIn, BluetoothHidConnectionState& aOut)
+{
+  static const BluetoothHidConnectionState sConnectionState[] = {
+    [0x00] = HID_CONNECTION_STATE_CONNECTED,
+    [0x01] = HID_CONNECTION_STATE_CONNECTING,
+    [0x02] = HID_CONNECTION_STATE_DISCONNECTED,
+    [0x03] = HID_CONNECTION_STATE_DISCONNECTING,
+    [0x04] = HID_CONNECTION_STATE_FAILED_MOUSE_FROM_HOST,
+    [0x05] = HID_CONNECTION_STATE_FAILED_KEYBOARD_FROM_HOST,
+    [0x06] = HID_CONNECTION_STATE_FAILED_TOO_MANY_DEVICES,
+    [0x07] = HID_CONNECTION_STATE_FAILED_NO_HID_DRIVER,
+    [0x08] = HID_CONNECTION_STATE_FAILED_GENERIC,
+    [0x09] = HID_CONNECTION_STATE_UNKNOWN
+  };
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sConnectionState),
+        uint8_t, BluetoothHidConnectionState)) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sConnectionState[aIn];
+  return NS_OK;
+}
+
+nsresult
+Convert(uint8_t aIn, BluetoothHidStatus& aOut)
+{
+  static const BluetoothHidStatus sStatus[] = {
+    [0x00] = HID_STATUS_OK,
+    [0x01] = HID_STATUS_HANDSHAKE_DEVICE_NOT_READY,
+    [0x02] = HID_STATUS_HANDSHAKE_INVALID_REPORT_ID,
+    [0x03] = HID_STATUS_HANDSHAKE_TRANSACTION_NOT_SPT,
+    [0x04] = HID_STATUS_HANDSHAKE_INVALID_PARAMETER,
+    [0x05] = HID_STATUS_HANDSHAKE_GENERIC_ERROR,
+    [0x06] = HID_STATUS_GENERAL_ERROR,
+    [0x07] = HID_STATUS_SDP_ERROR,
+    [0x08] = HID_STATUS_SET_PROTOCOL_ERROR,
+    [0x09] = HID_STATUS_DEVICE_DATABASE_FULL,
+    [0x0a] = HID_STATUS_DEVICE_TYPE_NOT_SUPPORTED,
+    [0x0b] = HID_STATUS_NO_RESOURCES,
+    [0x0c] = HID_STATUS_AUTHENTICATION_FAILED,
+    [0x0d] = HID_STATUS_HDL
+  };
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sStatus), uint8_t, BluetoothHidStatus)) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sStatus[aIn];
+  return NS_OK;
+}
+
+nsresult
 Convert(nsresult aIn, BluetoothStatus& aOut)
 {
   if (NS_SUCCEEDED(aIn)) {
@@ -532,6 +605,14 @@ Convert(const BluetoothAttributeHandle& aIn, int32_t& aOut)
   aOut = static_cast<int32_t>(aIn.mHandle);
   return NS_OK;
 }
+
+nsresult
+Convert(const BluetoothAttributeHandle& aIn, uint16_t& aOut)
+{
+  aOut = aIn.mHandle;
+  return NS_OK;
+}
+
 
 nsresult
 Convert(BluetoothAvrcpEvent aIn, uint8_t& aOut)
@@ -934,6 +1015,26 @@ Convert(BluetoothGattAuthReq aIn, int32_t& aOut)
 }
 
 nsresult
+Convert(BluetoothGattAuthReq aIn, uint8_t& aOut)
+{
+  static const uint8_t sGattAuthReq[] = {
+    [GATT_AUTH_REQ_NONE] = 0x00,
+    [GATT_AUTH_REQ_NO_MITM] = 0x01,
+    [GATT_AUTH_REQ_MITM] = 0x02,
+    [GATT_AUTH_REQ_SIGNED_NO_MITM] = 0x03,
+    [GATT_AUTH_REQ_SIGNED_MITM] = 0x04
+  };
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sGattAuthReq), BluetoothGattAuthReq,
+        uint8_t)) {
+    aOut = GATT_AUTH_REQ_NONE; // silences compiler warning
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sGattAuthReq[aIn];
+  return NS_OK;
+}
+
+nsresult
 Convert(BluetoothGattWriteType aIn, int32_t& aOut)
 {
   static const int32_t sGattWriteType[] = {
@@ -949,6 +1050,47 @@ Convert(BluetoothGattWriteType aIn, int32_t& aOut)
     return NS_ERROR_ILLEGAL_VALUE;
   }
   aOut = sGattWriteType[aIn];
+  return NS_OK;
+}
+
+nsresult
+Convert(BluetoothHidProtocolMode aIn, uint8_t& aOut)
+{
+  static const uint8_t sMode[] = {
+    [HID_PROTOCOL_MODE_REPORT] = 0x00,
+    [HID_PROTOCOL_MODE_BOOT] = 0x01
+  };
+  if (aIn == HID_PROTOCOL_MODE_UNSUPPORTED) {
+    /* This case is handled separately to not populate
+     * |sValue| with empty entries. */
+    aOut = 0xff;
+    return NS_OK;
+  }
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sMode), BluetoothHidProtocolMode, uint8_t)) {
+    aOut = 0x00; // silences compiler warning
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sMode[aIn];
+  return NS_OK;
+}
+
+nsresult
+Convert(BluetoothHidReportType aIn, uint8_t& aOut)
+{
+  static const uint8_t sType[] = {
+    [0x00] = static_cast<BluetoothHidReportType>(0),
+    [HID_REPORT_TYPE_INPUT] = 0x01,
+    [HID_REPORT_TYPE_OUTPUT] = 0x02,
+    [HID_REPORT_TYPE_FEATURE] = 0x03
+  };
+  if (MOZ_HAL_IPC_CONVERT_WARN_IF(
+        aIn >= MOZ_ARRAY_LENGTH(sType),
+        BluetoothHidReportType, uint8_t)) {
+    aOut = 0x00; // silences compiler warning
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  aOut = sType[aIn];
   return NS_OK;
 }
 
@@ -1239,7 +1381,11 @@ PackPDU(const BluetoothProperty& aIn, DaemonSocketPDU& aPDU)
 
   switch (aIn.mType) {
     case PROPERTY_BDNAME:
-      /* fall through */
+      rv = PackPDU(PackConversion<uint8_t, uint16_t>(aIn.mRemoteName.mLength),
+                   PackArray<uint8_t>(aIn.mRemoteName.mName,
+                                      aIn.mRemoteName.mLength),
+                   aPDU);
+      break;
     case PROPERTY_REMOTE_FRIENDLY_NAME: {
         NS_ConvertUTF16toUTF8 stringUTF8(aIn.mString);
 
@@ -1371,6 +1517,61 @@ nsresult
 PackPDU(BluetoothGattWriteType aIn, DaemonSocketPDU& aPDU)
 {
   return PackPDU(PackConversion<BluetoothGattWriteType, int32_t>(aIn), aPDU);
+}
+
+nsresult
+PackPDU(const BluetoothHidInfoParam& aIn, DaemonSocketPDU& aPDU)
+{
+  if (MOZ_HAL_IPC_PACK_WARN_IF(
+        aIn.mDescriptorLength > BLUETOOTH_HID_MAX_DESC_LEN,
+        BluetoothHidInfoParam)) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+
+  nsresult rv =  PackPDU(aIn.mAttributeMask,
+                         aIn.mSubclass,
+                         aIn.mApplicationId,
+                         aIn.mVendorId,
+                         aIn.mProductId,
+                         aIn.mVersion,
+                         aIn.mCountryCode,
+                         aIn.mDescriptorLength,
+                         aPDU);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  return PackPDU(
+    PackArray<uint8_t>(aIn.mDescriptorValue, aIn.mDescriptorLength), aPDU);
+}
+
+nsresult
+PackPDU(const BluetoothHidReport& aIn, DaemonSocketPDU& aPDU)
+{
+  uint8_t* reportData =
+    const_cast<uint8_t*>(aIn.mReportData.Elements());
+
+  nsresult rv = PackPDU(
+    PackConversion<uint32_t, uint16_t>(aIn.mReportData.Length()), aPDU);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  return PackPDU(
+    PackArray<uint8_t>(reportData, aIn.mReportData.Length()),
+    aPDU);
+}
+
+nsresult
+PackPDU(BluetoothHidProtocolMode aIn, DaemonSocketPDU& aPDU)
+{
+  return PackPDU(
+    PackConversion<BluetoothHidProtocolMode, uint8_t>(aIn), aPDU);
+}
+
+nsresult
+PackPDU(BluetoothHidReportType aIn, DaemonSocketPDU& aPDU)
+{
+  return PackPDU(
+    PackConversion<BluetoothHidReportType, uint8_t>(aIn), aPDU);
 }
 
 //
@@ -1532,8 +1733,16 @@ UnpackPDU(DaemonSocketPDU& aPDU, BluetoothProperty& aOut)
   }
 
   switch (aOut.mType) {
-    case PROPERTY_BDNAME:
-      /* fall through */
+    case PROPERTY_BDNAME: {
+        const uint8_t* data = aPDU.Consume(len);
+        if (MOZ_HAL_IPC_UNPACK_WARN_IF(!data, BluetoothProperty)) {
+          return NS_ERROR_ILLEGAL_VALUE;
+        }
+        // We construct an nsCString here because the string
+        // returned from the PDU is not 0-terminated.
+        aOut.mRemoteName.Assign(data, len);
+      }
+      break;
     case PROPERTY_REMOTE_FRIENDLY_NAME: {
         const uint8_t* data = aPDU.Consume(len);
         if (MOZ_HAL_IPC_UNPACK_WARN_IF(!data, BluetoothProperty)) {
@@ -1770,6 +1979,87 @@ UnpackPDU(DaemonSocketPDU& aPDU, BluetoothGattNotifyParam& aOut)
   }
   /* unpack value */
   return aPDU.Read(aOut.mValue, aOut.mLength);
+}
+
+nsresult
+UnpackPDU(DaemonSocketPDU& aPDU, BluetoothHidInfoParam& aOut)
+{
+  /* unpack attribute mask */
+  nsresult rv = UnpackPDU(aPDU, aOut.mAttributeMask);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack subclass */
+  rv = UnpackPDU(aPDU, aOut.mSubclass);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack application id */
+  rv = UnpackPDU(aPDU, aOut.mApplicationId);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack vendor id */
+  rv = UnpackPDU(aPDU, aOut.mVendorId);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack product id */
+  rv = UnpackPDU(aPDU, aOut.mProductId);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack version */
+  rv = UnpackPDU(aPDU, aOut.mVersion);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack country code */
+  rv = UnpackPDU(aPDU, aOut.mCountryCode);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  /* unpack descriptor length */
+  rv = UnpackPDU(aPDU, aOut.mDescriptorLength);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  if (MOZ_HAL_IPC_PACK_WARN_IF(
+        aOut.mDescriptorLength > BLUETOOTH_HID_MAX_DESC_LEN,
+        BluetoothHidInfoParam)) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+  /* unpack descriptor value */
+  return UnpackPDU(
+    aPDU,
+    UnpackArray<uint8_t>(aOut.mDescriptorValue, aOut.mDescriptorLength));
+}
+
+nsresult
+UnpackPDU(DaemonSocketPDU& aPDU, BluetoothHidReport& aOut)
+{
+  return UnpackPDU(aPDU, aOut.mReportData);
+}
+
+nsresult
+UnpackPDU(DaemonSocketPDU& aPDU, BluetoothHidProtocolMode& aOut)
+{
+  return UnpackPDU(
+    aPDU, UnpackConversion<uint8_t, BluetoothHidProtocolMode>(aOut));
+}
+
+nsresult
+UnpackPDU(DaemonSocketPDU& aPDU, BluetoothHidConnectionState& aOut)
+{
+  return UnpackPDU(
+    aPDU, UnpackConversion<uint8_t, BluetoothHidConnectionState>(aOut));
+}
+
+nsresult
+UnpackPDU(DaemonSocketPDU& aPDU, BluetoothHidStatus& aOut)
+{
+  return UnpackPDU(
+    aPDU, UnpackConversion<uint8_t, BluetoothHidStatus>(aOut));
 }
 
 END_BLUETOOTH_NAMESPACE

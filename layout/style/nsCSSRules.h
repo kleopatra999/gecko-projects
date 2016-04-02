@@ -31,8 +31,8 @@
 #include "nsIDOMCSSMozDocumentRule.h"
 #include "nsIDOMCSSPageRule.h"
 #include "nsIDOMCSSSupportsRule.h"
-#include "nsIDOMMozCSSKeyframeRule.h"
-#include "nsIDOMMozCSSKeyframesRule.h"
+#include "nsIDOMCSSKeyframeRule.h"
+#include "nsIDOMCSSKeyframesRule.h"
 #include "nsTArray.h"
 
 class nsMediaList;
@@ -375,17 +375,17 @@ protected:
 };
 
 class nsCSSKeyframeRule final : public mozilla::css::Rule,
-                                public nsIDOMMozCSSKeyframeRule
+                                public nsIDOMCSSKeyframeRule
 {
 public:
-  // WARNING: Steals the contents of aKeys
-  nsCSSKeyframeRule(InfallibleTArray<float>& aKeys,
-                    mozilla::css::Declaration* aDeclaration,
+  // Steals the contents of aKeys, and takes the reference in Declaration
+  nsCSSKeyframeRule(InfallibleTArray<float>&& aKeys,
+                    already_AddRefed<mozilla::css::Declaration>&& aDeclaration,
                     uint32_t aLineNumber, uint32_t aColumnNumber)
     : mozilla::css::Rule(aLineNumber, aColumnNumber)
-    , mDeclaration(aDeclaration)
+    , mKeys(mozilla::Move(aKeys))
+    , mDeclaration(mozilla::Move(aDeclaration))
   {
-    mKeys.SwapElements(aKeys);
     mDeclaration->SetOwningRule(this);
   }
 private:
@@ -406,8 +406,8 @@ public:
   // nsIDOMCSSRule interface
   NS_DECL_NSIDOMCSSRULE
 
-  // nsIDOMMozCSSKeyframeRule interface
-  NS_DECL_NSIDOMMOZCSSKEYFRAMERULE
+  // nsIDOMCSSKeyframeRule interface
+  NS_DECL_NSIDOMCSSKEYFRAMERULE
 
   const nsTArray<float>& GetKeys() const     { return mKeys; }
   mozilla::css::Declaration* Declaration()   { return mDeclaration; }
@@ -426,7 +426,7 @@ private:
 };
 
 class nsCSSKeyframesRule final : public mozilla::css::GroupRule,
-                                 public nsIDOMMozCSSKeyframesRule
+                                 public nsIDOMCSSKeyframesRule
 {
 public:
   nsCSSKeyframesRule(const nsSubstring& aName,
@@ -459,8 +459,8 @@ public:
   // nsIDOMCSSRule interface
   NS_DECL_NSIDOMCSSRULE
 
-  // nsIDOMMozCSSKeyframesRule interface
-  NS_DECL_NSIDOMMOZCSSKEYFRAMESRULE
+  // nsIDOMCSSKeyframesRule interface
+  NS_DECL_NSIDOMCSSKEYFRAMESRULE
 
   // rest of GroupRule
   virtual bool UseForPresentation(nsPresContext* aPresContext,

@@ -6,7 +6,8 @@
 (?i)(^|/)TAGS$
 (^|/)ID$
 (^|/)\.DS_Store$
-.*\.egg-info
+\.pdb
+\.egg-info
 
 # Vim swap files.
 ^\.sw.$
@@ -19,6 +20,7 @@
 ^\.mozconfig
 ^mozconfig*
 ^configure$
+^old-configure$
 ^config\.cache$
 ^config\.log$
 ^\.clang_complete
@@ -37,6 +39,7 @@ _OPT\.OBJ/
 
 # SpiderMonkey configury
 ^js/src/configure$
+^js/src/old-configure$
 ^js/src/autom4te.cache$
 # SpiderMonkey test result logs
 ^js/src/tests/results-.*\.(html|txt)$
@@ -59,6 +62,9 @@ _OPT\.OBJ/
 # Gradle cache.
 ^.gradle/
 
+# Local Gradle configuration properties.
+^local.properties$
+
 # Python stuff installed at build time.
 ^python/psutil/.*\.so
 ^python/psutil/.*\.pyd
@@ -80,9 +86,15 @@ GRTAGS
 GSYMS
 GPATH
 
-# Unit tests for Loop
+# Various items for Loop
 ^browser/components/loop/standalone/content/config\.js$
-^browser/components/loop/standalone/node_modules/
+^browser/extensions/loop/.*/node_modules/
+^browser/extensions/loop/.*\.module-cache
+^browser/extensions/loop/test/coverage/desktop
+^browser/extensions/loop/test/coverage/shared_standalone
+^browser/extensions/loop/test/visual-regression/diff
+^browser/extensions/loop/test/visual-regression/new
+^browser/extensions/loop/test/visual-regression/refs
 
 # Git clone directory for updating web-platform-tests
 ^testing/web-platform/sync/
@@ -95,8 +107,14 @@ GPATH
 ^embedding/ios/GeckoEmbed/GeckoEmbed.xcodeproj/xcuserdata
 
 # Ignore mozharness execution files
-^testing/mozharness/logs/
+^testing/mozharness/.tox/
 ^testing/mozharness/build/
+^testing/mozharness/logs/
+^testing/mozharness/.coverage
+^testing/mozharness/nosetests.xml
+
+# Ignore tox generated dir
+.tox/
 
 # Ignore node_modules from eslint-plugin-mozilla
 ^testing/eslint-plugin-mozilla/node_modules/
@@ -111,4 +129,6 @@ GPATH
 ^testing/talos/bin/
 ^testing/talos/include/
 ^testing/talos/lib/
-^testing/talos/talos/page_load_test/tp5n/
+^testing/talos/talos/tests/tp5n.zip
+^testing/talos/talos/tests/tp5n
+^testing/talos/talos/tests/devtools/damp.manifest.develop

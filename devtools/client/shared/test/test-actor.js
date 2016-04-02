@@ -4,7 +4,7 @@
 
 "use strict";
 
-// A helper actor for brower/devtools/inspector tests.
+// A helper actor for inspector and markupview tests.
 
 var { Cc, Ci, Cu, Cr } = require("chrome");
 const {getRect, getElementFromPoint, getAdjustedQuads} = require("devtools/shared/layout/utils");
@@ -13,8 +13,16 @@ const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
 var DOMUtils = Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils);
 var loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
             .getService(Ci.mozIJSSubScriptLoader);
-var EventUtils = {};
-loader.loadSubScript("chrome://marionette/content/EventUtils.js", EventUtils);
+
+// Set up a dummy environment so that EventUtils works. We need to be careful to
+// pass a window object into each EventUtils method we call rather than having
+// it rely on the |window| global.
+let EventUtils = {};
+EventUtils.window = {};
+EventUtils.parent = {};
+EventUtils._EU_Ci = Components.interfaces;
+EventUtils._EU_Cc = Components.classes;
+loader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
 const protocol = require("devtools/server/protocol");
 const {Arg, Option, method, RetVal, types} = protocol;
@@ -219,6 +227,28 @@ var TestActor = exports.TestActor = protocol.ActorClass({
   }),
 
   /**
+   * Wait for a specific event on a node matching the provided selector.
+   * @param {String} eventName The name of the event to listen to
+   * @param {String} selector Optional:  css selector of the node which should
+   *        trigger the event. If ommitted, target will be the content window
+   */
+  waitForEventOnNode: protocol.method(function (eventName, selector) {
+    return new Promise(resolve => {
+      let node = selector ? this._querySelector(selector) : this.content;
+      node.addEventListener(eventName, function onEvent() {
+        node.removeEventListener(eventName, onEvent);
+        resolve();
+      });
+    });
+  }, {
+    request: {
+      eventName: Arg(0, "string"),
+      selector: Arg(1, "nullable:string")
+    },
+    response: {}
+  }),
+
+  /**
    * Change the zoom level of the page.
    * Optionally subscribe to the box-model highlighter's update event and waiting
    * for it to refresh before responding.
@@ -413,7 +443,7 @@ var TestActor = exports.TestActor = protocol.ActorClass({
   /**
    * Set a JS property on a DOM Node.
    * @param {String} selector The node selector
-   * @param {String} attribute The attribute name
+   * @param {String} property The property name
    * @param {String} value The attribute value
    */
   setProperty: protocol.method(function (selector, property, value) {
@@ -431,7 +461,7 @@ var TestActor = exports.TestActor = protocol.ActorClass({
   /**
    * Get a JS property on a DOM Node.
    * @param {String} selector The node selector
-   * @param {String} attribute The attribute name
+   * @param {String} property The property name
    * @return {String} value The attribute value
    */
   getProperty: protocol.method(function (selector, property) {
@@ -445,6 +475,69 @@ var TestActor = exports.TestActor = protocol.ActorClass({
     response: {
       value: RetVal("string")
     }
+  }),
+
+  /**
+   * Get an attribute on a DOM Node.
+   * @param {String} selector The node selector
+   * @param {String} attribute The attribute name
+   * @return {String} value The attribute value
+   */
+  getAttribute: protocol.method(function (selector, attribute) {
+    let node = this._querySelector(selector);
+    return node.getAttribute(attribute);
+  }, {
+    request: {
+      selector: Arg(0, "string"),
+      property: Arg(1, "string")
+    },
+    response: {
+      value: RetVal("string")
+    }
+  }),
+
+  /**
+   * Set an attribute on a DOM Node.
+   * @param {String} selector The node selector
+   * @param {String} attribute The attribute name
+   * @param {String} value The attribute value
+   */
+  setAttribute: protocol.method(function (selector, attribute, value) {
+    let node = this._querySelector(selector);
+    node.setAttribute(attribute, value);
+  }, {
+    request: {
+      selector: Arg(0, "string"),
+      property: Arg(1, "string"),
+      value: Arg(2, "string")
+    },
+    response: {}
+  }),
+
+  /**
+   * Remove an attribute from a DOM Node.
+   * @param {String} selector The node selector
+   * @param {String} attribute The attribute name
+   */
+  removeAttribute: protocol.method(function (selector, attribute) {
+    let node = this._querySelector(selector);
+    node.removeAttribute(attribute);
+  }, {
+    request: {
+      selector: Arg(0, "string"),
+      property: Arg(1, "string")
+    },
+    response: {}
+  }),
+
+  /**
+   * Reload the content window.
+   */
+  reload: protocol.method(function () {
+    this.content.location.reload();
+  }, {
+    request: {},
+    response: {}
   }),
 
   /**
@@ -527,6 +620,17 @@ var TestActor = exports.TestActor = protocol.ActorClass({
     }
   }),
 
+  /**
+   * Forces the reflow and waits for the next repaint.
+   */
+  reflow: protocol.method(function () {
+    let deferred = promise.defer();
+    this.content.document.documentElement.offsetWidth;
+    this.content.requestAnimationFrame(deferred.resolve);
+
+    return deferred.promise;
+  }),
+
   getNodeRect: protocol.method(Task.async(function* (selector) {
     let node = this._querySelector(selector);
     return getRect(this.content, node, this.content);
@@ -538,6 +642,47 @@ var TestActor = exports.TestActor = protocol.ActorClass({
       value: RetVal("json")
     }
   }),
+
+  /**
+   * Get information about a DOM element, identified by a selector.
+   * @param {String} selector The CSS selector to get the node (can be an array
+   * of selectors to get elements in an iframe).
+   * @return {Object} data Null if selector didn't match any node, otherwise:
+   * - {String} tagName.
+   * - {String} namespaceURI.
+   * - {Number} numChildren The number of children in the element.
+   * - {Array} attributes An array of {name, value, namespaceURI} objects.
+   * - {String} outerHTML.
+   * - {String} innerHTML.
+   * - {String} textContent.
+   */
+  getNodeInfo: protocol.method(function(selector) {
+    let node = this._querySelector(selector);
+    let info = null;
+
+    if (node) {
+      info = {
+        tagName: node.tagName,
+        namespaceURI: node.namespaceURI,
+        numChildren: node.children.length,
+        attributes: [...node.attributes].map(({name, value, namespaceURI}) => {
+          return {name, value, namespaceURI};
+        }),
+        outerHTML: node.outerHTML,
+        innerHTML: node.innerHTML,
+        textContent: node.textContent
+      };
+    }
+
+    return info;
+  }, {
+    request: {
+      selector: Arg(0, "string")
+    },
+    response: {
+      value: RetVal("json")
+    }
+  })
 });
 
 var TestActorFront = exports.TestActorFront = protocol.FrontClass(TestActor, {

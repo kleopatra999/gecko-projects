@@ -15,6 +15,11 @@
 
 namespace mozilla {
 
+namespace dom {
+  class PBrowserParent;
+  class PBrowserChild;
+} // namespace dom
+
 /******************************************************************************
  * mozilla::WidgetContentCommandEvent
  ******************************************************************************/
@@ -142,12 +147,16 @@ public:
 
 class WidgetPluginEvent : public WidgetGUIEvent
 {
+private:
+  friend class dom::PBrowserParent;
+  friend class dom::PBrowserChild;
+
 public:
   virtual WidgetPluginEvent* AsPluginEvent() override { return this; }
 
   WidgetPluginEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget)
     : WidgetGUIEvent(aIsTrusted, aMessage, aWidget, ePluginEventClass)
-    , retargetToFocusedDocument(false)
+    , mRetargetToFocusedDocument(false)
   {
   }
 
@@ -166,14 +175,19 @@ public:
 
   // If true, this event needs to be retargeted to focused document.
   // Otherwise, never retargeted. Defaults to false.
-  bool retargetToFocusedDocument;
+  bool mRetargetToFocusedDocument;
 
   void AssignPluginEventData(const WidgetPluginEvent& aEvent,
                              bool aCopyTargets)
   {
     AssignGUIEventData(aEvent, aCopyTargets);
 
-    retargetToFocusedDocument = aEvent.retargetToFocusedDocument;
+    mRetargetToFocusedDocument = aEvent.mRetargetToFocusedDocument;
+  }
+
+protected:
+  WidgetPluginEvent()
+  {
   }
 };
 

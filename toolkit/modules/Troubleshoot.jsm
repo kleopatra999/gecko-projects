@@ -85,6 +85,11 @@ const PREFS_WHITELIST = [
   "print.",
   "privacy.",
   "security.",
+  "services.sync.declinedEngines",
+  "services.sync.lastPing",
+  "services.sync.lastSync",
+  "services.sync.numClients",
+  "services.sync.engine.",
   "social.enabled",
   "storage.vacuum.last.",
   "svg.",
@@ -173,8 +178,14 @@ this.Troubleshoot = {
 var dataProviders = {
 
   application: function application(done) {
+
+    let sysInfo = Cc["@mozilla.org/system-info;1"].
+                  getService(Ci.nsIPropertyBag2);
+
     let data = {
       name: Services.appinfo.name,
+      osVersion: sysInfo.getProperty("name") + " " + sysInfo.getProperty("version"),
+      arch: sysInfo.getProperty("arch"),
       version: AppConstants.MOZ_APP_VERSION_DISPLAY,
       buildID: Services.appinfo.appBuildID,
       userAgent: Cc["@mozilla.org/network/protocol;1?name=http"].
@@ -213,6 +224,16 @@ var dataProviders = {
     }
 
     data.remoteAutoStart = Services.appinfo.browserTabsRemoteAutostart;
+
+    try {
+      let e10sStatus = Cc["@mozilla.org/supports-PRUint64;1"]
+                         .createInstance(Ci.nsISupportsPRUint64);
+      let appinfo = Services.appinfo.QueryInterface(Ci.nsIObserver);
+      appinfo.observe(e10sStatus, "getE10SBlocked", "");
+      data.autoStartStatus = e10sStatus.data;
+    } catch (e) {
+      data.autoStartStatus = -1;
+    }
 
     done(data);
   },
@@ -303,18 +324,28 @@ var dataProviders = {
     }
     catch (e) {}
 
+    let promises = [];
+    // done will be called upon all pending promises being resolved.
+    // add your pending promise to promises when adding new ones.
+    function completed() {
+      Promise.all(promises).then(() => done(data));
+    }
+
     data.numTotalWindows = 0;
     data.numAcceleratedWindows = 0;
     let winEnumer = Services.ww.getWindowEnumerator();
     while (winEnumer.hasMoreElements()) {
-      data.numTotalWindows++;
       let winUtils = winEnumer.getNext().
                      QueryInterface(Ci.nsIInterfaceRequestor).
                      getInterface(Ci.nsIDOMWindowUtils);
       try {
+        // NOTE: windowless browser's windows should not be reported in the graphics troubleshoot report
+        if (winUtils.layerManagerType == "None") {
+          continue;
+        }
+        data.numTotalWindows++;
         data.windowLayerManagerType = winUtils.layerManagerType;
         data.windowLayerManagerRemote = winUtils.layerManagerRemote;
-        data.supportsHardwareH264 = winUtils.supportsHardwareH264Decoding;
       }
       catch (e) {
         continue;
@@ -322,6 +353,16 @@ var dataProviders = {
       if (data.windowLayerManagerType != "Basic")
         data.numAcceleratedWindows++;
     }
+
+    let winUtils = Services.wm.getMostRecentWindow("").
+                   QueryInterface(Ci.nsIInterfaceRequestor).
+                   getInterface(Ci.nsIDOMWindowUtils)
+    data.supportsHardwareH264 = "Unknown";
+    let promise = winUtils.supportsHardwareH264Decoding;
+    promise.then(function(v) {
+      data.supportsHardwareH264 = v;
+    });
+    promises.push(promise);
 
     if (!data.numAcceleratedWindows && gfxInfo) {
       let win = AppConstants.platform == "win";
@@ -331,7 +372,7 @@ var dataProviders = {
     }
 
     if (!gfxInfo) {
-      done(data);
+      completed();
       return;
     }
 
@@ -429,7 +470,7 @@ var dataProviders = {
       }
     }
 
-    done(data);
+    completed();
   },
 
   javaScript: function javaScript(done) {

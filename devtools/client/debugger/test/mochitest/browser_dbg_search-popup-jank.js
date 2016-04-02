@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Tests that sources aren't selected by default when finding a match.
@@ -35,8 +37,11 @@ function test() {
       .then(superGenericFileSearch)
       .then(() => ensureSourceIs(aPanel, "code_test-editor-mode"))
       .then(() => ensureCaretAt(aPanel, 1))
-      .then(() => pressKey("UP"))
-      .then(() => ensureSourceIs(aPanel, "doc_editor-mode", true))
+      .then(() => {
+        const shown = waitForSourceShown(aPanel, "doc_editor-mode");
+        pressKey("UP");
+        return shown;
+      })
       .then(() => ensureCaretAt(aPanel, 1))
       .then(() => pressKeyToHide("RETURN"))
       .then(() => ensureSourceIs(aPanel, "doc_editor-mode"))
@@ -45,8 +50,11 @@ function test() {
       .then(superAccurateFileSearch)
       .then(() => ensureSourceIs(aPanel, "doc_editor-mode"))
       .then(() => ensureCaretAt(aPanel, 1))
-      .then(() => typeText(gSearchBox, ":"))
-      .then(() => waitForSourceShown(gPanel, "code_test-editor-mode"))
+      .then(() => {
+        const shown = waitForSourceShown(gPanel, "code_test-editor-mode");
+        typeText(gSearchBox, ":");
+        return shown;
+      })
       .then(() => ensureSourceIs(aPanel, "code_test-editor-mode", true))
       .then(() => ensureCaretAt(aPanel, 1))
       .then(() => typeText(gSearchBox, "5"))

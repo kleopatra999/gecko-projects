@@ -794,9 +794,7 @@ struct PtrToNodeEntry : public PLDHashEntryHdr
 };
 
 static bool
-PtrToNodeMatchEntry(PLDHashTable* aTable,
-                    const PLDHashEntryHdr* aEntry,
-                    const void* aKey)
+PtrToNodeMatchEntry(const PLDHashEntryHdr* aEntry, const void* aKey)
 {
   const PtrToNodeEntry* n = static_cast<const PtrToNodeEntry*>(aEntry);
   return n->mNode->mPointer == aKey;
@@ -1275,7 +1273,9 @@ private:
   nsAutoPtr<CCGraphBuilder> mBuilder;
   RefPtr<nsCycleCollectorLogger> mLogger;
 
-  DebugOnly<void*> mThread;
+#ifdef DEBUG
+  void* mThread;
+#endif
 
   nsCycleCollectorParams mParams;
 
@@ -1409,7 +1409,7 @@ struct CollectorData
   CycleCollectedJSRuntime* mRuntime;
 };
 
-static mozilla::ThreadLocal<CollectorData*> sCollectorData;
+static MOZ_THREAD_LOCAL(CollectorData*) sCollectorData;
 
 ////////////////////////////////////////////////////////////////////////
 // Utility functions
@@ -1490,6 +1490,26 @@ struct CCGraphDescriber : public LinkedListElement<CCGraphDescriber>
   nsCString mCompartmentOrToAddress;
   uint32_t mCnt;
   Type mType;
+};
+
+class LogStringMessageAsync : public nsCancelableRunnable
+{
+public:
+  explicit LogStringMessageAsync(const nsAString& aMsg) : mMsg(aMsg)
+  {}
+
+  NS_IMETHOD Run() override
+  {
+    nsCOMPtr<nsIConsoleService> cs =
+      do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+    if (cs) {
+       cs->LogStringMessage(mMsg.get());
+    }
+    return NS_OK;
+  }
+
+private:
+  nsString mMsg;
 };
 
 class nsCycleCollectorLogSinkToFile final : public nsICycleCollectorLogSink
@@ -1690,17 +1710,16 @@ private:
     aLog->mFile = logFileFinalDestination;
 
     // Log to the error console.
-    nsCOMPtr<nsIConsoleService> cs =
-      do_GetService(NS_CONSOLESERVICE_CONTRACTID);
-    if (cs) {
-      // Copy out the path.
-      nsAutoString logPath;
-      logFileFinalDestination->GetPath(logPath);
+    nsAutoString logPath;
+    logFileFinalDestination->GetPath(logPath);
+    nsAutoString msg = aCollectorKind +
+      NS_LITERAL_STRING(" Collector log dumped to ") + logPath;
 
-      nsString msg = aCollectorKind +
-        NS_LITERAL_STRING(" Collector log dumped to ") + logPath;
-      cs->LogStringMessage(msg.get());
-    }
+    // We don't want any JS to run between ScanRoots and CollectWhite calls,
+    // and since ScanRoots calls this method, better to log the message
+    // asynchronously.
+    RefPtr<LogStringMessageAsync> log = new LogStringMessageAsync(msg);
+    NS_DispatchToCurrentThread(log);
     return NS_OK;
   }
 
@@ -2451,8 +2470,9 @@ CCGraphBuilder::NoteWeakMapping(JSObject* aMap, JS::GCCellPtr aKey,
   mapping->mVal = aVal ? AddWeakMapNode(aVal) : nullptr;
 
   if (mLogger) {
-    mLogger->NoteWeakMapEntry((uint64_t)aMap, aKey.unsafeAsInteger(),
-                              (uint64_t)aKdelegate, aVal.unsafeAsInteger());
+    mLogger->NoteWeakMapEntry((uint64_t)aMap, aKey ? aKey.unsafeAsInteger() : 0,
+                              (uint64_t)aKdelegate,
+                              aVal ? aVal.unsafeAsInteger() : 0);
   }
 }
 
@@ -2637,7 +2657,7 @@ class SnowWhiteKiller : public TraceCallbacks
     ObjectsVector;
 
 public:
-  SnowWhiteKiller(nsCycleCollector* aCollector, uint32_t aMaxCount)
+  explicit SnowWhiteKiller(nsCycleCollector* aCollector)
     : mCollector(aCollector)
     , mObjects(kSegmentSize)
   {
@@ -2677,7 +2697,7 @@ public:
   }
 
   virtual void Trace(JS::Heap<JS::Value>* aValue, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
     if (aValue->isMarkable() && ValueIsGrayCCThing(*aValue)) {
       MOZ_ASSERT(!js::gc::IsInsideNursery(aValue->toGCThing()));
@@ -2686,7 +2706,7 @@ public:
   }
 
   virtual void Trace(JS::Heap<jsid>* aId, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
   }
 
@@ -2699,29 +2719,35 @@ public:
   }
 
   virtual void Trace(JS::Heap<JSObject*>* aObject, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
+  {
+    AppendJSObjectToPurpleBuffer(*aObject);
+  }
+
+  virtual void Trace(JSObject** aObject, const char* aName,
+                     void* aClosure) const override
   {
     AppendJSObjectToPurpleBuffer(*aObject);
   }
 
   virtual void Trace(JS::TenuredHeap<JSObject*>* aObject, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
     AppendJSObjectToPurpleBuffer(*aObject);
   }
 
   virtual void Trace(JS::Heap<JSString*>* aString, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
   }
 
   virtual void Trace(JS::Heap<JSScript*>* aScript, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
   }
 
   virtual void Trace(JS::Heap<JSFunction*>* aFunction, const char* aName,
-                     void* aClosure) const
+                     void* aClosure) const override
   {
   }
 
@@ -2734,10 +2760,10 @@ class RemoveSkippableVisitor : public SnowWhiteKiller
 {
 public:
   RemoveSkippableVisitor(nsCycleCollector* aCollector,
-                         uint32_t aMaxCount, bool aRemoveChildlessNodes,
+                         bool aRemoveChildlessNodes,
                          bool aAsyncSnowWhiteFreeing,
                          CC_ForgetSkippableCallback aCb)
-    : SnowWhiteKiller(aCollector, aAsyncSnowWhiteFreeing ? 0 : aMaxCount)
+    : SnowWhiteKiller(aCollector)
     , mRemoveChildlessNodes(aRemoveChildlessNodes)
     , mAsyncSnowWhiteFreeing(aAsyncSnowWhiteFreeing)
     , mDispatchedDeferredDeletion(false)
@@ -2794,7 +2820,7 @@ nsPurpleBuffer::RemoveSkippable(nsCycleCollector* aCollector,
                                 bool aAsyncSnowWhiteFreeing,
                                 CC_ForgetSkippableCallback aCb)
 {
-  RemoveSkippableVisitor visitor(aCollector, Count(), aRemoveChildlessNodes,
+  RemoveSkippableVisitor visitor(aCollector, aRemoveChildlessNodes,
                                  aAsyncSnowWhiteFreeing, aCb);
   VisitEntries(visitor);
 }
@@ -2813,7 +2839,7 @@ nsCycleCollector::FreeSnowWhite(bool aUntilNoSWInPurpleBuffer)
 
   bool hadSnowWhiteObjects = false;
   do {
-    SnowWhiteKiller visitor(this, mPurpleBuf.Count());
+    SnowWhiteKiller visitor(this);
     mPurpleBuf.VisitEntries(visitor);
     hadSnowWhiteObjects = hadSnowWhiteObjects ||
                           visitor.HasSnowWhiteObjects();
@@ -2832,7 +2858,7 @@ nsCycleCollector::ForgetSkippable(bool aRemoveChildlessNodes,
 
   mozilla::Maybe<mozilla::AutoGlobalTimelineMarker> marker;
   if (NS_IsMainThread()) {
-    marker.emplace("nsCycleCollector::ForgetSkippable");
+    marker.emplace("nsCycleCollector::ForgetSkippable", MarkerStackRequest::NO_STACK);
   }
 
   // If we remove things from the purple buffer during graph building, we may
@@ -3258,10 +3284,17 @@ nsCycleCollector::CollectWhite()
     PtrInfo* pinfo = etor.GetNext();
     if (pinfo->mColor == white && pinfo->mParticipant) {
       if (pinfo->IsGrayJS()) {
+        MOZ_ASSERT(mJSRuntime);
         ++numWhiteGCed;
+        JS::Zone* zone;
         if (MOZ_UNLIKELY(pinfo->mParticipant == zoneParticipant)) {
           ++numWhiteJSZones;
+          zone = static_cast<JS::Zone*>(pinfo->mPointer);
+        } else {
+          JS::GCCellPtr ptr(pinfo->mPointer, js::GCThingTraceKind(pinfo->mPointer));
+          zone = JS::GetTenuredGCThingZone(ptr);
         }
+        mJSRuntime->AddZoneWaitingForGC(zone);
       } else {
         whiteNodes.InfallibleAppend(pinfo);
         pinfo->mParticipant->Root(pinfo->mPointer);
@@ -3370,7 +3403,9 @@ nsCycleCollector::nsCycleCollector() :
   mScanInProgress(false),
   mJSRuntime(nullptr),
   mIncrementalPhase(IdlePhase),
+#ifdef DEBUG
   mThread(NS_GetCurrentThread()),
+#endif
   mWhiteNodeCount(0),
   mBeforeUnlinkCB(nullptr),
   mForgetSkippableCB(nullptr),
@@ -3584,7 +3619,7 @@ nsCycleCollector::Collect(ccType aCCType,
 
   mozilla::Maybe<mozilla::AutoGlobalTimelineMarker> marker;
   if (NS_IsMainThread()) {
-    marker.emplace("nsCycleCollector::Collect");
+    marker.emplace("nsCycleCollector::Collect", MarkerStackRequest::NO_STACK);
   }
 
   bool startedIdle = IsIdle();
@@ -3993,8 +4028,13 @@ nsCycleCollector_suspectedCount()
 bool
 nsCycleCollector_init()
 {
+#ifdef DEBUG
+  static bool sInitialized;
+
   MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
-  MOZ_ASSERT(!sCollectorData.initialized(), "Called twice!?");
+  MOZ_ASSERT(!sInitialized, "Called twice!?");
+  sInitialized = true;
+#endif
 
   return sCollectorData.init();
 }
@@ -4002,8 +4042,6 @@ nsCycleCollector_init()
 void
 nsCycleCollector_startup()
 {
-  MOZ_ASSERT(sCollectorData.initialized(),
-             "Forgot to call nsCycleCollector_init!");
   if (sCollectorData.get()) {
     MOZ_CRASH();
   }
@@ -4159,6 +4197,11 @@ nsCycleCollector_shutdown()
 
     data->mCollector->Shutdown();
     data->mCollector = nullptr;
+    if (data->mRuntime) {
+      // Run any remaining tasks that may have been enqueued via
+      // RunInStableState during the final cycle collection.
+      data->mRuntime->ProcessStableStateQueue();
+    }
     if (!data->mRuntime) {
       delete data;
       sCollectorData.set(nullptr);

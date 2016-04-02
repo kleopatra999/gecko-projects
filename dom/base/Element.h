@@ -36,8 +36,8 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
+#include "mozilla/dom/Nullable.h"
 #include "Units.h"
-#include "nsContentListDeclarations.h"
 
 class nsIFrame;
 class nsIDOMMozNamedAttrMap;
@@ -45,7 +45,6 @@ class nsIURI;
 class nsIScrollableFrame;
 class nsAttrValueOrString;
 class nsContentList;
-class nsDOMSettableTokenList;
 class nsDOMTokenList;
 struct nsRect;
 class nsFocusManager;
@@ -56,11 +55,19 @@ class nsDocument;
 
 namespace mozilla {
 namespace dom {
+  struct AnimationFilter;
   struct ScrollIntoViewOptions;
   struct ScrollToOptions;
+  class ElementOrCSSPseudoElement;
+  class UnrestrictedDoubleOrKeyframeAnimationOptions;
 } // namespace dom
 } // namespace mozilla
 
+
+already_AddRefed<nsContentList>
+NS_GetContentList(nsINode* aRootNode,
+                  int32_t  aMatchNameSpaceId,
+                  const nsAString& aTagname);
 
 #define ELEMENT_FLAG_BIT(n_) NODE_FLAG_BIT(NODE_TYPE_SPECIFIC_BITS_OFFSET + (n_))
 
@@ -114,6 +121,7 @@ enum {
 ASSERT_NODE_FLAGS_SPACE(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET);
 
 namespace mozilla {
+enum class CSSPseudoElementType : uint8_t;
 class EventChainPostVisitor;
 class EventChainPreVisitor;
 class EventChainVisitor;
@@ -174,7 +182,7 @@ public:
    * removing it from the document).
    */
   void UpdateState(bool aNotify);
-  
+
   /**
    * Method to update mState with link state information.  This does not notify.
    */
@@ -334,7 +342,7 @@ public:
         break;
     }
 
-    /* 
+    /*
      * Only call UpdateState if we need to notify, because we call
      * SetDirectionality for every element, and UpdateState is very very slow
      * for some elements.
@@ -624,6 +632,9 @@ public:
 
     return slots->mAttributeMap;
   }
+
+  void GetAttributeNames(nsTArray<nsString>& aResult);
+
   void GetAttribute(const nsAString& aName, nsString& aReturn)
   {
     DOMString str;
@@ -697,9 +708,9 @@ public:
       // (on element that have status pointer capture override
       // or on element that have status pending pointer capture)
       if (pointerCaptureInfo->mOverrideContent == this) {
-        nsIPresShell::ReleasePointerCapturingContent(aPointerId, this);
+        nsIPresShell::ReleasePointerCapturingContent(aPointerId);
       } else if (pointerCaptureInfo->mPendingContent == this) {
-        nsIPresShell::ReleasePointerCapturingContent(aPointerId, this);
+        nsIPresShell::ReleasePointerCapturingContent(aPointerId);
       }
     }
   }
@@ -721,8 +732,8 @@ public:
   }
 
   // aCx == nullptr is allowed only if aOptions.isNullOrUndefined()
-  void MozRequestFullScreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
-                            ErrorResult& aError);
+  void RequestFullscreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
+                         ErrorResult& aError);
   void MozRequestPointerLock();
   Attr* GetAttributeNode(const nsAString& aName);
   already_AddRefed<Attr> SetAttributeNode(Attr& aNewAttr,
@@ -818,7 +829,27 @@ public:
   {
   }
 
-  void GetAnimations(nsTArray<RefPtr<Animation>>& aAnimations);
+  already_AddRefed<Animation>
+  Animate(JSContext* aContext,
+          JS::Handle<JSObject*> aFrames,
+          const UnrestrictedDoubleOrKeyframeAnimationOptions& aOptions,
+          ErrorResult& aError);
+
+  // A helper method that factors out the common functionality needed by
+  // Element::Animate and CSSPseudoElement::Animate
+  static already_AddRefed<Animation>
+  Animate(const Nullable<ElementOrCSSPseudoElement>& aTarget,
+          JSContext* aContext,
+          JS::Handle<JSObject*> aFrames,
+          const UnrestrictedDoubleOrKeyframeAnimationOptions& aOptions,
+          ErrorResult& aError);
+
+  // Note: GetAnimations will flush style while GetAnimationsUnsorted won't.
+  void GetAnimations(const AnimationFilter& filter,
+                     nsTArray<RefPtr<Animation>>& aAnimations);
+  static void GetAnimationsUnsorted(Element* aElement,
+                                    CSSPseudoElementType aPseudoType,
+                                    nsTArray<RefPtr<Animation>>& aAnimations);
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML);
   virtual void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
@@ -949,7 +980,7 @@ public:
    * Return the CORS mode for a given string
    */
   static CORSMode StringToCORSMode(const nsAString& aValue);
-  
+
   /**
    * Return the CORS mode for a given nsAttrValue (which may be null,
    * but if not should have been parsed via ParseCORSValue).
@@ -1074,7 +1105,7 @@ public:
    */
   float FontSizeInflation();
 
-  net::ReferrerPolicy GetReferrerPolicy();
+  net::ReferrerPolicy GetReferrerPolicyAsEnum();
 
 protected:
   /*
@@ -1282,7 +1313,7 @@ protected:
    */
   virtual void GetLinkTarget(nsAString& aTarget);
 
-  nsDOMSettableTokenList* GetTokenList(nsIAtom* aAtom);
+  nsDOMTokenList* GetTokenList(nsIAtom* aAtom);
   void GetTokenList(nsIAtom* aAtom, nsIVariant** aResult);
   nsresult SetTokenList(nsIAtom* aAtom, nsIVariant* aValue);
 
@@ -1792,8 +1823,8 @@ NS_IMETHOD ReleaseCapture(void) final override                                \
 NS_IMETHOD MozRequestFullScreen(void) final override                          \
 {                                                                             \
   mozilla::ErrorResult rv;                                                    \
-  Element::MozRequestFullScreen(nullptr, JS::UndefinedHandleValue, rv);       \
-  return rv.StealNSResult();                                                      \
+  Element::RequestFullscreen(nullptr, JS::UndefinedHandleValue, rv);          \
+  return rv.StealNSResult();                                                  \
 }                                                                             \
 NS_IMETHOD MozRequestPointerLock(void) final override                         \
 {                                                                             \

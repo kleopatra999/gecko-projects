@@ -10,6 +10,7 @@
 #include "TransportSecurityInfo.h"
 #include "nsISSLSocketControl.h"
 #include "nsIClientAuthDialogs.h"
+#include "nsIProxyInfo.h"
 #include "nsNSSCertificate.h"
 #include "nsDataHashtable.h"
 #include "nsTHashtable.h"
@@ -230,6 +231,7 @@ public:
   bool isPublic() const;
   void addInsecureFallbackSite(const nsCString& hostname, bool temporary);
   void removeInsecureFallbackSite(const nsACString& hostname, uint16_t port);
+  bool isInsecureFallbackSite(const nsACString& hostname);
 
   bool mFalseStartRequireNPN;
   bool mUnrestrictedRC4Fallback;
@@ -242,8 +244,7 @@ private:
 nsresult nsSSLIOLayerNewSocket(int32_t family,
                                const char* host,
                                int32_t port,
-                               const char* proxyHost,
-                               int32_t proxyPort,
+                               nsIProxyInfo *proxy,
                                PRFileDesc** fd,
                                nsISupports** securityInfo,
                                bool forSTARTTLS,
@@ -252,8 +253,7 @@ nsresult nsSSLIOLayerNewSocket(int32_t family,
 nsresult nsSSLIOLayerAddToSocket(int32_t family,
                                  const char* host,
                                  int32_t port,
-                                 const char* proxyHost,
-                                 int32_t proxyPort,
+                                 nsIProxyInfo *proxy,
                                  PRFileDesc* fd,
                                  nsISupports** securityInfo,
                                  bool forSTARTTLS,

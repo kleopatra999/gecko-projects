@@ -10,7 +10,7 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Monitor.h"
-#include "mozilla/TaskQueue.h"
+#include "AutoTaskQueue.h"
 
 #include "MediaDataDemuxer.h"
 #include "MediaDecoderReader.h"
@@ -47,13 +47,16 @@ public:
   /* interface for TrackBuffersManager */
   void AttachSourceBuffer(TrackBuffersManager* aSourceBuffer);
   void DetachSourceBuffer(TrackBuffersManager* aSourceBuffer);
-  TaskQueue* GetTaskQueue() { return mTaskQueue; }
+  AutoTaskQueue* GetTaskQueue() { return mTaskQueue; }
 
   // Returns a string describing the state of the MediaSource internal
   // buffered data. Used for debugging purposes.
   void GetMozDebugReaderData(nsAString& aString);
 
   void AddSizeOfResources(MediaSourceDecoder::ResourceSizes* aSizes);
+
+  // Gap allowed between frames.
+  static const media::TimeUnit EOS_FUZZ;
 
 private:
   ~MediaSourceDemuxer();
@@ -70,7 +73,7 @@ private:
     return !GetTaskQueue() || GetTaskQueue()->IsCurrentThreadIn();
   }
 
-  RefPtr<TaskQueue> mTaskQueue;
+  RefPtr<AutoTaskQueue> mTaskQueue;
   nsTArray<RefPtr<MediaSourceTrackDemuxer>> mDemuxers;
 
   nsTArray<RefPtr<TrackBuffersManager>> mSourceBuffers;
@@ -126,6 +129,14 @@ private:
   // Monitor protecting members below accessed from multiple threads.
   Monitor mMonitor;
   media::TimeUnit mNextRandomAccessPoint;
+  Maybe<RefPtr<MediaRawData>> mNextSample;
+  // Set to true following a reset. Ensure that the next sample demuxed
+  // is available at position 0.
+  bool mReset;
+
+  // Amount of pre-roll time when seeking.
+  // Set to 80ms if track is Opus.
+  const media::TimeUnit mPreRoll;
 };
 
 } // namespace mozilla

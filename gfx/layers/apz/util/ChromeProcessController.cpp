@@ -8,7 +8,7 @@
 #include "MainThreadUtils.h"    // for NS_IsMainThread()
 #include "base/message_loop.h"  // for MessageLoop
 #include "mozilla/dom/Element.h"
-#include "mozilla/layers/CompositorParent.h"
+#include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZEventState.h"
 #include "mozilla/layers/APZCTreeManager.h"
@@ -147,6 +147,14 @@ ChromeProcessController::HandleDoubleTap(const mozilla::CSSPoint& aPoint,
   }
 
   CSSPoint point = APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid);
+  // CalculateRectToZoomTo performs a hit test on the frame associated with the
+  // Root Content Document. Unfortunately that frame does not know about the
+  // resolution of the document and so we must remove it before calculating
+  // the zoomToRect.
+  nsIPresShell* presShell = document->GetShell();
+  const float resolution = presShell->ScaleToResolution() ? presShell->GetResolution () : 1.0f;
+  point.x = point.x / resolution;
+  point.y = point.y / resolution;
   CSSRect zoomToRect = CalculateRectToZoomTo(document, point);
 
   uint32_t presShellId;
@@ -224,5 +232,5 @@ void
 ChromeProcessController::NotifyFlushComplete()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  APZCCallbackHelper::NotifyFlushComplete();
+  APZCCallbackHelper::NotifyFlushComplete(GetPresShell());
 }

@@ -34,7 +34,6 @@ gfxGraphiteShaper::gfxGraphiteShaper(gfxFont *aFont)
       mGrFont(nullptr), mFallbackToSmallCaps(false)
 {
     mCallbackData.mFont = aFont;
-    mCallbackData.mShaper = this;
 }
 
 gfxGraphiteShaper::~gfxGraphiteShaper()
@@ -50,8 +49,7 @@ gfxGraphiteShaper::GrGetAdvance(const void* appFontHandle, uint16_t glyphid)
 {
     const CallbackData *cb =
         static_cast<const CallbackData*>(appFontHandle);
-    return FixedToFloat(cb->mFont->GetGlyphWidth(*cb->mContext->GetDrawTarget(),
-                                                 glyphid));
+    return FixedToFloat(cb->mFont->GetGlyphWidth(*cb->mDrawTarget, glyphid));
 }
 
 static inline uint32_t
@@ -84,7 +82,7 @@ AddFeature(const uint32_t& aTag, uint32_t& aValue, void *aUserArg)
 }
 
 bool
-gfxGraphiteShaper::ShapeText(gfxContext      *aContext,
+gfxGraphiteShaper::ShapeText(DrawTarget      *aDrawTarget,
                              const char16_t *aText,
                              uint32_t         aOffset,
                              uint32_t         aLength,
@@ -93,11 +91,11 @@ gfxGraphiteShaper::ShapeText(gfxContext      *aContext,
                              gfxShapedText   *aShapedText)
 {
     // some font back-ends require this in order to get proper hinted metrics
-    if (!mFont->SetupCairoFont(aContext)) {
+    if (!mFont->SetupCairoFont(aDrawTarget)) {
         return false;
     }
 
-    mCallbackData.mContext = aContext;
+    mCallbackData.mDrawTarget = aDrawTarget;
 
     const gfxFontStyle *style = mFont->GetStyle();
 
@@ -175,7 +173,7 @@ gfxGraphiteShaper::ShapeText(gfxContext      *aContext,
         return false;
     }
 
-    nsresult rv = SetGlyphsFromSegment(aContext, aShapedText, aOffset, aLength,
+    nsresult rv = SetGlyphsFromSegment(aDrawTarget, aShapedText, aOffset, aLength,
                                        aText, seg);
 
     gr_seg_destroy(seg);
@@ -195,7 +193,7 @@ struct Cluster {
 };
 
 nsresult
-gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
+gfxGraphiteShaper::SetGlyphsFromSegment(DrawTarget      *aDrawTarget,
                                         gfxShapedText   *aShapedText,
                                         uint32_t         aOffset,
                                         uint32_t         aLength,
@@ -208,10 +206,10 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
     uint32_t glyphCount = gr_seg_n_slots(aSegment);
 
     // identify clusters; graphite may have reordered/expanded/ligated glyphs.
-    AutoFallibleTArray<Cluster,SMALL_GLYPH_RUN> clusters;
-    AutoFallibleTArray<uint16_t,SMALL_GLYPH_RUN> gids;
-    AutoFallibleTArray<float,SMALL_GLYPH_RUN> xLocs;
-    AutoFallibleTArray<float,SMALL_GLYPH_RUN> yLocs;
+    AutoTArray<Cluster,SMALL_GLYPH_RUN> clusters;
+    AutoTArray<uint16_t,SMALL_GLYPH_RUN> gids;
+    AutoTArray<float,SMALL_GLYPH_RUN> xLocs;
+    AutoTArray<float,SMALL_GLYPH_RUN> yLocs;
 
     if (!clusters.SetLength(aLength, fallible) ||
         !gids.SetLength(glyphCount, fallible) ||
@@ -270,9 +268,8 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
         }
     }
 
-    bool roundX;
-    bool roundY;
-    aContext->GetRoundOffsetsToPixels(&roundX, &roundY);
+    bool roundX, roundY;
+    GetRoundOffsetsToPixels(aDrawTarget, &roundX, &roundY);
 
     gfxShapedText::CompressedGlyph *charGlyphs =
         aShapedText->GetCharacterGlyphs() + aOffset;
@@ -316,7 +313,7 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
             charGlyphs[offs].SetSimpleGlyph(appAdvance, gids[c.baseGlyph]);
         } else {
             // not a one-to-one mapping with simple metrics: use DetailedGlyph
-            nsAutoTArray<gfxShapedText::DetailedGlyph,8> details;
+            AutoTArray<gfxShapedText::DetailedGlyph,8> details;
             float clusterLoc;
             for (uint32_t j = c.baseGlyph; j < c.baseGlyph + c.nGlyphs; ++j) {
                 gfxShapedText::DetailedGlyph* d = details.AppendElement();

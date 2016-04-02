@@ -11,7 +11,8 @@
 using namespace mozilla;
 
 void
-VibrancyManager::UpdateVibrantRegion(VibrancyType aType, const nsIntRegion& aRegion)
+VibrancyManager::UpdateVibrantRegion(VibrancyType aType,
+                                     const LayoutDeviceIntRegion& aRegion)
 {
   auto& vr = *mVibrantRegions.LookupOrAdd(uint32_t(aType));
   if (vr.region == aRegion) {
@@ -27,12 +28,13 @@ VibrancyManager::UpdateVibrantRegion(VibrancyType aType, const nsIntRegion& aReg
   vr.effectViews.SwapElements(viewsToRecycle);
   // vr.effectViews is now empty.
 
-  nsIntRegionRectIterator iter(aRegion);
-  const nsIntRect* iterRect = nullptr;
-  for (size_t i = 0; (iterRect = iter.Next()) || i < viewsToRecycle.Length(); ++i) {
-    if (iterRect) {
+  size_t i = 0;
+  for (auto iter = aRegion.RectIter();
+       !iter.Done() || i < viewsToRecycle.Length();
+       i++) {
+    if (!iter.Done()) {
       NSView* view = nil;
-      NSRect rect = mCoordinateConverter.DevPixelsToCocoaPoints(*iterRect);
+      NSRect rect = mCoordinateConverter.DevPixelsToCocoaPoints(iter.Get());
       if (i < viewsToRecycle.Length()) {
         view = viewsToRecycle[i];
         [view setFrame:rect];
@@ -46,6 +48,7 @@ VibrancyManager::UpdateVibrantRegion(VibrancyType aType, const nsIntRegion& aReg
         [view release];
       }
       vr.effectViews.AppendElement(view);
+      iter.Next();
     } else {
       // Our new region is made of less rects than the old region, so we can
       // remove this view. We only have a weak reference to it, so removing it
@@ -57,20 +60,12 @@ VibrancyManager::UpdateVibrantRegion(VibrancyType aType, const nsIntRegion& aReg
   vr.region = aRegion;
 }
 
-static PLDHashOperator
-ClearVibrantRegionFunc(const uint32_t& aVibrancyType,
-                       VibrancyManager::VibrantRegion* aVibrantRegion,
-                       void* aVM)
-{
-  static_cast<VibrancyManager*>(aVM)->ClearVibrantRegion(*aVibrantRegion);
-  return PL_DHASH_NEXT;
-}
-
 void
 VibrancyManager::ClearVibrantAreas() const
 {
-  mVibrantRegions.EnumerateRead(ClearVibrantRegionFunc,
-                                const_cast<VibrancyManager*>(this));
+  for (auto iter = mVibrantRegions.ConstIter(); !iter.Done(); iter.Next()) {
+    ClearVibrantRegion(*iter.UserData());
+  }
 }
 
 void
@@ -78,9 +73,8 @@ VibrancyManager::ClearVibrantRegion(const VibrantRegion& aVibrantRegion) const
 {
   [[NSColor clearColor] set];
 
-  nsIntRegionRectIterator iter(aVibrantRegion.region);
-  while (const nsIntRect* rect = iter.Next()) {
-    NSRectFill(mCoordinateConverter.DevPixelsToCocoaPoints(*rect));
+  for (auto iter = aVibrantRegion.region.RectIter(); !iter.Done(); iter.Next()) {
+    NSRectFill(mCoordinateConverter.DevPixelsToCocoaPoints(iter.Get()));
   }
 }
 

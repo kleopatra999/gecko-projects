@@ -19,6 +19,9 @@ class MIRGenerator;
 class MIRGraph;
 
 bool
+PruneUnusedBranches(MIRGenerator* mir, MIRGraph& graph);
+
+bool
 FoldTests(MIRGraph& graph);
 
 bool
@@ -57,7 +60,8 @@ bool
 RenumberBlocks(MIRGraph& graph);
 
 bool
-AccountForCFGChanges(MIRGenerator* mir, MIRGraph& graph, bool updateAliasAnalysis);
+AccountForCFGChanges(MIRGenerator* mir, MIRGraph& graph, bool updateAliasAnalysis,
+                     bool underValueNumberer = false);
 
 bool
 RemoveUnmarkedBlocks(MIRGenerator* mir, MIRGraph& graph, uint32_t numMarkedBlocks);
@@ -78,12 +82,12 @@ void
 AssertGraphCoherency(MIRGraph& graph);
 
 void
-AssertExtendedGraphCoherency(MIRGraph& graph);
+AssertExtendedGraphCoherency(MIRGraph& graph, bool underValueNumberer = false);
 
 bool
 EliminateRedundantChecks(MIRGraph& graph);
 
-void
+bool
 AddKeepAliveInstructions(MIRGraph& graph);
 
 class MDefinition;
@@ -131,7 +135,9 @@ class LinearSum
       : terms_(other.terms_.allocPolicy()),
         constant_(other.constant_)
     {
-        terms_.appendAll(other.terms_);
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!terms_.appendAll(other.terms_))
+            oomUnsafe.crash("LinearSum::LinearSum");
     }
 
     // These return false on an integer overflow, and afterwards the sum must

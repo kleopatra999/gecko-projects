@@ -666,21 +666,6 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
     // payload_num is the number in the fmtp attribute, verbatim
     osPayloadType << fmtp->payload_num;
 
-    // Get the serialized form of the parameters
-    flex_string fs;
-    flex_string_init(&fs);
-
-    // Very lame, but we need direct access so we can get the serialized form
-    sdp_result_e sdpres = sdp_build_attr_fmtp_params(sdp, fmtp, &fs);
-
-    if (sdpres != SDP_SUCCESS) {
-      flex_string_free(&fs);
-      continue;
-    }
-
-    std::string paramsString(fs.buffer);
-    flex_string_free(&fs);
-
     // Get parsed form of parameters, if supported
     UniquePtr<SdpFmtpAttributeList::Parameters> parameters;
 
@@ -699,14 +684,7 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
             !!(fmtp->level_asymmetry_allowed);
 
         h264Parameters->packetization_mode = fmtp->packetization_mode;
-// Copied from VcmSIPCCBinding
-#ifdef _WIN32
-        sscanf_s(fmtp->profile_level_id, "%x",
-                 &h264Parameters->profile_level_id, sizeof(unsigned*));
-#else
-        sscanf(fmtp->profile_level_id, "%xu",
-               &h264Parameters->profile_level_id);
-#endif
+        sscanf(fmtp->profile_level_id, "%x", &h264Parameters->profile_level_id);
         h264Parameters->max_mbps = fmtp->max_mbps;
         h264Parameters->max_fs = fmtp->max_fs;
         h264Parameters->max_cpb = fmtp->max_cpb;
@@ -735,11 +713,18 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
 
         parameters.reset(vp8Parameters);
       } break;
+      case RTP_OPUS: {
+        SdpFmtpAttributeList::OpusParameters* opusParameters(
+            new SdpFmtpAttributeList::OpusParameters);
+        opusParameters->maxplaybackrate = fmtp->maxplaybackrate;
+        opusParameters->stereo = fmtp->stereo;
+        parameters.reset(opusParameters);
+      } break;
       default: {
       }
     }
 
-    fmtps->PushEntry(osPayloadType.str(), paramsString, Move(parameters));
+    fmtps->PushEntry(osPayloadType.str(), Move(parameters));
   }
 
   if (!fmtps->mFmtps.empty()) {

@@ -1,5 +1,7 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /**
  * Make sure eval scripts with the sourceURL pragma are correctly
@@ -19,24 +21,26 @@ function test() {
     gSources = gDebugger.DebuggerView.Sources;
     gBreakpoints = gDebugger.DebuggerController.Breakpoints;
     gEditor = gDebugger.DebuggerView.editor;
+    const constants = gDebugger.require('./content/constants');
+    const queries = gDebugger.require('./content/queries');
+    const actions = bindActionCreators(gPanel);
+    const getState = gDebugger.DebuggerController.getState;
 
     return Task.spawn(function*() {
       yield waitForSourceShown(gPanel, "-eval.js");
-      is(gSources.values.length, 1, "Should have 1 source");
+      is(queries.getSourceCount(getState()), 1, "Should have 1 source");
 
-      let newSource = waitForDebuggerEvents(gPanel, gDebugger.EVENTS.NEW_SOURCE);
+      const newSource = waitForDispatch(gPanel, constants.ADD_SOURCE);
       callInTab(gTab, "evalSourceWithSourceURL");
       yield newSource;
 
-      is(gSources.values.length, 2, "Should have 2 sources");
+      is(queries.getSourceCount(getState()), 2, "Should have 2 sources");
 
-      let item = gSources.getItemForAttachment(e => e.label == "bar.js");
-      ok(item, "Source label is incorrect.");
-      is(item.attachment.group, 'http://example.com',
-         'Source group is incorrect');
+      const source = queries.getSourceByURL(getState(), EXAMPLE_URL + "bar.js");
+      ok(source, "Source exists.");
 
       let shown = waitForDebuggerEvents(gPanel, gDebugger.EVENTS.SOURCE_SHOWN);
-      gSources.selectedItem = item;
+      actions.selectSource(source);
       yield shown;
 
       ok(gEditor.getText().indexOf('bar = function() {') === 0,

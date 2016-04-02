@@ -24,6 +24,7 @@ using mozilla::plugins::PluginInstanceParent;
 #include "nsWindowGfx.h"
 #include "nsAppRunner.h"
 #include <windows.h>
+#include "gfxEnv.h"
 #include "gfxImageSurface.h"
 #include "gfxUtils.h"
 #include "gfxWindowsSurface.h"
@@ -32,6 +33,7 @@ using mozilla::plugins::PluginInstanceParent;
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Tools.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "nsGfxCIID.h"
 #include "gfxContext.h"
 #include "prmem.h"
@@ -41,7 +43,8 @@ using mozilla::plugins::PluginInstanceParent;
 #include "nsDebug.h"
 #include "nsIXULRuntime.h"
 
-#include "mozilla/layers/CompositorParent.h"
+#include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/CompositorBridgeChild.h"
 #include "ClientLayerManager.h"
 
 #include "nsUXThemeData.h"
@@ -69,7 +72,7 @@ using namespace mozilla::plugins;
  *
  **************************************************************/
 
-static nsAutoPtr<uint8_t>  sSharedSurfaceData;
+static UniquePtr<uint8_t[]> sSharedSurfaceData;
 static IntSize             sSharedSurfaceSize;
 
 struct IconMetrics {
@@ -151,11 +154,11 @@ EnsureSharedSurfaceSize(IntSize size)
 
   if (!sSharedSurfaceData || (WORDSSIZE(size) > WORDSSIZE(sSharedSurfaceSize))) {
     sSharedSurfaceSize = size;
-    sSharedSurfaceData = nullptr;
-    sSharedSurfaceData = (uint8_t *)malloc(WORDSSIZE(sSharedSurfaceSize) * 4);
+    sSharedSurfaceData =
+      MakeUniqueFallible<uint8_t[]>(WORDSSIZE(sSharedSurfaceSize) * 4);
   }
 
-  return (sSharedSurfaceData != nullptr);
+  return !sSharedSurfaceData;
 }
 
 nsIWidgetListener* nsWindow::GetPaintListener()
@@ -163,6 +166,13 @@ nsIWidgetListener* nsWindow::GetPaintListener()
   if (mDestroyCalled)
     return nullptr;
   return mAttachedWidgetListener ? mAttachedWidgetListener : mWidgetListener;
+}
+
+void nsWindow::ForcePresent()
+{
+  if (CompositorBridgeChild* remoteRenderer = GetRemoteRenderer()) {
+    remoteRenderer->SendForcePresent();
+  }
 }
 
 bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
@@ -176,7 +186,9 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
 
   if (gfxWindowsPlatform::GetPlatform()->DidRenderingDeviceReset()) {
     gfxWindowsPlatform::GetPlatform()->UpdateRenderMode();
-    EnumAllWindows(ClearCompositor);
+    EnumAllWindows([] (nsWindow* aWindow) -> void {
+      aWindow->OnRenderingDeviceReset();
+    });
     return false;
   }
 
@@ -217,17 +229,14 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
     return true;
   }
 
-  ClientLayerManager *clientLayerManager =
-      (GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT)
-      ? static_cast<ClientLayerManager*>(GetLayerManager())
-      : nullptr;
+  ClientLayerManager *clientLayerManager = GetLayerManager()->AsClientLayerManager();
 
-  if (clientLayerManager && mCompositorParent &&
+  if (clientLayerManager && mCompositorBridgeParent &&
       !mBounds.IsEqualEdges(mLastPaintBounds))
   {
     // Do an early async composite so that we at least have something on the
     // screen in the right place, even if the content is out of date.
-    mCompositorParent->ScheduleRenderOnCompositorThread();
+    mCompositorBridgeParent->ScheduleRenderOnCompositorThread();
   }
   mLastPaintBounds = mBounds;
 
@@ -273,7 +282,7 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
 #endif
   nsIntRegion region = GetRegionToPaint(forceRepaint, ps, hDC);
 
-  if (clientLayerManager && mCompositorParent) {
+  if (clientLayerManager && mCompositorBridgeParent) {
     // We need to paint to the screen even if nothing changed, since if we
     // don't have a compositing window manager, our pixels could be stale.
     clientLayerManager->SetNeedsComposite(true);
@@ -290,8 +299,8 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
     return false;
   }
 
-  if (clientLayerManager && mCompositorParent && clientLayerManager->NeedsComposite()) {
-    mCompositorParent->ScheduleRenderOnCompositorThread();
+  if (clientLayerManager && mCompositorBridgeParent && clientLayerManager->NeedsComposite()) {
+    mCompositorBridgeParent->ScheduleRenderOnCompositorThread();
     clientLayerManager->SetNeedsComposite(false);
   }
 
@@ -354,7 +363,7 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
             targetSurfaceImage = new gfxImageSurface(sSharedSurfaceData.get(),
                                                      surfaceSize,
                                                      surfaceSize.width * 4,
-                                                     gfxImageFormat::RGB24);
+                                                     SurfaceFormat::X8R8G8B8_UINT32);
 
             if (targetSurfaceImage && !targetSurfaceImage->CairoStatus()) {
               targetSurfaceImage->SetDeviceOffset(gfxPoint(-ps.rcPaint.left, -ps.rcPaint.top));
@@ -406,8 +415,9 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
 
           {
             AutoLayerManagerSetup
-                setupLayerManager(this, thebesContext, doubleBuffering);
-            result = listener->PaintWindow(this, region);
+              setupLayerManager(this, thebesContext, doubleBuffering);
+            result = listener->PaintWindow(
+              this, LayoutDeviceIntRegion::FromUnknownRegion(region));
           }
 
 #ifdef MOZ_XUL
@@ -514,7 +524,15 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
         }
         break;
       case LayersBackend::LAYERS_CLIENT:
-        result = listener->PaintWindow(this, region);
+        {
+          result = listener->PaintWindow(
+            this, LayoutDeviceIntRegion::FromUnknownRegion(region));
+          if (!gfxEnv::DisableForcePresent()) {
+            nsCOMPtr<nsIRunnable> event =
+              NS_NewRunnableMethod(this, &nsWindow::ForcePresent);
+            NS_DispatchToMainThread(event);
+          }
+        }
         break;
       default:
         NS_ERROR("Unknown layers backend used!");

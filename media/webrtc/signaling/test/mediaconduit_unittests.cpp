@@ -11,14 +11,19 @@
 
 using namespace std;
 
-#include "mozilla/Scoped.h"
 #include "mozilla/SyncRunnable.h"
+#include "mozilla/UniquePtr.h"
 #include <MediaConduitInterface.h>
 #include "GmpVideoCodec.h"
 #include "nsIEventTarget.h"
 #include "FakeMediaStreamsImpl.h"
+#include "FakeLogging.h"
 #include "nsThreadUtils.h"
 #include "runnable_utils.h"
+#include "signaling/src/common/EncodingConstraints.h"
+
+#include "FakeIPC.h"
+#include "FakeIPC.cpp"
 
 #define GTEST_HAS_RTTI 0
 #include "gtest/gtest.h"
@@ -87,8 +92,8 @@ public:
   {
         mSession = aSession;
         mLen = ((width * height) * 3 / 2);
-        mFrame = (uint8_t*) PR_MALLOC(mLen);
-        memset(mFrame, COLOR, mLen);
+        mFrame = mozilla::MakeUnique<uint8_t[]>(mLen);
+        memset(mFrame.get(), COLOR, mLen);
         numFrames = 121;
   }
 
@@ -96,7 +101,7 @@ public:
   {
     do
     {
-      mSession->SendVideoFrame((unsigned char*)mFrame,
+      mSession->SendVideoFrame(reinterpret_cast<unsigned char*>(mFrame.get()),
                                 mLen,
                                 width,
                                 height,
@@ -110,7 +115,7 @@ public:
 
 private:
 RefPtr<mozilla::VideoSessionConduit> mSession;
-mozilla::ScopedDeletePtr<uint8_t> mFrame;
+mozilla::UniquePtr<uint8_t[]> mFrame;
 int mLen;
 int width, height;
 int rate;
@@ -285,8 +290,8 @@ void AudioSendAndReceive::GenerateMusic(short* buf, int len)
 //Hardcoded for 16 bit samples for now
 void AudioSendAndReceive::GenerateAndReadSamples()
 {
-   mozilla::ScopedDeletePtr<int16_t> audioInput(new int16_t [PLAYOUT_SAMPLE_LENGTH]);
-   mozilla::ScopedDeletePtr<int16_t> audioOutput(new int16_t [PLAYOUT_SAMPLE_LENGTH]);
+   auto audioInput = mozilla::MakeUnique<int16_t []>(PLAYOUT_SAMPLE_LENGTH);
+   auto audioOutput = mozilla::MakeUnique<int16_t []>(PLAYOUT_SAMPLE_LENGTH);
    short* inbuf;
    int sampleLengthDecoded = 0;
    unsigned int SAMPLES = (PLAYOUT_SAMPLE_FREQUENCY * 10); //10 seconds
@@ -378,10 +383,21 @@ public:
 
 
   void RenderVideoFrame(const unsigned char* buffer,
-                        unsigned int buffer_size,
+                        size_t buffer_size,
+                        uint32_t y_stride,
+                        uint32_t cbcr_stride,
                         uint32_t time_stamp,
                         int64_t render_time,
-                        const mozilla::ImageHandle& handle)
+                        const mozilla::ImageHandle& handle) override
+  {
+    RenderVideoFrame(buffer, buffer_size, time_stamp, render_time, handle);
+  }
+
+  void RenderVideoFrame(const unsigned char* buffer,
+                        size_t buffer_size,
+                        uint32_t time_stamp,
+                        int64_t render_time,
+                        const mozilla::ImageHandle& handle) override
  {
   //write the frame to the file
   if(VerifyFrame(buffer, buffer_size) == 0)
@@ -393,7 +409,7 @@ public:
   }
  }
 
- void FrameSizeChange(unsigned int, unsigned int, unsigned int)
+ void FrameSizeChange(unsigned int, unsigned int, unsigned int) override
  {
     //do nothing
  }
@@ -626,9 +642,10 @@ class TransportConduitTest : public ::testing::Test
     err = mVideoSession2->SetReceiverTransport(mVideoTransport);
     ASSERT_EQ(mozilla::kMediaConduitNoError, err);
 
+    mozilla::EncodingConstraints constraints;
     //configure send and recv codecs on theconduit
-    mozilla::VideoCodecConfig cinst1(120, "VP8");
-    mozilla::VideoCodecConfig cinst2(124, "I420");
+    mozilla::VideoCodecConfig cinst1(120, "VP8", constraints);
+    mozilla::VideoCodecConfig cinst2(124, "I420", constraints);
 
 
     std::vector<mozilla::VideoCodecConfig* > rcvCodecList;
@@ -707,8 +724,9 @@ class TransportConduitTest : public ::testing::Test
     cerr << "    1. Same Codec (VP8) Repeated Twice " << endl;
     cerr << "   *************************************************" << endl;
 
-    mozilla::VideoCodecConfig cinst1(120, "VP8");
-    mozilla::VideoCodecConfig cinst2(120, "VP8");
+    mozilla::EncodingConstraints constraints;
+    mozilla::VideoCodecConfig cinst1(120, "VP8", constraints);
+    mozilla::VideoCodecConfig cinst2(120, "VP8", constraints);
     rcvCodecList.push_back(&cinst1);
     rcvCodecList.push_back(&cinst2);
     err = videoSession->ConfigureRecvMediaCodecs(rcvCodecList);
@@ -724,8 +742,8 @@ class TransportConduitTest : public ::testing::Test
     cerr << "   Setting payload 1 with name: I4201234tttttthhhyyyy89087987y76t567r7756765rr6u6676" << endl;
     cerr << "   Setting payload 2 with name of zero length" << endl;
 
-    mozilla::VideoCodecConfig cinst3(124, "I4201234tttttthhhyyyy89087987y76t567r7756765rr6u6676");
-    mozilla::VideoCodecConfig cinst4(124, "");
+    mozilla::VideoCodecConfig cinst3(124, "I4201234tttttthhhyyyy89087987y76t567r7756765rr6u6676", constraints);
+    mozilla::VideoCodecConfig cinst4(124, "", constraints);
 
     rcvCodecList.push_back(&cinst3);
     rcvCodecList.push_back(&cinst4);
@@ -805,8 +823,10 @@ class TransportConduitTest : public ::testing::Test
     if( !mVideoSession )
       ASSERT_NE(mVideoSession, (void*)nullptr);
 
+    mozilla::EncodingConstraints constraints;
+    constraints.maxFs = max_fs;
     // Configure send codecs on the conduit.
-    mozilla::VideoCodecConfig cinst1(120, "VP8", max_fs);
+    mozilla::VideoCodecConfig cinst1(120, "VP8", constraints);
 
     err = mVideoSession->ConfigureSendMediaCodec(&cinst1);
     ASSERT_EQ(mozilla::kMediaConduitNoError, err);
@@ -941,7 +961,8 @@ class TransportConduitTest : public ::testing::Test
   void SetGmpCodecs() {
     mExternalEncoder = mozilla::GmpVideoCodec::CreateEncoder();
     mExternalDecoder = mozilla::GmpVideoCodec::CreateDecoder();
-    mozilla::VideoCodecConfig config(124, "H264");
+    mozilla::EncodingConstraints constraints;
+    mozilla::VideoCodecConfig config(124, "H264", constraints);
     mVideoSession->SetExternalSendCodec(&config, mExternalEncoder);
     mVideoSession2->SetExternalRecvCodec(&config, mExternalDecoder);
   }

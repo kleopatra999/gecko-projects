@@ -42,19 +42,16 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(nsDOMCameraManager)
  * Set the NSPR_LOG_MODULES environment variable to enable logging
  * in a debug build, e.g. NSPR_LOG_MODULES=Camera:5
  */
-PRLogModuleInfo*
+LogModule*
 GetCameraLog()
 {
-  static PRLogModuleInfo *sLog;
-  if (!sLog) {
-    sLog = PR_NewLogModule("Camera");
-  }
+  static LazyLogModule sLog("Camera");
   return sLog;
 }
 
 ::WindowTable* nsDOMCameraManager::sActiveWindows = nullptr;
 
-nsDOMCameraManager::nsDOMCameraManager(nsPIDOMWindow* aWindow)
+nsDOMCameraManager::nsDOMCameraManager(nsPIDOMWindowInner* aWindow)
   : mWindowId(aWindow->WindowID())
   , mPermission(nsIPermissionManager::DENY_ACTION)
   , mWindow(aWindow)
@@ -87,7 +84,7 @@ nsDOMCameraManager::HasSupport(JSContext* aCx, JSObject* aGlobal)
 
 /* static */
 bool
-nsDOMCameraManager::CheckPermission(nsPIDOMWindow* aWindow)
+nsDOMCameraManager::CheckPermission(nsPIDOMWindowInner* aWindow)
 {
   nsCOMPtr<nsIPermissionManager> permMgr =
     services::GetPermissionManager();
@@ -105,7 +102,7 @@ nsDOMCameraManager::CheckPermission(nsPIDOMWindow* aWindow)
 
 /* static */
 already_AddRefed<nsDOMCameraManager>
-nsDOMCameraManager::CreateInstance(nsPIDOMWindow* aWindow)
+nsDOMCameraManager::CreateInstance(nsPIDOMWindowInner* aWindow)
 {
   // Initialize the shared active window tracker
   if (!sActiveWindows) {
@@ -141,7 +138,7 @@ public:
                                            nsIContentPermissionRequest)
 
   CameraPermissionRequest(nsIPrincipal* aPrincipal,
-                          nsPIDOMWindow* aWindow,
+                          nsPIDOMWindowInner* aWindow,
                           RefPtr<nsDOMCameraManager> aManager,
                           uint32_t aCameraId,
                           const CameraConfiguration& aInitialConfig,
@@ -162,7 +159,7 @@ protected:
   void CallAllow();
   void CallCancel();
   nsCOMPtr<nsIPrincipal> mPrincipal;
-  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
   RefPtr<nsDOMCameraManager> mCameraManager;
   uint32_t mCameraId;
   CameraConfiguration mInitialConfig;
@@ -195,7 +192,7 @@ CameraPermissionRequest::GetPrincipal(nsIPrincipal** aRequestingPrincipal)
 }
 
 NS_IMETHODIMP
-CameraPermissionRequest::GetWindow(nsIDOMWindow** aRequestingWindow)
+CameraPermissionRequest::GetWindow(mozIDOMWindow** aRequestingWindow)
 {
   NS_ADDREF(*aRequestingWindow = mWindow);
   return NS_OK;

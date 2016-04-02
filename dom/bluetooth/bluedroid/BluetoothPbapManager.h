@@ -12,6 +12,7 @@
 #include "BluetoothSocketObserver.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/ipc/SocketBase.h"
+#include "mozilla/UniquePtr.h"
 #include "nsICryptoHash.h"
 #include "ObexBase.h"
 
@@ -66,7 +67,10 @@ public:
   static const int MAX_PACKET_LENGTH = 0xFFFE;
   static const int DIGEST_LENGTH = 16;
 
+  static void InitPbapInterface(BluetoothProfileResultHandler* aRes);
+  static void DeinitPbapInterface(BluetoothProfileResultHandler* aRes);
   static BluetoothPbapManager* Get();
+
   bool Listen();
 
   /**
@@ -145,7 +149,9 @@ protected:
 
 private:
   BluetoothPbapManager();
-  bool Init();
+
+  nsresult Init();
+  void Uninit();
   void HandleShutdown();
 
   void ReplyToConnect(const nsAString& aPassword = EmptyString());
@@ -154,6 +160,7 @@ private:
   bool ReplyToGet(uint16_t aPhonebookSize = 0);
   void ReplyError(uint8_t aError);
   void SendObexData(uint8_t* aData, uint8_t aOpcode, int aSize);
+  void SendObexData(UniquePtr<uint8_t[]> aData, uint8_t aOpcode, int aSize);
 
   ObexResponseCode SetPhoneBookPath(const ObexHeaderSet& aHeader,
                                     uint8_t flags);

@@ -28,7 +28,7 @@ namespace layers {
 
 class ActiveElementManager;
 
-typedef Function<void(const ScrollableLayerGuid&,
+typedef function<void(const ScrollableLayerGuid&,
                       uint64_t /* input block id */,
                       bool /* prevent default */)>
         ContentReceivedInputBlockCallback;
@@ -69,6 +69,7 @@ public:
                              ViewID aViewId,
                              APZStateChange aChange,
                              int aArg);
+  void ProcessClusterHit();
 private:
   ~APZEventState();
   bool SendPendingTouchPreventedResponse(bool aPreventDefault);

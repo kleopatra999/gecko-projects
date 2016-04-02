@@ -9,8 +9,12 @@
 #include "DeletedMessageInfo.h"
 #include "DOMCursor.h"
 #include "DOMRequest.h"
+#include "MmsMessage.h"
+#include "MmsMessageInternal.h"
 #include "MobileMessageCallback.h"
 #include "MobileMessageCursorCallback.h"
+#include "SmsMessage.h"
+#include "SmsMessageInternal.h"
 #include "mozilla/dom/mobilemessage/Constants.h" // For kSms*ObserverTopic
 #include "mozilla/dom/MozMessageDeletedEvent.h"
 #include "mozilla/dom/MozMmsEvent.h"
@@ -20,8 +24,7 @@
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
-#include "nsIDOMMozMmsMessage.h"
-#include "nsIDOMMozSmsMessage.h"
+#include "mozilla/UniquePtr.h"
 #include "nsIMmsService.h"
 #include "nsIMobileMessageCallback.h"
 #include "nsIMobileMessageDatabaseService.h"
@@ -65,7 +68,7 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(MobileMessageManager, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(MobileMessageManager, DOMEventTargetHelper)
 
-MobileMessageManager::MobileMessageManager(nsPIDOMWindow *aWindow)
+MobileMessageManager::MobileMessageManager(nsPIDOMWindowInner* aWindow)
   : DOMEventTargetHelper(aWindow)
 {
 }
@@ -128,7 +131,7 @@ MobileMessageManager::GetSegmentInfoForText(const nsAString& aText,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -153,7 +156,7 @@ MobileMessageManager::Send(nsISmsService* aSmsService,
                            const nsAString& aText,
                            ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -260,7 +263,7 @@ MobileMessageManager::SendMMS(const MmsParameters& aParams,
     }
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -274,8 +277,9 @@ MobileMessageManager::SendMMS(const MmsParameters& aParams,
 
   JSContext *cx = jsapi.cx();
   JS::Rooted<JS::Value> val(cx);
+  aRv.MightThrowJSException();
   if (!ToJSValue(cx, aParams, &val)) {
-    aRv.Throw(NS_ERROR_TYPE_ERR);
+    aRv.StealExceptionFromJSContext(cx);
     return nullptr;
   }
 
@@ -301,7 +305,7 @@ MobileMessageManager::GetMessage(int32_t aId,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -330,7 +334,7 @@ MobileMessageManager::Delete(int32_t* aIdArray,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -357,31 +361,21 @@ MobileMessageManager::Delete(int32_t aId,
 }
 
 already_AddRefed<DOMRequest>
-MobileMessageManager::Delete(nsIDOMMozSmsMessage* aMessage,
+MobileMessageManager::Delete(SmsMessage& aMessage,
                              ErrorResult& aRv)
 {
-  int32_t id;
-
-  DebugOnly<nsresult> rv = aMessage->GetId(&id);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-  return Delete(id, aRv);
+  return Delete(aMessage.Id(), aRv);
 }
 
 already_AddRefed<DOMRequest>
-MobileMessageManager::Delete(nsIDOMMozMmsMessage* aMessage,
+MobileMessageManager::Delete(MmsMessage& aMessage,
                              ErrorResult& aRv)
 {
-  int32_t id;
-
-  DebugOnly<nsresult> rv = aMessage->GetId(&id);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-  return Delete(id, aRv);
+  return Delete(aMessage.Id(), aRv);
 }
 
 already_AddRefed<DOMRequest>
-MobileMessageManager::Delete(const Sequence<OwningLongOrMozSmsMessageOrMozMmsMessage>& aParams,
+MobileMessageManager::Delete(const Sequence<OwningLongOrSmsMessageOrMmsMessage>& aParams,
                              ErrorResult& aRv)
 {
   const uint32_t size = aParams.Length();
@@ -393,17 +387,15 @@ MobileMessageManager::Delete(const Sequence<OwningLongOrMozSmsMessageOrMozMmsMes
 
   DebugOnly<nsresult> rv;
   for (uint32_t i = 0; i < size; i++) {
-    const OwningLongOrMozSmsMessageOrMozMmsMessage& element = aParams[i];
+    const OwningLongOrSmsMessageOrMmsMessage& element = aParams[i];
     int32_t &id = idArray[i];
 
     if (element.IsLong()) {
       id = element.GetAsLong();
-    } else if (element.IsMozMmsMessage()) {
-      rv = element.GetAsMozMmsMessage()->GetId(&id);
-      MOZ_ASSERT(NS_SUCCEEDED(rv));
-    } else /*if (element.IsMozSmsMessage())*/ {
-      rv = element.GetAsMozSmsMessage()->GetId(&id);
-      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    } else if (element.IsMmsMessage()) {
+      id = element.GetAsMmsMessage()->Id();
+    } else /*if (element.IsSmsMessage())*/ {
+      id = element.GetAsSmsMessage()->Id();
     }
   }
 
@@ -434,7 +426,7 @@ MobileMessageManager::GetMessages(const MobileMessageFilter& aFilter,
     endDate = aFilter.mEndDate.Value();
   }
 
-  nsAutoArrayPtr<const char16_t*> ptrNumbers;
+  UniquePtr<const char16_t*[]> ptrNumbers;
   uint32_t numbersCount = 0;
   if (!aFilter.mNumbers.IsNull() &&
       aFilter.mNumbers.Value().Length()) {
@@ -442,7 +434,7 @@ MobileMessageManager::GetMessages(const MobileMessageFilter& aFilter,
     uint32_t index;
 
     numbersCount = numbers.Length();
-    ptrNumbers = new const char16_t* [numbersCount];
+    ptrNumbers = MakeUnique<const char16_t*[]>(numbersCount);
     for (index = 0; index < numbersCount; index++) {
       ptrNumbers[index] = numbers[index].get();
     }
@@ -474,7 +466,7 @@ MobileMessageManager::GetMessages(const MobileMessageFilter& aFilter,
   nsCOMPtr<nsICursorContinueCallback> continueCallback;
   nsresult rv = dbService->CreateMessageCursor(hasStartDate, startDate,
                                                hasEndDate, endDate,
-                                               ptrNumbers, numbersCount,
+                                               ptrNumbers.get(), numbersCount,
                                                delivery,
                                                hasRead, read,
                                                hasThreadId, threadId,
@@ -485,7 +477,7 @@ MobileMessageManager::GetMessages(const MobileMessageFilter& aFilter,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -511,7 +503,7 @@ MobileMessageManager::MarkMessageRead(int32_t aId,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -550,7 +542,7 @@ MobileMessageManager::GetThreads(ErrorResult& aRv)
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -573,7 +565,7 @@ MobileMessageManager::RetrieveMMS(int32_t aId,
     return nullptr;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -592,15 +584,10 @@ MobileMessageManager::RetrieveMMS(int32_t aId,
 }
 
 already_AddRefed<DOMRequest>
-MobileMessageManager::RetrieveMMS(nsIDOMMozMmsMessage* aMessage,
+MobileMessageManager::RetrieveMMS(MmsMessage& aMessage,
                                   ErrorResult& aRv)
 {
-  int32_t id;
-
-  DebugOnly<nsresult> rv = aMessage->GetId(&id);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-  return RetrieveMMS(id, aRv);
+  return RetrieveMMS(aMessage.Id(), aRv);
 }
 
 nsresult
@@ -608,24 +595,29 @@ MobileMessageManager::DispatchTrustedSmsEventToSelf(const char* aTopic,
                                                     const nsAString& aEventName,
                                                     nsISupports* aMsg)
 {
-  nsCOMPtr<nsIDOMMozSmsMessage> sms = do_QueryInterface(aMsg);
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
+  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
+
+  nsCOMPtr<nsISmsMessage> sms = do_QueryInterface(aMsg);
   if (sms) {
     MozSmsEventInit init;
     init.mBubbles = false;
     init.mCancelable = false;
-    init.mMessage = sms;
+    init.mMessage =
+      new SmsMessage(window, static_cast<SmsMessageInternal*>(sms.get()));
 
     RefPtr<MozSmsEvent> event =
       MozSmsEvent::Constructor(this, aEventName, init);
     return DispatchTrustedEvent(event);
   }
 
-  nsCOMPtr<nsIDOMMozMmsMessage> mms = do_QueryInterface(aMsg);
+  nsCOMPtr<nsIMmsMessage> mms = do_QueryInterface(aMsg);
   if (mms) {
     MozMmsEventInit init;
     init.mBubbles = false;
     init.mCancelable = false;
-    init.mMessage = mms;
+    init.mMessage =
+      new MmsMessage(window, static_cast<MmsMessageInternal*>(mms.get()));
 
     RefPtr<MozMmsEvent> event =
       MozMmsEvent::Constructor(this, aEventName, init);
@@ -749,7 +741,7 @@ MobileMessageManager::GetSmscAddress(const Optional<uint32_t>& aServiceId,
     }
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -802,7 +794,7 @@ MobileMessageManager::SetSmscAddress(const SmscAddress& aSmscAddress,
     }
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;

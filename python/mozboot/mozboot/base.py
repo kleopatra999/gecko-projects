@@ -10,7 +10,6 @@ import subprocess
 import sys
 
 from distutils.version import LooseVersion
-from distutils.version import StrictVersion
 
 
 NO_MERCURIAL = '''
@@ -74,7 +73,9 @@ We recommend the following tools for installing Python:
 
 
 # Upgrade Mercurial older than this.
-MODERN_MERCURIAL_VERSION = StrictVersion('3.2.4')
+# This should match OLDEST_NON_LEGACY_VERSION from
+# tools/mercurial/hgsetup/wizard.py.
+MODERN_MERCURIAL_VERSION = LooseVersion('3.5.2')
 
 # Upgrade Python older than this.
 MODERN_PYTHON_VERSION = LooseVersion('2.7.3')
@@ -135,6 +136,28 @@ class BaseBootstrapper(object):
         raise NotImplementedError('%s does not yet implement suggest_mobile_android_mozconfig()' %
                                   __name__)
 
+    def install_mobile_android_artifact_mode_packages(self):
+        '''
+        Install packages required to build Firefox for Android (application
+        'mobile/android', also known as Fennec) in Artifact Mode.
+        '''
+        raise NotImplementedError(
+            'Cannot bootstrap Firefox for Android Artifact Mode: '
+            '%s does not yet implement install_mobile_android_artifact_mode_packages()'
+            % __name__)
+
+    def suggest_mobile_android_artifact_mode_mozconfig(self):
+        '''
+        Print a message to the console detailing what the user's mozconfig
+        should contain.
+
+        Firefox for Android Artifact Mode needs an application and an ABI set,
+        and it needs paths to the Android SDK.
+        '''
+        raise NotImplementedError(
+            '%s does not yet implement suggest_mobile_android_artifact_mode_mozconfig()'
+            % __name__)
+
     def which(self, name):
         """Python implementation of which.
 
@@ -175,6 +198,9 @@ class BaseBootstrapper(object):
             command = ['dnf', 'groupinstall']
         else:
             command = ['yum', 'groupinstall']
+
+        if self.no_interactive:
+            command.append('-y')
         command.extend(packages)
 
         self.run_as_root(command)
@@ -289,7 +315,7 @@ class BaseBootstrapper(object):
             print('ERROR: Unable to identify Mercurial version.')
             return True, False, None
 
-        our = StrictVersion(match.group(1))
+        our = LooseVersion(match.group(1))
 
         return True, our >= MODERN_MERCURIAL_VERSION, our
 

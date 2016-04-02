@@ -56,14 +56,10 @@ static const uint32_t kSPEECH_DETECTION_TIMEOUT_MS = 10000;
 // kSAMPLE_RATE frames = 1s, kESTIMATION_FRAMES frames = 300ms
 static const uint32_t kESTIMATION_SAMPLES = 300 * kSAMPLE_RATE / 1000;
 
-PRLogModuleInfo*
+LogModule*
 GetSpeechRecognitionLog()
 {
-  static PRLogModuleInfo* sLog;
-  if (!sLog) {
-    sLog = PR_NewLogModule("SpeechRecognition");
-  }
-
+  static LazyLogModule sLog("SpeechRecognition");
   return sLog;
 }
 #define SR_LOG(...) MOZ_LOG(GetSpeechRecognitionLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
@@ -113,7 +109,7 @@ NS_IMPL_RELEASE_INHERITED(SpeechRecognition, DOMEventTargetHelper)
 
 struct SpeechRecognition::TestConfig SpeechRecognition::mTestConfig;
 
-SpeechRecognition::SpeechRecognition(nsPIDOMWindow* aOwnerWindow)
+SpeechRecognition::SpeechRecognition(nsPIDOMWindowInner* aOwnerWindow)
   : DOMEventTargetHelper(aOwnerWindow)
   , mEndpointer(kSAMPLE_RATE)
   , mAudioSamplesPerChunk(mEndpointer.FrameSize())
@@ -189,7 +185,7 @@ already_AddRefed<SpeechRecognition>
 SpeechRecognition::Constructor(const GlobalObject& aGlobal,
                                ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aGlobal.GetAsSupports());
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
   }
@@ -783,7 +779,7 @@ SpeechRecognition::SetRecognitionService(ErrorResult& aRv)
     return true;
   }
 
-  nsCOMPtr<nsPIDOMWindow> window = GetOwner();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
   if(!window) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return false;
@@ -870,9 +866,8 @@ SpeechRecognition::DispatchError(EventType aErrorType,
   RefPtr<SpeechRecognitionError> srError =
     new SpeechRecognitionError(nullptr, nullptr, nullptr);
 
-  ErrorResult err;
   srError->InitSpeechRecognitionError(NS_LITERAL_STRING("error"), true, false,
-                                      aErrorCode, aMessage, err);
+                                      aErrorCode, aMessage);
 
   RefPtr<SpeechEvent> event = new SpeechEvent(this, aErrorType);
   event->mError = srError;
@@ -937,7 +932,7 @@ SpeechRecognition::CreateAudioSegment(nsTArray<RefPtr<SharedBuffer>>& aChunks)
     RefPtr<SharedBuffer> buffer = aChunks[i];
     const int16_t* chunkData = static_cast<const int16_t*>(buffer->Data());
 
-    nsAutoTArray<const int16_t*, 1> channels;
+    AutoTArray<const int16_t*, 1> channels;
     channels.AppendElement(chunkData);
     segment->AppendFrames(buffer.forget(), channels, mAudioSamplesPerChunk);
   }
@@ -964,7 +959,7 @@ SpeechRecognition::FeedAudioData(already_AddRefed<SharedBuffer> aSamples,
 
   uint32_t samplesIndex = 0;
   const int16_t* samples = static_cast<int16_t*>(refSamples->Data());
-  nsAutoTArray<RefPtr<SharedBuffer>, 5> chunksToSend;
+  AutoTArray<RefPtr<SharedBuffer>, 5> chunksToSend;
 
   // fill up our buffer and make a chunk out of it, if possible
   if (mBufferedSamples > 0) {

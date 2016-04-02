@@ -142,8 +142,8 @@ public:
     explicit HandleHashKey(KeyTypePointer aKey)
     {
       MOZ_COUNT_CTOR(HandleHashKey);
-      mHash = (SHA1Sum::Hash*)new uint8_t[SHA1Sum::kHashSize];
-      memcpy(mHash, aKey, sizeof(SHA1Sum::Hash));
+      mHash = MakeUnique<uint8_t[]>(SHA1Sum::kHashSize);
+      memcpy(mHash.get(), aKey, sizeof(SHA1Sum::Hash));
     }
     HandleHashKey(const HandleHashKey& aOther)
     {
@@ -156,7 +156,7 @@ public:
 
     bool KeyEquals(KeyTypePointer aKey) const
     {
-      return memcmp(mHash, aKey, sizeof(SHA1Sum::Hash)) == 0;
+      return memcmp(mHash.get(), aKey, sizeof(SHA1Sum::Hash)) == 0;
     }
     static KeyTypePointer KeyToPointer(KeyType aKey)
     {
@@ -172,7 +172,10 @@ public:
     already_AddRefed<CacheFileHandle> GetNewestHandle();
     void GetHandles(nsTArray<RefPtr<CacheFileHandle> > &aResult);
 
-    SHA1Sum::Hash *Hash() const { return mHash; }
+    SHA1Sum::Hash *Hash() const
+    {
+      return reinterpret_cast<SHA1Sum::Hash*>(mHash.get());
+    }
     bool IsEmpty() const { return mHandles.Length() == 0; }
 
     enum { ALLOW_MEMMOVE = true };
@@ -186,7 +189,11 @@ public:
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
   private:
-    nsAutoArrayPtr<SHA1Sum::Hash> mHash;
+    // We can't make this UniquePtr<SHA1Sum::Hash>, because you can't have
+    // UniquePtrs with known bounds.  So we settle for this representation
+    // and using appropriate casts when we need to access it as a
+    // SHA1Sum::Hash.
+    UniquePtr<uint8_t[]> mHash;
     // Use weak pointers since the hash table access is on a single thread
     // only and CacheFileHandle removes itself from this table in its dtor
     // that may only be called on the same thread as we work with the hashtable
@@ -227,6 +234,8 @@ public:
   NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult) = 0;
   NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult) = 0;
   NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult) = 0;
+
+  virtual bool IsKilled() { return false; }
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(CacheFileIOListener, CACHEFILEIOLISTENER_IID)
@@ -307,7 +316,7 @@ public:
   static nsresult InitIndexEntry(CacheFileHandle *aHandle,
                                  uint32_t         aAppId,
                                  bool             aAnonymous,
-                                 bool             aInBrowser,
+                                 bool             aInIsolatedMozBrowser,
                                  bool             aPinning);
   static nsresult UpdateIndexEntry(CacheFileHandle *aHandle,
                                    const uint32_t  *aFrecency,
@@ -375,7 +384,8 @@ private:
   nsresult DoomFileInternal(CacheFileHandle *aHandle,
                             PinningDoomRestriction aPinningStatusRestriction = NO_RESTRICTION);
   nsresult DoomFileByKeyInternal(const SHA1Sum::Hash *aHash);
-  nsresult ReleaseNSPRHandleInternal(CacheFileHandle *aHandle);
+  nsresult ReleaseNSPRHandleInternal(CacheFileHandle *aHandle,
+                                     bool aIgnoreShutdownLag = false);
   nsresult TruncateSeekSetEOFInternal(CacheFileHandle *aHandle,
                                       int64_t aTruncatePos, int64_t aEOFPos);
   nsresult RenameFileInternal(CacheFileHandle *aHandle,
@@ -422,11 +432,22 @@ private:
   // before we start an eviction loop.
   nsresult UpdateSmartCacheSize(int64_t aFreeSpace);
 
+  // May return true after shutdown only when time for flushing all data
+  // has already passed.
+  bool IsPastShutdownIOLag();
+
   // Memory reporting (private part)
   size_t SizeOfExcludingThisInternal(mozilla::MallocSizeOf mallocSizeOf) const;
 
   static CacheFileIOManager           *gInstance;
   TimeStamp                            mStartTime;
+  // Shutdown time stamp, accessed only on the I/O thread.  Used to bypass
+  // I/O after a certain time pass the shutdown has been demanded.
+  TimeStamp                            mShutdownDemandedTime;
+  // Set true on the main thread when cache shutdown is first demanded.
+  Atomic<bool, Relaxed>                mShutdownDemanded;
+  // Set true on the IO thread, CLOSE level as part of the internal shutdown
+  // procedure.
   bool                                 mShuttingDown;
   RefPtr<CacheIOThread>                mIOThread;
   nsCOMPtr<nsIFile>                    mCacheDirectory;

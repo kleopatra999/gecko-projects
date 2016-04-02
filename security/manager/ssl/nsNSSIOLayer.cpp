@@ -82,7 +82,7 @@ static const bool FALSE_START_REQUIRE_NPN_DEFAULT = false;
 
 } // unnamed namespace
 
-extern PRLogModuleInfo* gPIPNSSLog;
+extern LazyLogModule gPIPNSSLog;
 
 nsNSSSocketInfo::nsNSSSocketInfo(SharedSSLState& aState, uint32_t providerFlags)
   : mFd(nullptr),
@@ -380,11 +380,11 @@ nsNSSSocketInfo::IsAcceptableForHost(const nsACString& hostname, bool* _retval)
   }
   nsAutoCString hostnameFlat(PromiseFlatCString(hostname));
   CertVerifier::Flags flags = CertVerifier::FLAG_LOCAL_ONLY;
+  ScopedCERTCertList unusedBuiltChain;
   SECStatus rv = certVerifier->VerifySSLServerCert(nssCert, nullptr,
                                                    mozilla::pkix::Now(),
                                                    nullptr, hostnameFlat.get(),
-                                                   false, flags, nullptr,
-                                                   nullptr);
+                                                   unusedBuiltChain, false, flags);
   if (rv != SECSuccess) {
     return NS_OK;
   }
@@ -731,8 +731,7 @@ bool
 nsSSLIOLayerHelpers::fallbackLimitReached(const nsACString& hostName,
                                           uint16_t intolerant)
 {
-  MutexAutoLock lock(mutex);
-  if (mInsecureFallbackSites.Contains(hostName)) {
+  if (isInsecureFallbackSite(hostName)) {
     return intolerant <= SSL_LIBRARY_VERSION_TLS_1_0;
   }
   return intolerant <= mVersionFallbackLimit;
@@ -1078,7 +1077,10 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
                                  nsIWebProgressListener::STATE_USES_SSL_3);
   }
 
-  if (err == SSL_ERROR_INAPPROPRIATE_FALLBACK_ALERT) {
+  // NSS will return SSL_ERROR_RX_MALFORMED_SERVER_HELLO if anti-downgrade
+  // detected the downgrade.
+  if (err == SSL_ERROR_INAPPROPRIATE_FALLBACK_ALERT ||
+      err == SSL_ERROR_RX_MALFORMED_SERVER_HELLO) {
     // This is a clear signal that we've fallen back too many versions.  Treat
     // this as a hard failure, but forget any intolerance so that later attempts
     // don't use this version (i.e., range.max) and trigger the error again.
@@ -1108,7 +1110,8 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
   if ((err == SSL_ERROR_NO_CYPHER_OVERLAP || err == PR_END_OF_FILE_ERROR ||
        err == PR_CONNECT_RESET_ERROR) &&
        nsNSSComponent::AreAnyWeakCiphersEnabled()) {
-    if (!fallbackLimitReached || helpers.mUnrestrictedRC4Fallback) {
+    if (helpers.isInsecureFallbackSite(socketInfo->GetHostName()) ||
+        helpers.mUnrestrictedRC4Fallback) {
       if (helpers.rememberStrongCiphersFailed(socketInfo->GetHostName(),
                                               socketInfo->GetPort(), err)) {
         Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK,
@@ -1116,11 +1119,6 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
         return true;
       }
       Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK, 0);
-    } else if (err == SSL_ERROR_NO_CYPHER_OVERLAP) {
-      // Indicate that the override UI should be shown.
-      socketInfo->SetSecurityState(
-        nsIWebProgressListener::STATE_IS_INSECURE |
-        nsIWebProgressListener::STATE_USES_WEAK_CRYPTO);
     }
   }
 
@@ -1303,19 +1301,19 @@ nsSSLIOLayerPoll(PRFileDesc* fd, int16_t in_flags, int16_t* out_flags)
     return in_flags;
   }
 
-  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-         (socketInfo->IsWaitingForCertVerification()
-            ?  "[%p] polling SSL socket during certificate verification using lower %d\n"
-            :  "[%p] poll SSL socket using lower %d\n",
-         fd, (int) in_flags));
+  MOZ_LOG(gPIPNSSLog, LogLevel::Verbose,
+          (socketInfo->IsWaitingForCertVerification()
+             ?  "[%p] polling SSL socket during certificate verification using lower %d\n"
+             :  "[%p] poll SSL socket using lower %d\n",
+           fd, (int) in_flags));
 
   // We want the handshake to continue during certificate validation, so we
   // don't need to do anything special here. libssl automatically blocks when
   // it reaches any point that would be unsafe to send/receive something before
   // cert validation is complete.
   int16_t result = fd->lower->methods->poll(fd->lower, in_flags, out_flags);
-  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("[%p] poll SSL socket returned %d\n",
-                                    (void*) fd, (int) result));
+  MOZ_LOG(gPIPNSSLog, LogLevel::Verbose,
+          ("[%p] poll SSL socket returned %d\n", (void*) fd, (int) result));
   return result;
 }
 
@@ -1418,8 +1416,8 @@ PSMRecv(PRFileDesc* fd, void* buf, int32_t amount, int flags,
   int32_t bytesRead = fd->lower->methods->recv(fd->lower, buf, amount, flags,
                                                timeout);
 
-  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("[%p] read %d bytes\n", (void*) fd,
-         bytesRead));
+  MOZ_LOG(gPIPNSSLog, LogLevel::Verbose,
+          ("[%p] read %d bytes\n", (void*) fd, bytesRead));
 
 #ifdef DEBUG_SSL_VERBOSE
   DEBUG_DUMP_BUFFER((unsigned char*) buf, bytesRead);
@@ -1449,8 +1447,8 @@ PSMSend(PRFileDesc* fd, const void* buf, int32_t amount, int flags,
   int32_t bytesWritten = fd->lower->methods->send(fd->lower, buf, amount,
                                                   flags, timeout);
 
-  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("[%p] wrote %d bytes\n",
-         fd, bytesWritten));
+  MOZ_LOG(gPIPNSSLog, LogLevel::Verbose,
+          ("[%p] wrote %d bytes\n", fd, bytesWritten));
 
   return checkHandshake(bytesWritten, false, fd, socketInfo);
 }
@@ -1799,6 +1797,13 @@ nsSSLIOLayerHelpers::removeInsecureFallbackSite(const nsACString& hostname,
   }
 }
 
+bool
+nsSSLIOLayerHelpers::isInsecureFallbackSite(const nsACString& hostname)
+{
+  MutexAutoLock lock(mutex);
+  return mInsecureFallbackSites.Contains(hostname);
+}
+
 void
 nsSSLIOLayerHelpers::setTreatUnsafeNegotiationAsBroken(bool broken)
 {
@@ -1817,8 +1822,7 @@ nsresult
 nsSSLIOLayerNewSocket(int32_t family,
                       const char* host,
                       int32_t port,
-                      const char* proxyHost,
-                      int32_t proxyPort,
+                      nsIProxyInfo *proxy,
                       PRFileDesc** fd,
                       nsISupports** info,
                       bool forSTARTTLS,
@@ -1828,7 +1832,7 @@ nsSSLIOLayerNewSocket(int32_t family,
   PRFileDesc* sock = PR_OpenTCPSocket(family);
   if (!sock) return NS_ERROR_OUT_OF_MEMORY;
 
-  nsresult rv = nsSSLIOLayerAddToSocket(family, host, port, proxyHost, proxyPort,
+  nsresult rv = nsSSLIOLayerAddToSocket(family, host, port, proxy,
                                         sock, info, forSTARTTLS, flags);
   if (NS_FAILED(rv)) {
     PR_Close(sock);
@@ -2045,7 +2049,7 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
   RefPtr<nsNSSSocketInfo> info(
     reinterpret_cast<nsNSSSocketInfo*>(socket->higher->secret));
 
-  CERTCertificate* serverCert = SSL_PeerCertificate(socket);
+  ScopedCERTCertificate serverCert(SSL_PeerCertificate(socket));
   if (!serverCert) {
     NS_NOTREACHED("Missing server certificate should have been detected during "
                   "server cert authentication.");
@@ -2090,10 +2094,10 @@ ClientAuthDataRunnable::RunOnTargetThread()
   PLArenaPool* arena = nullptr;
   char** caNameStrings;
   ScopedCERTCertificate cert;
-  ScopedSECKEYPrivateKey privKey;
+  UniqueSECKEYPrivateKey privKey;
   ScopedCERTCertList certList;
   CERTCertListNode* node;
-  ScopedCERTCertNicknames nicknames;
+  UniqueCERTCertNicknames nicknames;
   int keyError = 0; // used for private key retrieval error
   SSM_UserCertChoice certChoice;
   int32_t NumberOfCerts = 0;
@@ -2112,13 +2116,13 @@ ClientAuthDataRunnable::RunOnTargetThread()
     }
 
     // Get the private key
-    privKey = PK11_FindKeyByAnyCert(cert.get(), wincx);
+    privKey.reset(PK11_FindKeyByAnyCert(cert.get(), wincx));
     if (!privKey) {
       goto loser;
     }
 
     *mPRetCert = cert.forget();
-    *mPRetKey = privKey.forget();
+    *mPRetKey = privKey.release();
     mRV = SECSuccess;
     return;
   }
@@ -2176,7 +2180,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
     while (!CERT_LIST_END(node, certList)) {
       // if the certificate has restriction and we do not satisfy it we do not
       // use it
-      privKey = PK11_FindKeyByAnyCert(node->cert, wincx);
+      privKey.reset(PK11_FindKeyByAnyCert(node->cert, wincx));
       if (privKey) {
         if (hasExplicitKeyUsageNonRepudiation(node->cert)) {
           privKey = nullptr;
@@ -2201,7 +2205,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
 
     if (!cert && low_prio_nonrep_cert) {
       cert = low_prio_nonrep_cert.forget();
-      privKey = PK11_FindKeyByAnyCert(cert.get(), wincx);
+      privKey.reset(PK11_FindKeyByAnyCert(cert.get(), wincx));
     }
 
     if (!cert) {
@@ -2238,7 +2242,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
         if (certdb) {
           nsCOMPtr<nsIX509Cert> found_cert;
           nsresult find_rv =
-            certdb->FindCertByDBKey(rememberedDBKey.get(), nullptr,
+            certdb->FindCertByDBKey(rememberedDBKey.get(),
             getter_AddRefs(found_cert));
           if (NS_SUCCEEDED(find_rv) && found_cert) {
             nsNSSCertificate* obj_cert =
@@ -2297,7 +2301,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
         goto noCert;
       }
 
-      nicknames = getNSSCertNicknamesFromCertList(certList.get());
+      nicknames.reset(getNSSCertNicknamesFromCertList(certList.get()));
 
       if (!nicknames) {
         goto loser;
@@ -2425,7 +2429,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
     }
 
     // go get the private key
-    privKey = PK11_FindKeyByAnyCert(cert.get(), wincx);
+    privKey.reset(PK11_FindKeyByAnyCert(cert.get(), wincx));
     if (!privKey) {
       keyError = PR_GetError();
       if (keyError == SEC_ERROR_BAD_PASSWORD) {
@@ -2451,7 +2455,7 @@ done:
   }
 
   *mPRetCert = cert.forget();
-  *mPRetKey = privKey.forget();
+  *mPRetKey = privKey.release();
 
   if (mRV == SECFailure) {
     mErrorCodeToReport = error;
@@ -2513,11 +2517,11 @@ loser:
 
 static nsresult
 nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
-                       const char* proxyHost, const char* host, int32_t port,
+                       bool haveProxy, const char* host, int32_t port,
                        nsNSSSocketInfo* infoObject)
 {
   nsNSSShutDownPreventionLock locker;
-  if (forSTARTTLS || proxyHost) {
+  if (forSTARTTLS || haveProxy) {
     if (SECSuccess != SSL_OptionSet(fd, SSL_SECURITY, false)) {
       return NS_ERROR_FAILURE;
     }
@@ -2554,6 +2558,10 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("[%p] nsSSLIOLayerSetOptions: enabling TLS_FALLBACK_SCSV\n", fd));
     if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_FALLBACK_SCSV, true)) {
+      return NS_ERROR_FAILURE;
+    }
+    // tell NSS the max enabled version to make anti-downgrade effective
+    if (SECSuccess != SSL_SetDowngradeCheckVersion(fd, maxEnabledVersion)) {
       return NS_ERROR_FAILURE;
     }
   }
@@ -2594,8 +2602,7 @@ nsresult
 nsSSLIOLayerAddToSocket(int32_t family,
                         const char* host,
                         int32_t port,
-                        const char* proxyHost,
-                        int32_t proxyPort,
+                        nsIProxyInfo* proxy,
                         PRFileDesc* fd,
                         nsISupports** info,
                         bool forSTARTTLS,
@@ -2616,6 +2623,13 @@ nsSSLIOLayerAddToSocket(int32_t family,
   infoObject->SetForSTARTTLS(forSTARTTLS);
   infoObject->SetHostName(host);
   infoObject->SetPort(port);
+
+  bool haveProxy = false;
+  if (proxy) {
+    nsCString proxyHost;
+    proxy->GetHost(proxyHost);
+    haveProxy = !proxyHost.IsEmpty();
+  }
 
   // A plaintext observer shim is inserted so we can observe some protocol
   // details without modifying nss
@@ -2638,7 +2652,7 @@ nsSSLIOLayerAddToSocket(int32_t family,
 
   infoObject->SetFileDescPtr(sslSock);
 
-  rv = nsSSLIOLayerSetOptions(sslSock, forSTARTTLS, proxyHost, host, port,
+  rv = nsSSLIOLayerSetOptions(sslSock, forSTARTTLS, haveProxy, host, port,
                               infoObject);
 
   if (NS_FAILED(rv))
@@ -2661,7 +2675,7 @@ nsSSLIOLayerAddToSocket(int32_t family,
   infoObject->QueryInterface(NS_GET_IID(nsISupports), (void**) (info));
 
   // We are going use a clear connection first //
-  if (forSTARTTLS || proxyHost) {
+  if (forSTARTTLS || haveProxy) {
     infoObject->SetHandshakeNotPending();
   }
 

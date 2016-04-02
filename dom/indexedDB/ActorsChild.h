@@ -20,6 +20,7 @@
 #include "mozilla/dom/indexedDB/PBackgroundIDBSharedTypes.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBTransactionChild.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBVersionChangeTransactionChild.h"
+#include "mozilla/dom/indexedDB/PBackgroundIndexedDBUtilsChild.h"
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
@@ -36,7 +37,6 @@ class BackgroundChildImpl;
 } // namespace ipc
 
 namespace dom {
-namespace indexedDB {
 
 class IDBCursor;
 class IDBDatabase;
@@ -44,6 +44,10 @@ class IDBFactory;
 class IDBMutableFile;
 class IDBOpenDBRequest;
 class IDBRequest;
+class IndexedDatabaseManager;
+
+namespace indexedDB {
+
 class Key;
 class PermissionRequestChild;
 class PermissionRequestParent;
@@ -52,7 +56,7 @@ class SerializedStructuredCloneReadInfo;
 class ThreadLocal
 {
   friend class nsAutoPtr<ThreadLocal>;
-  friend class IDBFactory;
+  friend IDBFactory;
 
   LoggingInfo mLoggingInfo;
   IDBTransaction* mCurrentTransaction;
@@ -147,7 +151,7 @@ class BackgroundFactoryChild final
   : public PBackgroundIDBFactoryChild
 {
   friend class mozilla::ipc::BackgroundChildImpl;
-  friend class IDBFactory;
+  friend IDBFactory;
 
   IDBFactory* mFactory;
 
@@ -218,9 +222,6 @@ class BackgroundRequestChildBase
 protected:
   RefPtr<IDBRequest> mRequest;
 
-private:
-  bool mActorDestroyed;
-
 public:
   void
   AssertIsOnOwningThread() const
@@ -230,28 +231,11 @@ public:
   { }
 #endif
 
-  IDBRequest*
-  GetDOMObject() const
-  {
-    AssertIsOnOwningThread();
-    return mRequest;
-  }
-
-  bool
-  IsActorDestroyed() const
-  {
-    AssertIsOnOwningThread();
-    return mActorDestroyed;
-  }
-
 protected:
   explicit BackgroundRequestChildBase(IDBRequest* aRequest);
 
   virtual
   ~BackgroundRequestChildBase();
-
-  void
-  NoteActorDestroyed();
 };
 
 class BackgroundFactoryRequestChild final
@@ -260,7 +244,7 @@ class BackgroundFactoryRequestChild final
 {
   typedef mozilla::dom::quota::PersistenceType PersistenceType;
 
-  friend class IDBFactory;
+  friend IDBFactory;
   friend class BackgroundFactoryChild;
   friend class BackgroundDatabaseChild;
   friend class PermissionRequestChild;
@@ -312,7 +296,7 @@ class BackgroundDatabaseChild final
 {
   friend class BackgroundFactoryChild;
   friend class BackgroundFactoryRequestChild;
-  friend class IDBDatabase;
+  friend IDBDatabase;
 
   nsAutoPtr<DatabaseSpec> mSpec;
   RefPtr<IDBDatabase> mTemporaryStrongDatabase;
@@ -444,7 +428,7 @@ class BackgroundDatabaseRequestChild final
   , public PBackgroundIDBDatabaseRequestChild
 {
   friend class BackgroundDatabaseChild;
-  friend class IDBDatabase;
+  friend IDBDatabase;
 
   RefPtr<IDBDatabase> mDatabase;
 
@@ -524,7 +508,7 @@ class BackgroundTransactionChild final
   , public PBackgroundIDBTransactionChild
 {
   friend class BackgroundDatabaseChild;
-  friend class IDBDatabase;
+  friend IDBDatabase;
 
 public:
 #ifdef DEBUG
@@ -651,7 +635,7 @@ class BackgroundRequestChild final
 {
   friend class BackgroundTransactionChild;
   friend class BackgroundVersionChangeTransactionChild;
-  friend class IDBTransaction;
+  friend IDBTransaction;
 
   RefPtr<IDBTransaction> mTransaction;
 
@@ -824,6 +808,45 @@ private:
   // Force callers to use SendContinueInternal.
   bool
   SendContinue(const CursorRequestParams& aParams, const Key& aKey) = delete;
+
+  bool
+  SendDeleteMe() = delete;
+};
+
+class BackgroundUtilsChild final
+  : public PBackgroundIndexedDBUtilsChild
+{
+  friend class mozilla::ipc::BackgroundChildImpl;
+  friend IndexedDatabaseManager;
+
+  IndexedDatabaseManager* mManager;
+
+#ifdef DEBUG
+  nsCOMPtr<nsIEventTarget> mOwningThread;
+#endif
+
+public:
+  void
+  AssertIsOnOwningThread() const
+#ifdef DEBUG
+  ;
+#else
+  { }
+#endif
+
+private:
+  // Only created by IndexedDatabaseManager.
+  explicit BackgroundUtilsChild(IndexedDatabaseManager* aManager);
+
+  // Only destroyed by mozilla::ipc::BackgroundChildImpl.
+  ~BackgroundUtilsChild();
+
+  void
+  SendDeleteMeInternal();
+
+  // IPDL methods are only called by IPDL.
+  virtual void
+  ActorDestroy(ActorDestroyReason aWhy) override;
 
   bool
   SendDeleteMe() = delete;

@@ -1,7 +1,7 @@
-# -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 var FullScreen = {
   _MESSAGES: [
@@ -49,11 +49,11 @@ var FullScreen = {
       fullscreenCommand.removeAttribute("checked");
     }
 
-#ifdef XP_MACOSX
-    // Make sure the menu items are adjusted.
-    document.getElementById("enterFullScreenItem").hidden = enterFS;
-    document.getElementById("exitFullScreenItem").hidden = !enterFS;
-#endif
+    if (AppConstants.platform == "macosx") {
+      // Make sure the menu items are adjusted.
+      document.getElementById("enterFullScreenItem").hidden = enterFS;
+      document.getElementById("exitFullScreenItem").hidden = !enterFS;
+    }
 
     if (!this._fullScrToggler) {
       this._fullScrToggler = document.getElementById("fullscr-toggler");
@@ -64,7 +64,7 @@ var FullScreen = {
     if (enterFS) {
       gNavToolbox.setAttribute("inFullscreen", true);
       document.documentElement.setAttribute("inFullscreen", true);
-      if (!document.mozFullScreen && this.useLionFullScreen)
+      if (!document.fullscreenElement && this.useLionFullScreen)
         document.documentElement.setAttribute("OSXLionFullscreen", true);
     } else {
       gNavToolbox.removeAttribute("inFullscreen");
@@ -72,7 +72,7 @@ var FullScreen = {
       document.documentElement.removeAttribute("OSXLionFullscreen");
     }
 
-    if (!document.mozFullScreen)
+    if (!document.fullscreenElement)
       this._updateToolbars(enterFS);
 
     if (enterFS) {
@@ -80,7 +80,7 @@ var FullScreen = {
       document.addEventListener("popupshown", this._setPopupOpen, false);
       document.addEventListener("popuphidden", this._setPopupOpen, false);
       // In DOM fullscreen mode, we hide toolbars with CSS
-      if (!document.mozFullScreen)
+      if (!document.fullscreenElement)
         this.hideNavToolbox(true);
     }
     else {
@@ -96,20 +96,20 @@ var FullScreen = {
       TabsInTitlebar.updateAppearance(true);
     }
 
-    if (enterFS && !document.mozFullScreen) {
+    if (enterFS && !document.fullscreenElement) {
       Services.telemetry.getHistogramById("FX_BROWSER_FULLSCREEN_USED")
                         .add(1);
     }
   },
 
   exitDomFullScreen : function() {
-    document.mozCancelFullScreen();
+    document.exitFullscreen();
   },
 
   handleEvent: function (event) {
     switch (event.type) {
       case "activate":
-        if (document.mozFullScreen) {
+        if (document.fullscreenElement) {
           this._WarningBox.show();
         }
         break;
@@ -132,11 +132,11 @@ var FullScreen = {
           browser = gBrowser.getBrowserForContentWindow(topWin);
         }
         if (!browser || !this.enterDomFullscreen(browser)) {
-          if (document.mozFullScreen) {
+          if (document.fullscreenElement) {
             // MozDOMFullscreen:Entered is dispatched synchronously in
             // fullscreen change, hence we have to avoid calling this
             // method synchronously here.
-            setTimeout(() => document.mozCancelFullScreen(), 0);
+            setTimeout(() => document.exitFullscreen(), 0);
           }
           break;
         }
@@ -178,7 +178,7 @@ var FullScreen = {
   },
 
   enterDomFullscreen : function(aBrowser) {
-    if (!document.mozFullScreen)
+    if (!document.fullscreenElement)
       return false;
 
     // If we've received a fullscreen notification, we have to ensure that the
@@ -365,7 +365,7 @@ var FullScreen = {
 
     // Shows a warning that the site has entered fullscreen for a short duration.
     show: function(aOrigin) {
-      if (!document.mozFullScreen) {
+      if (!document.fullscreenElement) {
         return;
       }
 
@@ -565,14 +565,6 @@ var FullScreen = {
 
     if (aAnimate && gPrefService.getBoolPref("browser.fullscreen.animate")) {
       gNavToolbox.setAttribute("fullscreenShouldAnimate", true);
-      // Hide the fullscreen toggler until the transition ends.
-      let listener = () => {
-        gNavToolbox.removeEventListener("transitionend", listener, true);
-        if (this._isChromeCollapsed)
-          this._fullScrToggler.hidden = false;
-      };
-      gNavToolbox.addEventListener("transitionend", listener, true);
-      this._fullScrToggler.hidden = true;
     }
 
     gNavToolbox.style.marginTop =
@@ -633,10 +625,6 @@ XPCOMUtils.defineLazyGetter(FullScreen, "useLionFullScreen", function() {
   // * on OS X
   // * on Lion or higher (Darwin 11+)
   // * have fullscreenbutton="true"
-#ifdef XP_MACOSX
-  return parseFloat(Services.sysinfo.getProperty("version")) >= 11 &&
+  return AppConstants.isPlatformAndVersionAtLeast("macosx", 11) &&
          document.documentElement.getAttribute("fullscreenbutton") == "true";
-#else
-  return false;
-#endif
 });

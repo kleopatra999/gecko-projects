@@ -10,7 +10,7 @@
 #include "BluetoothService.h"
 #include "BluetoothSocket.h"
 #include "BluetoothUtils.h"
-#include "BluetoothUuid.h"
+#include "BluetoothUuidHelper.h"
 #include "ObexBase.h"
 
 #include "mozilla/dom/BluetoothMapParametersBinding.h"
@@ -21,7 +21,6 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
-#include "nsAutoPtr.h"
 #include "nsIInputStream.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
@@ -84,6 +83,8 @@ BluetoothMapSmsManager::HandleShutdown()
 
   sInShutdown = true;
   Disconnect(nullptr);
+  Uninit();
+
   sMapSmsManager = nullptr;
 }
 
@@ -98,27 +99,19 @@ BluetoothMapSmsManager::BluetoothMapSmsManager()
 }
 
 BluetoothMapSmsManager::~BluetoothMapSmsManager()
-{
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (NS_WARN_IF(!obs)) {
-    return;
-  }
+{ }
 
-  NS_WARN_IF(NS_FAILED(
-    obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID)));
-}
-
-bool
+nsresult
 BluetoothMapSmsManager::Init()
 {
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
   if (NS_WARN_IF(!obs)) {
-    return false;
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
-  if (NS_WARN_IF(NS_FAILED(
-        obs->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false)))) {
-    return false;
+  auto rv = obs->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
   }
 
   /**
@@ -130,7 +123,64 @@ BluetoothMapSmsManager::Init()
    * absence of read events when device boots up.
    */
 
-  return true;
+  return NS_OK;
+}
+
+void
+BluetoothMapSmsManager::Uninit()
+{
+  if (mMasServerSocket) {
+    mMasServerSocket->SetObserver(nullptr);
+
+    if (mMasServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+      mMasServerSocket->Close();
+    }
+    mMasServerSocket = nullptr;
+  }
+
+  if (mMasSocket) {
+    mMasSocket->SetObserver(nullptr);
+
+    if (mMasSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+      mMasSocket->Close();
+    }
+    mMasSocket = nullptr;
+  }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (NS_WARN_IF(!obs)) {
+    return;
+  }
+
+  NS_WARN_IF(NS_FAILED(
+    obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID)));
+}
+
+// static
+void
+BluetoothMapSmsManager::InitMapSmsInterface(BluetoothProfileResultHandler* aRes)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (aRes) {
+    aRes->Init();
+  }
+}
+
+// static
+void
+BluetoothMapSmsManager::DeinitMapSmsInterface(BluetoothProfileResultHandler* aRes)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (sMapSmsManager) {
+    sMapSmsManager->Uninit();
+    sMapSmsManager = nullptr;
+  }
+
+  if (aRes) {
+    aRes->Deinit();
+  }
 }
 
 //static
@@ -150,8 +200,8 @@ BluetoothMapSmsManager::Get()
   }
 
   // Create a new instance, register, and return
-  BluetoothMapSmsManager *manager = new BluetoothMapSmsManager();
-  if (NS_WARN_IF(!manager->Init())) {
+  RefPtr<BluetoothMapSmsManager> manager = new BluetoothMapSmsManager();
+  if (NS_WARN_IF(NS_FAILED(manager->Init()))) {
     return nullptr;
   }
 
@@ -175,10 +225,11 @@ BluetoothMapSmsManager::Listen()
    * BT stops; otherwise no more read events would be received even if
    * BT restarts.
    */
-  if (mMasServerSocket) {
+  if (mMasServerSocket &&
+      mMasServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
     mMasServerSocket->Close();
-    mMasServerSocket = nullptr;
   }
+  mMasServerSocket = nullptr;
 
   mMasServerSocket = new BluetoothSocket(this);
 
@@ -324,20 +375,33 @@ BluetoothMapSmsManager::MasDataHandler(UnixSocketBuffer* aMessage)
         return;
       }
 
-      if (pktHeaders.Has(ObexHeaderId::Type)) {
-        pktHeaders.GetContentType(type);
-        BT_LOGR("Type: %s", NS_ConvertUTF16toUTF8(type).get());
-        ReplyToPut();
+      // Multi-packet PUT request (0x02) may not contain Type header
+      if (!pktHeaders.Has(ObexHeaderId::Type)) {
+        BT_LOGR("Missing OBEX PUT request Type header");
+        SendReply(ObexResponseCode::BadRequest);
+        return;
+      }
 
-        if (type.EqualsLiteral("x-bt/MAP-NotificationRegistration")) {
-          HandleNotificationRegistration(pktHeaders);
-        } else if (type.EqualsLiteral("x-bt/MAP-event-report")) {
-          HandleEventReport(pktHeaders);
-        } else if (type.EqualsLiteral("x-bt/messageStatus")) {
-          HandleSetMessageStatus(pktHeaders);
-        } else if (type.EqualsLiteral("x-bt/message")) {
-          HandleSmsMmsPushMessage(pktHeaders);
-        }
+      pktHeaders.GetContentType(type);
+      BT_LOGR("Type: %s", NS_ConvertUTF16toUTF8(type).get());
+
+      if (type.EqualsLiteral("x-bt/MAP-NotificationRegistration")) {
+        HandleNotificationRegistration(pktHeaders);
+        ReplyToPut();
+      } else if (type.EqualsLiteral("x-bt/messageStatus")) {
+        HandleSetMessageStatus(pktHeaders);
+      } else if (type.EqualsLiteral("x-bt/message")) {
+        HandleSmsMmsPushMessage(pktHeaders);
+      } else if (type.EqualsLiteral("x-bt/MAP-messageUpdate")) {
+        /* MAP 5.9, There is no concept for Sms/Mms to update inbox. If the
+         * MSE does NOT allowed the polling of its mailbox it shall answer
+         * with a 'Not implemented' error response.
+         */
+        SendReply(ObexResponseCode::NotImplemented);
+      } else {
+        BT_LOGR("Unknown MAP PUT request type: %s",
+          NS_ConvertUTF16toUTF8(type).get());
+        SendReply(ObexResponseCode::NotImplemented);
       }
       break;
     case ObexRequestCode::Get:
@@ -348,8 +412,8 @@ BluetoothMapSmsManager::MasDataHandler(UnixSocketBuffer* aMessage)
        * ObexResponseCode::Success
        */
       if (mDataStream) {
-        nsAutoArrayPtr<uint8_t> res(new uint8_t[mRemoteMaxPacketLength]);
-        if (!ReplyToGetWithHeaderBody(res.get(), kObexRespHeaderSize)) {
+        auto res = MakeUnique<uint8_t[]>(mRemoteMaxPacketLength);
+        if (!ReplyToGetWithHeaderBody(Move(res), kObexRespHeaderSize)) {
           BT_LOGR("Failed to reply to MAP GET request.");
           SendReply(ObexResponseCode::InternalServerError);
         }
@@ -363,6 +427,12 @@ BluetoothMapSmsManager::MasDataHandler(UnixSocketBuffer* aMessage)
         return;
       }
 
+      if (!pktHeaders.Has(ObexHeaderId::Type)) {
+        BT_LOGR("Missing OBEX GET request Type header");
+        SendReply(ObexResponseCode::BadRequest);
+        return;
+      }
+
       pktHeaders.GetContentType(type);
       if (type.EqualsLiteral("x-obex/folder-listing")) {
         HandleSmsMmsFolderListing(pktHeaders);
@@ -371,8 +441,9 @@ BluetoothMapSmsManager::MasDataHandler(UnixSocketBuffer* aMessage)
       } else if (type.EqualsLiteral("x-bt/message")) {
         HandleSmsMmsGetMessage(pktHeaders);
       } else {
-        BT_LOGR("Unknown MAP request type: %s",
+        BT_LOGR("Unknown MAP GET request type: %s",
           NS_ConvertUTF16toUTF8(type).get());
+        SendReply(ObexResponseCode::NotImplemented);
       }
       break;
     }
@@ -386,38 +457,36 @@ BluetoothMapSmsManager::MasDataHandler(UnixSocketBuffer* aMessage)
 // Virtual function of class SocketConsumer
 void
 BluetoothMapSmsManager::ReceiveSocketData(BluetoothSocket* aSocket,
-                                          nsAutoPtr<UnixSocketBuffer>& aMessage)
+                                          UniquePtr<UnixSocketBuffer>& aMessage)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (aSocket == mMnsSocket) {
-    MnsDataHandler(aMessage);
+    MnsDataHandler(aMessage.get());
   } else {
-    MasDataHandler(aMessage);
+    MasDataHandler(aMessage.get());
   }
 }
 
 bool
 BluetoothMapSmsManager::CompareHeaderTarget(const ObexHeaderSet& aHeader)
 {
-  if (!aHeader.Has(ObexHeaderId::Target)) {
+  const ObexHeader* header = aHeader.GetHeader(ObexHeaderId::Target);
+
+  if (!header) {
     BT_LOGR("No ObexHeaderId::Target in header");
     return false;
   }
 
-  uint8_t* targetPtr;
-  int targetLength;
-  aHeader.GetTarget(&targetPtr, &targetLength);
-
-  if (targetLength != sizeof(BluetoothUuid)) {
-    BT_LOGR("Length mismatch: %d != 16", targetLength);
+  if (header->mDataLength != sizeof(BluetoothUuid)) {
+    BT_LOGR("Length mismatch: %d != 16", header->mDataLength);
     return false;
   }
 
   for (uint8_t i = 0; i < sizeof(BluetoothUuid); i++) {
-    if (targetPtr[i] != kMapMasObexTarget.mUuid[i]) {
+    if (header->mData[i] != kMapMasObexTarget.mUuid[i]) {
       BT_LOGR("UUID mismatch: received target[%d]=0x%x != 0x%x",
-              i, targetPtr[i], kMapMasObexTarget.mUuid[i]);
+              i, header->mData[i], kMapMasObexTarget.mUuid[i]);
       return false;
     }
   }
@@ -565,7 +634,7 @@ BluetoothMapSmsManager::ReplyToSetPath()
 }
 
 bool
-BluetoothMapSmsManager::ReplyToGetWithHeaderBody(uint8_t* aResponse,
+BluetoothMapSmsManager::ReplyToGetWithHeaderBody(UniquePtr<uint8_t[]> aResponse,
                                                  unsigned int aIndex)
 {
   if (!mMasConnected) {
@@ -615,8 +684,8 @@ BluetoothMapSmsManager::ReplyToGetWithHeaderBody(uint8_t* aResponse,
 
     // Read blob data from input stream
     uint32_t numRead = 0;
-    nsAutoArrayPtr<char> buf(new char[remainingPacketSize]);
-    nsresult rv = mDataStream->Read(buf, remainingPacketSize, &numRead);
+    auto buf = MakeUnique<char[]>(remainingPacketSize);
+    nsresult rv = mDataStream->Read(buf.get(), remainingPacketSize, &numRead);
     if (NS_FAILED(rv)) {
       BT_LOGR("Failed to read from input stream. rv=0x%x",
               static_cast<uint32_t>(rv));
@@ -634,7 +703,7 @@ BluetoothMapSmsManager::ReplyToGetWithHeaderBody(uint8_t* aResponse,
     opcode = ObexResponseCode::Continue;
   }
 
-  SendMasObexData(aResponse, opcode, aIndex);
+  SendMasObexData(Move(aResponse), opcode, aIndex);
 
   return true;
 }
@@ -648,10 +717,9 @@ BluetoothMapSmsManager::ReplyToPut()
 
   // Section 3.3.3.2 "PutResponse", IrOBEX 1.2
   // [opcode:1][length:2][Headers:var]
-  uint8_t req[255];
-  int index = 3;
+  uint8_t req[kObexRespHeaderSize];
 
-  SendMasObexData(req, ObexResponseCode::Success, index);
+  SendMasObexData(req, ObexResponseCode::Success, kObexRespHeaderSize);
 }
 
 bool
@@ -695,7 +763,7 @@ BluetoothMapSmsManager::ReplyToMessagesListing(Blob* aBlob, long aMasId,
   // ---- Part 1: [response code:1][length:2] ---- //
   // [response code:1][length:2] will be set in |SendObexData|.
   // Reserve index here
-  nsAutoArrayPtr<uint8_t> res(new uint8_t[mRemoteMaxPacketLength]);
+  auto res = MakeUnique<uint8_t[]>(mRemoteMaxPacketLength);
   unsigned int index = kObexRespHeaderSize;
 
   // ---- Part 2: headerId:1][length:2][appParam:var] ---- //
@@ -705,16 +773,16 @@ BluetoothMapSmsManager::ReplyToMessagesListing(Blob* aBlob, long aMasId,
   uint8_t len = timestampStr.Length();
 
   // Total length: [NewMessage:3] + [MseTime:var] + [MessageListingSize:4]
-  nsAutoArrayPtr<uint8_t> appParameters(new uint8_t[len + 9]);
+  auto appParameters = MakeUnique<uint8_t[]>(len + 9);
   uint8_t newMessage = aNewMessage ? 1 : 0;
 
-  AppendAppParameter(appParameters,
+  AppendAppParameter(&appParameters[0],
                      3,
                      (uint8_t) Map::AppParametersTagId::NewMessage,
                      &newMessage,
                      sizeof(newMessage));
 
-  AppendAppParameter(appParameters + 3,
+  AppendAppParameter(&appParameters[3],
                      len + 2,
                      (uint8_t) Map::AppParametersTagId::MSETime,
                      str,
@@ -723,15 +791,15 @@ BluetoothMapSmsManager::ReplyToMessagesListing(Blob* aBlob, long aMasId,
   uint8_t msgListingSize[2];
   BigEndian::writeUint16(&msgListingSize[0], aSize);
 
-  AppendAppParameter(appParameters + 5 + len,
+  AppendAppParameter(&appParameters[5 + len],
                      4,
                      (uint8_t) Map::AppParametersTagId::MessagesListingSize,
                      msgListingSize,
                      sizeof(msgListingSize));
 
-  index += AppendHeaderAppParameters(res + index,
+  index += AppendHeaderAppParameters(&res[index],
                                      mRemoteMaxPacketLength,
-                                     appParameters,
+                                     appParameters.get(),
                                      len + 9);
 
   if (mBodyRequired) {
@@ -742,11 +810,11 @@ BluetoothMapSmsManager::ReplyToMessagesListing(Blob* aBlob, long aMasId,
     }
 
     // ---- Part 3: [headerId:1][length:2][Body:var] ---- //
-    ReplyToGetWithHeaderBody(res, index);
+    ReplyToGetWithHeaderBody(Move(res), index);
     // Reset flag
     mBodyRequired = false;
   } else {
-    SendMasObexData(res, ObexResponseCode::Success, index);
+    SendMasObexData(Move(res), ObexResponseCode::Success, index);
   }
 
   return true;
@@ -783,7 +851,7 @@ BluetoothMapSmsManager::ReplyToGetMessage(Blob* aBlob, long aMasId)
   // ---- Part 1: [response code:1][length:2] ---- //
   // [response code:1][length:2] will be set in |SendObexData|.
   // Reserve index here
-  nsAutoArrayPtr<uint8_t> res (new uint8_t[mRemoteMaxPacketLength]);
+  auto res = MakeUnique<uint8_t[]>(mRemoteMaxPacketLength);
   unsigned int index = kObexRespHeaderSize;
 
   if (mFractionDeliverRequired) {
@@ -797,7 +865,7 @@ BluetoothMapSmsManager::ReplyToGetMessage(Blob* aBlob, long aMasId)
                        &fractionDeliver,
                        sizeof(fractionDeliver));
 
-    index += AppendHeaderAppParameters(res + index,
+    index += AppendHeaderAppParameters(&res[index],
                                        mRemoteMaxPacketLength,
                                        appParameters,
                                        sizeof(appParameters));
@@ -805,7 +873,7 @@ BluetoothMapSmsManager::ReplyToGetMessage(Blob* aBlob, long aMasId)
 
   // TODO: Support bMessage encoding in bug 1166652.
   // ---- Part 3: [headerId:1][length:2][Body:var] ---- //
-  ReplyToGetWithHeaderBody(res.get(), index);
+  ReplyToGetWithHeaderBody(Move(res), index);
   mFractionDeliverRequired = false;
 
   return true;
@@ -827,22 +895,18 @@ BluetoothMapSmsManager::ReplyToSendMessage(
    * with 16 hexadecimal digits.
    */
   int len = aHandleId.Length();
-  nsAutoArrayPtr<uint8_t> handleId(new uint8_t[(len + 1) * 2]);
-  const char16_t* handleIdPtr = aHandleId.BeginReading();
+  auto handleId = MakeUnique<uint8_t[]>((len + 1) * 2);
 
   for (int i = 0; i < len; i++) {
-    *(handleId + (i * 2)) = (uint8_t)(handleIdPtr[i] >> 8);
-    *(handleId + (i * 2 + 1)) = (uint8_t)handleIdPtr[i];
+    BigEndian::writeUint16(&handleId[i * 2], aHandleId[i]);
   }
+  BigEndian::writeUint16(&handleId[len * 2], 0);
 
-  *(handleId + (len * 2)) = 0x00;
-  *(handleId + (len * 2 + 1)) = 0x00;
-
-  nsAutoArrayPtr<uint8_t> res(new uint8_t[mRemoteMaxPacketLength]);
+  auto res = MakeUnique<uint8_t[]>(mRemoteMaxPacketLength);
   int index = kObexRespHeaderSize;
-  index += AppendHeaderName(res + index, mRemoteMaxPacketLength - index,
-                            handleId, (len + 1) * 2);
-  SendMasObexData(res.get(), ObexResponseCode::Success, index);
+  index += AppendHeaderName(&res[index], mRemoteMaxPacketLength - index,
+                            handleId.get(), (len + 1) * 2);
+  SendMasObexData(Move(res), ObexResponseCode::Success, index);
 
   return true;
 }
@@ -1318,12 +1382,6 @@ BluetoothMapSmsManager::HandleNotificationRegistration(
 }
 
 void
-BluetoothMapSmsManager::HandleEventReport(const ObexHeaderSet& aHeader)
-{
-  // TODO: Handle event report in Bug 1211769
-}
-
-void
 BluetoothMapSmsManager::HandleSetMessageStatus(const ObexHeaderSet& aHeader)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -1385,7 +1443,7 @@ BluetoothMapSmsManager::HandleSmsMmsPushMessage(const ObexHeaderSet& aHeader)
   // Get Body
   uint8_t* bodyPtr = nullptr;
   aHeader.GetBody(&bodyPtr, &mBodySegmentLength);
-  mBodySegment = bodyPtr;
+  mBodySegment.reset(bodyPtr);
 
   RefPtr<BluetoothMapBMessage> bmsg =
     new BluetoothMapBMessage(bodyPtr, mBodySegmentLength);
@@ -1400,7 +1458,7 @@ BluetoothMapSmsManager::HandleSmsMmsPushMessage(const ObexHeaderSet& aHeader)
   nsCString subject;
   bmsg->GetBody(subject);
   // It's possible that subject is empty, send it anyway
-  AppendNamedValue(data, "subject", subject);
+  AppendNamedValue(data, "messageBody", subject);
 
   nsTArray<RefPtr<VCard>> recipients;
   bmsg->GetRecipients(recipients);
@@ -1412,7 +1470,7 @@ BluetoothMapSmsManager::HandleSmsMmsPushMessage(const ObexHeaderSet& aHeader)
     AppendNamedValue(data, "recipient", recipient);
   }
 
-  bs->DistributeSignal(NS_LITERAL_STRING(MAP_PUSH_MESSAGE_REQ_ID),
+  bs->DistributeSignal(NS_LITERAL_STRING(MAP_SEND_MESSAGE_REQ_ID),
                        NS_LITERAL_STRING(KEY_ADAPTER), data);
 }
 
@@ -1442,9 +1500,9 @@ BluetoothMapSmsManager::SendReply(uint8_t aResponseCode)
 
   // Section 3.2 "Response Format", IrOBEX 1.2
   // [opcode:1][length:2][Headers:var]
-  uint8_t req[3];
+  uint8_t req[kObexRespHeaderSize];
 
-  SendMasObexData(req, aResponseCode, 3);
+  SendMasObexData(req, aResponseCode, kObexRespHeaderSize);
 }
 
 void
@@ -1453,6 +1511,14 @@ BluetoothMapSmsManager::SendMasObexData(uint8_t* aData, uint8_t aOpcode,
 {
   SetObexPacketInfo(aData, aOpcode, aSize);
   mMasSocket->SendSocketData(new UnixSocketRawData(aData, aSize));
+}
+
+void
+BluetoothMapSmsManager::SendMasObexData(UniquePtr<uint8_t[]> aData,
+                                        uint8_t aOpcode, int aSize)
+{
+  SetObexPacketInfo(aData.get(), aOpcode, aSize);
+  mMasSocket->SendSocketData(new UnixSocketRawData(Move(aData), aSize));
 }
 
 void
@@ -1495,7 +1561,17 @@ BluetoothMapSmsManager::OnSocketConnectError(BluetoothSocket* aSocket)
   }
 
   // MAS socket connection error
+
+  if (mMasServerSocket &&
+      mMasServerSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+    mMasServerSocket->Close();
+  }
   mMasServerSocket = nullptr;
+
+  if (mMasSocket &&
+      mMasSocket->GetConnectionStatus() != SOCKET_DISCONNECTED) {
+    mMasSocket->Close();
+  }
   mMasSocket = nullptr;
 }
 
@@ -1526,6 +1602,7 @@ BluetoothMapSmsManager::OnSocketDisconnect(BluetoothSocket* aSocket)
   // MAS socket is disconnected
   AfterMapSmsDisconnected();
   mDeviceAddress.Clear();
+
   mMasSocket = nullptr;
 
   Listen();

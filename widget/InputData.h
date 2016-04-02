@@ -13,6 +13,7 @@
 #include "Units.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/gfx/MatrixFwd.h"
 
 template<class E> struct already_AddRefed;
 class nsIWidget;
@@ -22,10 +23,6 @@ namespace mozilla {
 namespace dom {
 class Touch;
 } // namespace dom
-
-namespace gfx {
-class Matrix4x4;
-} // namespace gfx
 
 enum InputType
 {
@@ -245,7 +242,7 @@ public:
   // and rotation angle.
   explicit MultiTouchInput(const WidgetMouseEvent& aMouseEvent);
 
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
 
   MultiTouchType mType;
   nsTArray<SingleTouchData> mTouches;
@@ -257,11 +254,14 @@ class MouseInput : public InputData
 public:
   enum MouseType
   {
+    MOUSE_NONE,
     MOUSE_MOVE,
     MOUSE_DOWN,
     MOUSE_UP,
     MOUSE_DRAG_START,
     MOUSE_DRAG_END,
+    MOUSE_WIDGET_ENTER,
+    MOUSE_WIDGET_EXIT,
   };
 
   enum ButtonType
@@ -272,25 +272,35 @@ public:
     NONE
   };
 
-  MouseInput(MouseType aType, ButtonType aButtonType, uint32_t aTime,
-             TimeStamp aTimeStamp, Modifiers aModifiers)
+  MouseInput(MouseType aType, ButtonType aButtonType, uint16_t aInputSource, int16_t aButtons, const ScreenPoint& aPoint,
+             uint32_t aTime, TimeStamp aTimeStamp, Modifiers aModifiers)
     : InputData(MOUSE_INPUT, aTime, aTimeStamp, aModifiers)
     , mType(aType)
     , mButtonType(aButtonType)
+    , mInputSource(aInputSource)
+    , mButtons(aButtons)
+    , mOrigin(aPoint)
   {}
 
   MouseInput()
     : InputData(MOUSE_INPUT)
+    , mType(MOUSE_NONE)
+    , mButtonType(NONE)
+    , mInputSource(0)
+    , mButtons(0)
   {}
 
   explicit MouseInput(const WidgetMouseEventBase& aMouseEvent);
 
   bool IsLeftButton() const { return mButtonType == LEFT_BUTTON; }
 
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+  WidgetMouseEvent ToWidgetMouseEvent(nsIWidget* aWidget) const;
 
   MouseType mType;
   ButtonType mButtonType;
+  uint16_t mInputSource;
+  int16_t mButtons;
   ScreenPoint mOrigin;
   ParentLayerPoint mLocalOrigin;
 };
@@ -361,6 +371,7 @@ public:
       mLineOrPageDeltaX(0),
       mLineOrPageDeltaY(0),
       mHandledByAPZ(false),
+      mFollowedByMomentum(false),
       mRequiresContentResponseIfCannotScrollHorizontallyInStartDirection(false)
   {
   }
@@ -369,7 +380,7 @@ public:
 
   WidgetWheelEvent ToWidgetWheelEvent(nsIWidget* aWidget) const;
 
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
 
   PanGestureType mType;
   ScreenPoint mPanStartPoint;
@@ -387,6 +398,10 @@ public:
   int32_t mLineOrPageDeltaY;
 
   bool mHandledByAPZ;
+
+  // true if this is a PANGESTURE_END event that will be followed by a
+  // PANGESTURE_MOMENTUMSTART event.
+  bool mFollowedByMomentum;
 
   // If this is true, and this event started a new input block that couldn't
   // find a scrollable target which is scrollable in the horizontal component
@@ -446,7 +461,7 @@ public:
   {
   }
 
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
 
   PinchGestureType mType;
 
@@ -455,6 +470,9 @@ public:
   // point is implementation-specific, but can for example be the midpoint
   // between the very first and very last touch. This is in device pixels and
   // are the coordinates on the screen of this midpoint.
+  // For PINCHGESTURE_END events, this instead will hold the coordinates of
+  // the remaining finger, if there is one. If there isn't one then it will
+  // store -1, -1.
   ScreenPoint mFocusPoint;
 
   // |mFocusPoint| transformed to the local coordinates of the APZC targeted
@@ -516,7 +534,7 @@ public:
   {
   }
 
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
 
   TapGestureType mType;
 
@@ -537,8 +555,9 @@ public:
   enum ScrollDeltaType
   {
     // There are three kinds of scroll delta modes in Gecko: "page", "line" and
-    // "pixel". For apz, we currently only support the "line" and "pixel" modes.
+    // "pixel".
     SCROLLDELTA_LINE,
+    SCROLLDELTA_PAGE,
     SCROLLDELTA_PIXEL
   };
 
@@ -548,6 +567,8 @@ public:
     switch (aDeltaMode) {
       case nsIDOMWheelEvent::DOM_DELTA_LINE:
         return SCROLLDELTA_LINE;
+      case nsIDOMWheelEvent::DOM_DELTA_PAGE:
+        return SCROLLDELTA_PAGE;
       case nsIDOMWheelEvent::DOM_DELTA_PIXEL:
         return SCROLLDELTA_PIXEL;
       default:
@@ -569,21 +590,31 @@ public:
                    ScrollDeltaType aDeltaType,
                    const ScreenPoint& aOrigin,
                    double aDeltaX,
-                   double aDeltaY)
-   : InputData(SCROLLWHEEL_INPUT, aTime, aTimeStamp, aModifiers),
-     mDeltaType(aDeltaType),
-     mScrollMode(aScrollMode),
-     mOrigin(aOrigin),
-     mHandledByAPZ(false),
-     mDeltaX(aDeltaX),
-     mDeltaY(aDeltaY),
-     mLineOrPageDeltaX(0),
-     mLineOrPageDeltaY(0),
-     mIsMomentum(false)
+                   double aDeltaY,
+                   bool aAllowToOverrideSystemScrollSpeed)
+    : InputData(SCROLLWHEEL_INPUT, aTime, aTimeStamp, aModifiers)
+    , mDeltaType(aDeltaType)
+    , mScrollMode(aScrollMode)
+    , mOrigin(aOrigin)
+    , mHandledByAPZ(false)
+    , mDeltaX(aDeltaX)
+    , mDeltaY(aDeltaY)
+    , mLineOrPageDeltaX(0)
+    , mLineOrPageDeltaY(0)
+    , mScrollSeriesNumber(0)
+    , mUserDeltaMultiplierX(1.0)
+    , mUserDeltaMultiplierY(1.0)
+    , mMayHaveMomentum(false)
+    , mIsMomentum(false)
+    , mAllowToOverrideSystemScrollSpeed(aAllowToOverrideSystemScrollSpeed)
   {}
 
+  explicit ScrollWheelInput(const WidgetWheelEvent& aEvent);
+
   WidgetWheelEvent ToWidgetWheelEvent(nsIWidget* aWidget) const;
-  bool TransformToLocal(const gfx::Matrix4x4& aTransform);
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
+  bool IsCustomizedByUserPrefs() const;
 
   ScrollDeltaType mDeltaType;
   ScrollMode mScrollMode;
@@ -610,7 +641,17 @@ public:
   int32_t mLineOrPageDeltaX;
   int32_t mLineOrPageDeltaY;
 
+  // Indicates the order in which this event was added to a transaction. The
+  // first event is 1; if not a member of a transaction, this is 0.
+  uint32_t mScrollSeriesNumber;
+
+  // User-set delta multipliers.
+  double mUserDeltaMultiplierX;
+  double mUserDeltaMultiplierY;
+
+  bool mMayHaveMomentum;
   bool mIsMomentum;
+  bool mAllowToOverrideSystemScrollSpeed;
 };
 
 } // namespace mozilla

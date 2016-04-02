@@ -22,7 +22,7 @@ namespace js {
  *
  * All values except ropes are hashable as-is.
  */
-class HashableValue : public JS::Traceable
+class HashableValue
 {
     PreBarrieredValue value;
 
@@ -43,8 +43,8 @@ class HashableValue : public JS::Traceable
     HashableValue mark(JSTracer* trc) const;
     Value get() const { return value.get(); }
 
-    static void trace(HashableValue* value, JSTracer* trc) {
-        TraceEdge(trc, &value->value, "HashableValue");
+    void trace(JSTracer* trc) {
+        TraceEdge(trc, &value, "HashableValue");
     }
 };
 
@@ -92,7 +92,7 @@ class MapObject : public NativeObject {
                                             JS::AutoValueVector* entries);
     static bool entries(JSContext* cx, unsigned argc, Value* vp);
     static bool has(JSContext* cx, unsigned argc, Value* vp);
-    static MapObject* create(JSContext* cx);
+    static MapObject* create(JSContext* cx, HandleObject proto = nullptr);
 
     // Publicly exposed Map calls for JSAPI access (webidl maplike/setlike
     // interfaces, etc.)
@@ -164,6 +164,8 @@ class MapIteratorObject : public NativeObject
     static bool next(JSContext* cx, Handle<MapIteratorObject*> mapIterator,
                      HandleArrayObject resultPairObj);
 
+    static JSObject* createResultPair(JSContext* cx);
+
   private:
     inline MapObject::IteratorKind kind() const;
 };
@@ -181,7 +183,7 @@ class SetObject : public NativeObject {
 
     // Publicly exposed Set calls for JSAPI access (webidl maplike/setlike
     // interfaces, etc.)
-    static SetObject* create(JSContext *cx);
+    static SetObject* create(JSContext *cx, HandleObject proto = nullptr);
     static uint32_t size(JSContext *cx, HandleObject obj);
     static bool has(JSContext *cx, HandleObject obj, HandleValue key, bool* rval);
     static bool clear(JSContext *cx, HandleObject obj);

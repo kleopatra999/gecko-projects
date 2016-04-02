@@ -211,6 +211,8 @@ nsBaseDragService::InvokeDragSession(nsIDOMNode *aDOMNode,
                                      nsIScriptableRegion* aDragRgn,
                                      uint32_t aActionType)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+
   NS_ENSURE_TRUE(aDOMNode, NS_ERROR_INVALID_ARG);
   NS_ENSURE_TRUE(mSuppressLevel == 0, NS_ERROR_FAILURE);
 
@@ -432,7 +434,7 @@ nsBaseDragService::FireDragEventAtSource(EventMessage aEventMessage)
         event.inputSource = mInputSource;
         if (aEventMessage == eDragEnd) {
           event.refPoint = mEndDragPoint;
-          event.userCancelled = mUserCancelled;
+          event.mUserCancelled = mUserCancelled;
         }
 
         nsCOMPtr<nsIContent> content = do_QueryInterface(mSourceNode);
@@ -555,7 +557,7 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
     if (aRegion) {
       // the region's coordinates are relative to the root frame
       nsIFrame* rootFrame = presShell->GetRootFrame();
-      if (rootFrame && *aPresContext) {
+      if (rootFrame) {
         nsIntRect dragRect;
         aRegion->GetBoundingBox(&dragRect.x, &dragRect.y, &dragRect.width, &dragRect.height);
         dragRect = ToAppUnits(dragRect, nsPresContext::AppUnitsPerCSSPixel()).
@@ -596,14 +598,14 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
     nsCOMPtr<nsIContent> content = do_QueryInterface(dragNode);
     HTMLCanvasElement *canvas = HTMLCanvasElement::FromContentOrNull(content);
     if (canvas) {
-      return DrawDragForImage(*aPresContext, nullptr, canvas, sx, sy,
+      return DrawDragForImage(nullptr, canvas, sx, sy,
                               aScreenDragRect, aSurface);
     }
 
     nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(dragNode);
     // for image nodes, create the drag image from the actual image data
     if (imageLoader) {
-      return DrawDragForImage(*aPresContext, imageLoader, nullptr, sx, sy,
+      return DrawDragForImage(imageLoader, nullptr, sx, sy,
                               aScreenDragRect, aSurface);
     }
 
@@ -642,8 +644,7 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
 }
 
 nsresult
-nsBaseDragService::DrawDragForImage(nsPresContext* aPresContext,
-                                    nsIImageLoadingContent* aImageLoader,
+nsBaseDragService::DrawDragForImage(nsIImageLoadingContent* aImageLoader,
                                     HTMLCanvasElement* aCanvas,
                                     int32_t aScreenX, int32_t aScreenY,
                                     nsIntRect* aScreenDragRect,
@@ -693,10 +694,14 @@ nsBaseDragService::DrawDragForImage(nsPresContext* aPresContext,
     if (!ctx)
       return NS_ERROR_FAILURE;
 
-    imgContainer->Draw(ctx, destSize, ImageRegion::Create(destSize),
-                       imgIContainer::FRAME_CURRENT,
-                       Filter::GOOD, Nothing(),
-                       imgIContainer::FLAG_SYNC_DECODE);
+    DrawResult res =
+      imgContainer->Draw(ctx, destSize, ImageRegion::Create(destSize),
+                         imgIContainer::FRAME_CURRENT,
+                         Filter::GOOD, Nothing(),
+                         imgIContainer::FLAG_SYNC_DECODE);
+    if (res == DrawResult::BAD_IMAGE || res == DrawResult::BAD_ARGS) {
+      return NS_ERROR_FAILURE;
+    }
     *aSurface = dt->Snapshot();
   } else {
     *aSurface = aCanvas->GetSurfaceSnapshot();

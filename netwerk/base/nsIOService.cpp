@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 
 #include "nsIOService.h"
@@ -30,6 +31,7 @@
 #include "nsIConsoleService.h"
 #include "nsIUploadChannel2.h"
 #include "nsXULAppAPI.h"
+#include "nsIScriptError.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIProtocolProxyCallback.h"
 #include "nsICancelable.h"
@@ -40,6 +42,7 @@
 #include "nsPIDNSService.h"
 #include "nsIProtocolProxyService2.h"
 #include "MainThreadUtils.h"
+#include "nsINode.h"
 #include "nsIWidget.h"
 #include "nsThreadUtils.h"
 #include "mozilla/LoadInfo.h"
@@ -48,8 +51,9 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/net/DNS.h"
 #include "CaptivePortalService.h"
-#include "ClosingService.h"
 #include "ReferrerPolicy.h"
+#include "nsContentSecurityManager.h"
+#include "nsContentUtils.h"
 
 #ifdef MOZ_WIDGET_GONK
 #include "nsINetworkManager.h"
@@ -62,7 +66,6 @@
 
 using namespace mozilla;
 using mozilla::net::IsNeckoChild;
-using mozilla::net::ClosingService;
 using mozilla::net::CaptivePortalService;
 
 #define PORT_PREF_PREFIX           "network.security.ports."
@@ -84,71 +87,81 @@ using mozilla::net::CaptivePortalService;
 nsIOService* gIOService = nullptr;
 static bool gHasWarnedUploadChannel2;
 
+static mozilla::LazyLogModule gIOServiceLog("nsIOService");
+#undef LOG
+#define LOG(args)     MOZ_LOG(gIOServiceLog, mozilla::LogLevel::Debug, args)
+
 // A general port blacklist.  Connections to these ports will not be allowed
 // unless the protocol overrides.
 //
 // TODO: I am sure that there are more ports to be added.  
 //       This cut is based on the classic mozilla codebase
 
-int16_t gBadPortList[] = { 
-  1,    // tcpmux          
-  7,    // echo     
-  9,    // discard          
-  11,   // systat   
-  13,   // daytime          
-  15,   // netstat  
-  17,   // qotd             
-  19,   // chargen  
-  20,   // ftp-data         
-  21,   // ftp-cntl 
-  22,   // ssh              
-  23,   // telnet   
-  25,   // smtp     
-  37,   // time     
-  42,   // name     
-  43,   // nicname  
-  53,   // domain  
-  77,   // priv-rjs 
-  79,   // finger   
-  87,   // ttylink  
-  95,   // supdup   
+int16_t gBadPortList[] = {
+  1,    // tcpmux
+  7,    // echo
+  9,    // discard
+  11,   // systat
+  13,   // daytime
+  15,   // netstat
+  17,   // qotd
+  19,   // chargen
+  20,   // ftp-data
+  21,   // ftp-cntl
+  22,   // ssh
+  23,   // telnet
+  25,   // smtp
+  37,   // time
+  42,   // name
+  43,   // nicname
+  53,   // domain
+  77,   // priv-rjs
+  79,   // finger
+  87,   // ttylink
+  95,   // supdup
   101,  // hostriame
-  102,  // iso-tsap 
-  103,  // gppitnp  
-  104,  // acr-nema 
-  109,  // pop2     
-  110,  // pop3     
-  111,  // sunrpc   
-  113,  // auth     
-  115,  // sftp     
+  102,  // iso-tsap
+  103,  // gppitnp
+  104,  // acr-nema
+  109,  // pop2
+  110,  // pop3
+  111,  // sunrpc
+  113,  // auth
+  115,  // sftp
   117,  // uucp-path
-  119,  // nntp     
+  119,  // nntp
   123,  // NTP
-  135,  // loc-srv / epmap         
+  135,  // loc-srv / epmap
   139,  // netbios
-  143,  // imap2  
+  143,  // imap2
   179,  // BGP
-  389,  // ldap        
+  389,  // ldap
   465,  // smtp+ssl
-  512,  // print / exec          
-  513,  // login         
-  514,  // shell         
-  515,  // printer         
-  526,  // tempo         
-  530,  // courier        
-  531,  // Chat         
-  532,  // netnews        
-  540,  // uucp       
-  556,  // remotefs    
+  512,  // print / exec
+  513,  // login
+  514,  // shell
+  515,  // printer
+  526,  // tempo
+  530,  // courier
+  531,  // Chat
+  532,  // netnews
+  540,  // uucp   
+  556,  // remotefs
   563,  // nntp+ssl
   587,  //
-  601,  //       
+  601,  //
   636,  // ldap+ssl
   993,  // imap+ssl
   995,  // pop3+ssl
   2049, // nfs
+  3659,    // apple-sasl / PasswordServer
   4045, // lockd
-  6000, // x11        
+  6000, // x11
+  6665,    // Alternate IRC [Apple addition]
+  6666,    // Alternate IRC [Apple addition]
+  6667,    // Standard IRC [Apple addition]
+  6668,    // Alternate IRC [Apple addition]
+  6669,    // Alternate IRC [Apple addition]
   0,    // This MUST be zero so that we can populating the array
 };
 
@@ -176,6 +189,7 @@ nsIOService::nsIOService()
     , mSettingOffline(false)
     , mSetOfflineValue(false)
     , mShutdown(false)
+    , mHttpHandlerAlreadyShutingDown(false)
     , mNetworkLinkServiceInitialized(false)
     , mChannelEventSinks(NS_CHANNEL_EVENT_SINK_CATEGORY)
     , mAutoDialEnabled(false)
@@ -184,6 +198,7 @@ nsIOService::nsIOService()
     , mLastOfflineStateChange(PR_IntervalNow())
     , mLastConnectivityChange(PR_IntervalNow())
     , mLastNetworkLinkChange(PR_IntervalNow())
+    , mNetTearingDownStarted(0)
 {
 }
 
@@ -252,10 +267,6 @@ nsIOService::Init()
 
     InitializeNetworkLinkService();
 
-    // Start the closing service. Actual PR_Close() will be carried out on
-    // a separate "closing" thread. Start the closing servicee here since this
-    // point is executed only once per session.
-    ClosingService::Start();
     SetOffline(false);
 
     return NS_OK;
@@ -411,8 +422,11 @@ nsIOService::AsyncOnChannelRedirect(nsIChannel* oldChan, nsIChannel* newChan,
     // are in a captive portal, so we trigger a recheck.
     RecheckCaptivePortalIfLocalRedirect(newChan);
 
+    // This is silly. I wish there was a simpler way to get at the global
+    // reference of the contentSecurityManager. But it lives in the XPCOM
+    // service registry.
     nsCOMPtr<nsIChannelEventSink> sink =
-        do_GetService(NS_GLOBAL_CHANNELEVENTSINK_CONTRACTID);
+        do_GetService(NS_CONTENTSECURITYMANAGER_CONTRACTID);
     if (sink) {
         nsresult rv = helper->DelegateOnChannelRedirect(sink, oldChan,
                                                         newChan, flags);
@@ -558,7 +572,7 @@ nsIOService::GetProtocolHandler(const char* scheme, nsIProtocolHandler* *result)
 NS_IMETHODIMP
 nsIOService::ExtractScheme(const nsACString &inURI, nsACString &scheme)
 {
-    return net_ExtractURLScheme(inURI, nullptr, nullptr, &scheme);
+    return net_ExtractURLScheme(inURI, scheme);
 }
 
 NS_IMETHODIMP 
@@ -657,18 +671,6 @@ nsIOService::NewChannelFromURI2(nsIURI* aURI,
                                             result);
 }
 
-NS_IMETHODIMP
-nsIOService::NewChannelFromURIWithLoadInfo(nsIURI* aURI,
-                                           nsILoadInfo* aLoadInfo,
-                                           nsIChannel** result)
-{
-  return NewChannelFromURIWithProxyFlagsInternal(aURI,
-                                                 nullptr, // aProxyURI
-                                                 0,       // aProxyFlags
-                                                 aLoadInfo,
-                                                 result);
-}
-
 /*  ***** DEPRECATED *****
  * please use NewChannelFromURI2 providing the right arguments for:
  *        * aLoadingNode
@@ -683,13 +685,37 @@ NS_IMETHODIMP
 nsIOService::NewChannelFromURI(nsIURI *aURI, nsIChannel **result)
 {
   NS_ASSERTION(false, "Deprecated, use NewChannelFromURI2 providing loadInfo arguments!");
+
+  const char16_t* params[] = {
+    MOZ_UTF16("nsIOService::NewChannelFromURI()"),
+    MOZ_UTF16("nsIOService::NewChannelFromURI2()")
+  };
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  NS_LITERAL_CSTRING("Security by Default"),
+                                  nullptr, // aDocument
+                                  nsContentUtils::eNECKO_PROPERTIES,
+                                  "APIDeprecationWarning",
+                                  params, ArrayLength(params));
+
   return NewChannelFromURI2(aURI,
                             nullptr, // aLoadingNode
-                            nullptr, // aLoadingPrincipal
+                            nsContentUtils::GetSystemPrincipal(),
                             nullptr, // aTriggeringPrincipal
-                            nsILoadInfo::SEC_NORMAL,
+                            nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                             nsIContentPolicy::TYPE_OTHER,
                             result);
+}
+
+NS_IMETHODIMP
+nsIOService::NewChannelFromURIWithLoadInfo(nsIURI* aURI,
+                                           nsILoadInfo* aLoadInfo,
+                                           nsIChannel** result)
+{
+  return NewChannelFromURIWithProxyFlagsInternal(aURI,
+                                                 nullptr, // aProxyURI
+                                                 0,       // aProxyFlags
+                                                 aLoadInfo,
+                                                 result);
 }
 
 nsresult
@@ -782,9 +808,7 @@ nsIOService::NewChannelFromURIWithProxyFlagsInternal(nsIURI* aURI,
     // Make sure that all the individual protocolhandlers attach a loadInfo.
     if (aLoadInfo) {
       // make sure we have the same instance of loadInfo on the newly created channel
-      nsCOMPtr<nsILoadInfo> loadInfo;
-      channel->GetLoadInfo(getter_AddRefs(loadInfo));
-
+      nsCOMPtr<nsILoadInfo> loadInfo = channel->GetLoadInfo();
       if (aLoadInfo != loadInfo) {
         MOZ_ASSERT(false, "newly created channel must have a loadinfo attached");
         return NS_ERROR_UNEXPECTED;
@@ -878,13 +902,25 @@ nsIOService::NewChannelFromURIWithProxyFlags(nsIURI *aURI,
                                              nsIChannel **result)
 {
   NS_ASSERTION(false, "Deprecated, use NewChannelFromURIWithProxyFlags2 providing loadInfo arguments!");
+
+  const char16_t* params[] = {
+    MOZ_UTF16("nsIOService::NewChannelFromURIWithProxyFlags()"),
+    MOZ_UTF16("nsIOService::NewChannelFromURIWithProxyFlags2()")
+  };
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  NS_LITERAL_CSTRING("Security by Default"),
+                                  nullptr, // aDocument
+                                  nsContentUtils::eNECKO_PROPERTIES,
+                                  "APIDeprecationWarning",
+                                  params, ArrayLength(params));
+
   return NewChannelFromURIWithProxyFlags2(aURI,
                                           aProxyURI,
                                           aProxyFlags,
                                           nullptr, // aLoadingNode
-                                          nullptr, // aLoadingPrincipal
+                                          nsContentUtils::GetSystemPrincipal(),
                                           nullptr, // aTriggeringPrincipal
-                                          nsILoadInfo::SEC_NORMAL,
+                                          nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                                           nsIContentPolicy::TYPE_OTHER,
                                           result);
 }
@@ -928,13 +964,26 @@ NS_IMETHODIMP
 nsIOService::NewChannel(const nsACString &aSpec, const char *aCharset, nsIURI *aBaseURI, nsIChannel **result)
 {
   NS_ASSERTION(false, "Deprecated, use NewChannel2 providing loadInfo arguments!");
+
+  const char16_t* params[] = {
+    MOZ_UTF16("nsIOService::NewChannel()"),
+    MOZ_UTF16("nsIOService::NewChannel2()")
+  };
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  NS_LITERAL_CSTRING("Security by Default"),
+                                  nullptr, // aDocument
+                                  nsContentUtils::eNECKO_PROPERTIES,
+                                  "APIDeprecationWarning",
+                                  params, ArrayLength(params));
+
+  // Call NewChannel2 providing default arguments for the loadInfo.
   return NewChannel2(aSpec,
                      aCharset,
                      aBaseURI,
                      nullptr, // aLoadingNode
-                     nullptr, // aLoadingPrincipal
+                     nsContentUtils::GetSystemPrincipal(), // aLoadingPrincipal
                      nullptr, // aTriggeringPrincipal
-                     nsILoadInfo::SEC_NORMAL,
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER,
                      result);
 }
@@ -973,6 +1022,7 @@ nsIOService::GetOffline(bool *offline)
 NS_IMETHODIMP
 nsIOService::SetOffline(bool offline)
 {
+    LOG(("nsIOService::SetOffline offline=%d\n", offline));
     // When someone wants to go online (!offline) after we got XPCOM shutdown
     // throw ERROR_NOT_AVAILABLE to prevent return to online state.
     if ((mShutdown || mOfflineForProfileChange) && !offline)
@@ -1017,9 +1067,6 @@ nsIOService::SetOffline(bool offline)
                                                  NS_IOSERVICE_GOING_OFFLINE_TOPIC,
                                                  offlineString.get());
 
-            if (mDNSService)
-                mDNSService->SetOffline(true);
-
             if (mSocketTransportService)
                 mSocketTransportService->SetOffline(true);
 
@@ -1032,7 +1079,6 @@ nsIOService::SetOffline(bool offline)
         else if (!offline && mOffline) {
             // go online
             if (mDNSService) {
-                mDNSService->SetOffline(false);
                 DebugOnly<nsresult> rv = mDNSService->Init();
                 NS_ASSERTION(NS_SUCCEEDED(rv), "DNS service init failed");
             }
@@ -1067,9 +1113,6 @@ nsIOService::SetOffline(bool offline)
             DebugOnly<nsresult> rv = mSocketTransportService->Shutdown();
             NS_ASSERTION(NS_SUCCEEDED(rv), "socket transport service shutdown failed");
         }
-        if (mShutdown) {
-            ClosingService::Shutdown();
-        }
     }
 
     mSettingOffline = false;
@@ -1087,6 +1130,7 @@ nsIOService::GetConnectivity(bool *aConnectivity)
 NS_IMETHODIMP
 nsIOService::SetConnectivity(bool aConnectivity)
 {
+    LOG(("nsIOService::SetConnectivity aConnectivity=%d\n", aConnectivity));
     // This should only be called from ContentChild to pass the connectivity
     // value from the chrome process to the content process.
     if (XRE_IsParentProcess()) {
@@ -1095,10 +1139,10 @@ nsIOService::SetConnectivity(bool aConnectivity)
     return SetConnectivityInternal(aConnectivity);
 }
 
-
 nsresult
 nsIOService::SetConnectivityInternal(bool aConnectivity)
 {
+    LOG(("nsIOService::SetConnectivityInternal aConnectivity=%d\n", aConnectivity));
     if (mConnectivity == aConnectivity) {
         // Nothing to do here.
         return NS_OK;
@@ -1217,8 +1261,10 @@ nsIOService::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         bool manage;
         if (mNetworkLinkServiceInitialized &&
             NS_SUCCEEDED(prefs->GetBoolPref(MANAGE_OFFLINE_STATUS_PREF,
-                                            &manage)))
+                                            &manage))) {
+            LOG(("nsIOService::PrefsChanged ManageOfflineStatus manage=%d\n", manage));
             SetManageOfflineStatus(manage);
+        }
     }
 
     if (!pref || strcmp(pref, NECKO_BUFFER_CACHE_COUNT_PREF) == 0) {
@@ -1362,23 +1408,6 @@ IsWifiActive()
 #endif
 }
 
-struct EnumeratorParams {
-    nsIOService *service;
-    int32_t     status;
-};
-
-PLDHashOperator
-nsIOService::EnumerateWifiAppsChangingState(const unsigned int &aKey,
-                                            int32_t aValue,
-                                            void *aUserArg)
-{
-    EnumeratorParams *params = reinterpret_cast<EnumeratorParams*>(aUserArg);
-    if (aValue == nsIAppOfflineInfo::WIFI_ONLY) {
-        params->service->NotifyAppOfflineStatus(aKey, params->status);
-    }
-    return PL_DHASH_NEXT;
-}
-
 class
 nsWakeupNotifier : public nsRunnable
 {
@@ -1419,6 +1448,15 @@ nsIOService::NotifyWakeup()
     return NS_OK;
 }
 
+void
+nsIOService::SetHttpHandlerAlreadyShutingDown()
+{
+    if (!mShutdown && !mOfflineForProfileChange) {
+        mNetTearingDownStarted = PR_IntervalNow();
+        mHttpHandlerAlreadyShutingDown = true;
+    }
+}
+
 // nsIObserver interface
 NS_IMETHODIMP
 nsIOService::Observe(nsISupports *subject,
@@ -1430,6 +1468,10 @@ nsIOService::Observe(nsISupports *subject,
         if (prefBranch)
             PrefsChanged(prefBranch, NS_ConvertUTF16toUTF8(data).get());
     } else if (!strcmp(topic, kProfileChangeNetTeardownTopic)) {
+        if (!mHttpHandlerAlreadyShutingDown) {
+          mNetTearingDownStarted = PR_IntervalNow();
+        }
+        mHttpHandlerAlreadyShutingDown = false;
         if (!mOffline) {
             mOfflineForProfileChange = true;
             SetOffline(true);
@@ -1457,6 +1499,11 @@ nsIOService::Observe(nsISupports *subject,
         // changes of the offline status from now. We must not allow going
         // online after this point.
         mShutdown = true;
+
+        if (!mHttpHandlerAlreadyShutingDown && !mOfflineForProfileChange) {
+          mNetTearingDownStarted = PR_IntervalNow();
+        }
+        mHttpHandlerAlreadyShutingDown = false;
 
         SetOffline(true);
 
@@ -1498,8 +1545,11 @@ nsIOService::Observe(nsISupports *subject,
             int32_t status = wifiActive ?
                 nsIAppOfflineInfo::ONLINE : nsIAppOfflineInfo::OFFLINE;
 
-            EnumeratorParams params = {this, status};
-            mAppsOfflineStatus.EnumerateRead(EnumerateWifiAppsChangingState, &params);
+            for (auto it = mAppsOfflineStatus.Iter(); !it.Done(); it.Next()) {
+                if (it.UserData() == nsIAppOfflineInfo::WIFI_ONLY) {
+                    NotifyAppOfflineStatus(it.Key(), status);
+                }
+            }
         }
 
         mPreviousWifiState = newWifiState;
@@ -1618,6 +1668,7 @@ nsIOService::NewSimpleNestedURI(nsIURI* aURI, nsIURI** aResult)
 NS_IMETHODIMP
 nsIOService::SetManageOfflineStatus(bool aManage)
 {
+    LOG(("nsIOService::SetManageOfflineStatus aManage=%d\n", aManage));
     mManageLinkStatus = aManage;
 
     // When detection is not activated, the default connectivity state is true.
@@ -1645,6 +1696,7 @@ nsIOService::GetManageOfflineStatus(bool* aManage)
 nsresult
 nsIOService::OnNetworkLinkEvent(const char *data)
 {
+    LOG(("nsIOService::OnNetworkLinkEvent data:%s\n", data));
     if (!mNetworkLinkService)
         return NS_ERROR_FAILURE;
 
@@ -1652,7 +1704,8 @@ nsIOService::OnNetworkLinkEvent(const char *data)
         return NS_ERROR_NOT_AVAILABLE;
 
     if (!mManageLinkStatus) {
-      return NS_OK;
+        LOG(("nsIOService::OnNetworkLinkEvent mManageLinkStatus=false\n"));
+        return NS_OK;
     }
 
     if (!strcmp(data, NS_NETWORK_LINK_DATA_DOWN)) {
@@ -1863,7 +1916,7 @@ nsIOService::SpeculativeConnectInternal(nsIURI *aURI,
                             nullptr, // aLoadingNode,
                             systemPrincipal,
                             nullptr, //aTriggeringPrincipal,
-                            nsILoadInfo::SEC_NORMAL,
+                            nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                             nsIContentPolicy::TYPE_OTHER,
                             getter_AddRefs(channel));
     NS_ENSURE_SUCCESS(rv, rv);

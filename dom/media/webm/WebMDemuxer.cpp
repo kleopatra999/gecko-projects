@@ -11,6 +11,7 @@
 #include "WebMDemuxer.h"
 #include "WebMBufferedParser.h"
 #include "gfx2DGlue.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Endian.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/SharedThreadPool.h"
@@ -18,6 +19,8 @@
 #include "nsAutoRef.h"
 #include "NesteggPacketHolder.h"
 #include "XiphExtradata.h"
+#include "prprf.h"           // leaving it for PR_vsnprintf()
+#include "mozilla/Snprintf.h"
 
 #include <algorithm>
 #include <stdint.h>
@@ -32,13 +35,15 @@ namespace mozilla {
 
 using namespace gfx;
 
-PRLogModuleInfo* gWebMDemuxerLog = nullptr;
-extern PRLogModuleInfo* gNesteggLog;
+LazyLogModule gWebMDemuxerLog("WebMDemuxer");
+LazyLogModule gNesteggLog("Nestegg");
 
 // How far ahead will we look when searching future keyframe. In microseconds.
 // This value is based on what appears to be a reasonable value as most webm
 // files encountered appear to have keyframes located < 4s.
 #define MAX_LOOK_AHEAD 10000000
+
+static Atomic<uint32_t> sStreamSourceID(0u);
 
 // Functions for reading and seeking using WebMDemuxer required for
 // nestegg_io. The 'user data' passed to these functions is the
@@ -116,7 +121,7 @@ static void webmdemux_log(nestegg* aContext,
 
   va_start(args, aFormat);
 
-  PR_snprintf(msg, sizeof(msg), "%p [Nestegg-%s] ", aContext, sevStr);
+  snprintf_literal(msg, "%p [Nestegg-%s] ", aContext, sevStr);
   PR_vsnprintf(msg+strlen(msg), sizeof(msg)-strlen(msg), aFormat, args);
   MOZ_LOG(gNesteggLog, LogLevel::Debug, (msg));
 
@@ -145,12 +150,6 @@ WebMDemuxer::WebMDemuxer(MediaResource* aResource, bool aIsMediaSource)
   , mLastWebMBlockOffset(-1)
   , mIsMediaSource(aIsMediaSource)
 {
-  if (!gNesteggLog) {
-    gNesteggLog = PR_NewLogModule("Nestegg");
-  }
-  if (!gWebMDemuxerLog) {
-    gWebMDemuxerLog = PR_NewLogModule("WebMDemuxer");
-  }
 }
 
 WebMDemuxer::~WebMDemuxer()
@@ -377,9 +376,9 @@ WebMDemuxer::ReadMetadata()
       mCodecDelay = media::TimeUnit::FromNanoseconds(params.codec_delay).ToMicroseconds();
       mAudioCodec = nestegg_track_codec_id(mContext, track);
       if (mAudioCodec == NESTEGG_CODEC_VORBIS) {
-        mInfo.mAudio.mMimeType = "audio/ogg; codecs=vorbis";
+        mInfo.mAudio.mMimeType = "audio/webm; codecs=vorbis";
       } else if (mAudioCodec == NESTEGG_CODEC_OPUS) {
-        mInfo.mAudio.mMimeType = "audio/ogg; codecs=opus";
+        mInfo.mAudio.mMimeType = "audio/webm; codecs=opus";
         uint8_t c[sizeof(uint64_t)];
         BigEndian::writeUint64(&c[0], mCodecDelay);
         mInfo.mAudio.mCodecSpecificConfig->AppendElements(&c[0], sizeof(uint64_t));
@@ -394,8 +393,8 @@ WebMDemuxer::ReadMetadata()
         return NS_ERROR_FAILURE;
       }
 
-      nsAutoTArray<const unsigned char*,4> headers;
-      nsAutoTArray<size_t,4> headerLens;
+      AutoTArray<const unsigned char*,4> headers;
+      AutoTArray<size_t,4> headerLens;
       for (uint32_t header = 0; header < nheaders; ++header) {
         unsigned char* data = 0;
         size_t length = 0;
@@ -438,6 +437,12 @@ WebMDemuxer::IsSeekable() const
   return mContext && nestegg_has_cues(mContext);
 }
 
+bool
+WebMDemuxer::IsSeekableOnlyInBufferedRanges() const
+{
+  return mContext && !nestegg_has_cues(mContext);
+}
+
 void
 WebMDemuxer::EnsureUpToDateIndex()
 {
@@ -445,7 +450,7 @@ WebMDemuxer::EnsureUpToDateIndex()
     return;
   }
   AutoPinned<MediaResource> resource(mResource.GetResource());
-  nsTArray<MediaByteRange> byteRanges;
+  MediaByteRangeSet byteRanges;
   nsresult rv = resource->GetCachedRanges(byteRanges);
   if (NS_FAILED(rv) || !byteRanges.Length()) {
     return;
@@ -570,6 +575,22 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
           break;
       }
       isKeyframe = si.is_kf;
+      if (isKeyframe) {
+        // We only look for resolution changes on keyframes for both VP8 and
+        // VP9. Other resolution changes are invalid.
+        if (mLastSeenFrameWidth.isSome() && mLastSeenFrameHeight.isSome() &&
+            (si.w != mLastSeenFrameWidth.value() ||
+             si.h != mLastSeenFrameHeight.value())) {
+          // We ignore cropping information on resizes during streams.
+          // Cropping alone is rare, and we do not consider cropping to
+          // still be valid after a resolution change
+          mInfo.mVideo.mDisplay = nsIntSize(si.w, si.h);
+          mInfo.mVideo.mImage = nsIntRect(0, 0, si.w, si.h);
+          mSharedVideoTrackInfo = new SharedTrackInfo(mInfo.mVideo, ++sStreamSourceID);
+        }
+        mLastSeenFrameWidth = Some(si.w);
+        mLastSeenFrameHeight = Some(si.h);
+      }
     }
 
     WEBM_DEBUG("push sample tstamp: %ld next_tstamp: %ld length: %ld kf: %d",
@@ -580,11 +601,14 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
     sample->mDuration = next_tstamp - tstamp;
     sample->mOffset = holder->Offset();
     sample->mKeyframe = isKeyframe;
-    if (discardPadding) {
+    if (discardPadding && i == count - 1) {
       uint8_t c[8];
       BigEndian::writeInt64(&c[0], discardPadding);
       sample->mExtraData = new MediaByteBuffer;
       sample->mExtraData->AppendElements(&c[0], 8);
+    }
+    if (aType == TrackInfo::kVideoTrack) {
+      sample->mTrackInfo = mSharedVideoTrackInfo;
     }
     aSamples->Push(sample);
   }
@@ -738,7 +762,7 @@ WebMDemuxer::GetBuffered()
 
   media::TimeIntervals buffered;
 
-  nsTArray<MediaByteRange> ranges;
+  MediaByteRangeSet ranges;
   nsresult rv = resource->GetCachedRanges(ranges);
   if (NS_FAILED(rv)) {
     return media::TimeIntervals();

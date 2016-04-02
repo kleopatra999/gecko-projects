@@ -6,7 +6,6 @@ var baseURL = "https://example.com/browser/browser/base/content/test/social/";
 var manifest = { // normal provider
   name: "provider 1",
   origin: "https://example.com",
-  workerURL: "https://example.com/browser/browser/base/content/test/social/social_worker.js",
   iconURL: "https://example.com/browser/browser/base/content/test/general/moz.png",
   shareURL: "https://example.com/browser/browser/base/content/test/social/share.html"
 };
@@ -24,11 +23,11 @@ function sendActivationEvent(subframe) {
 
 function promiseShareFrameEvent(iframe, eventName) {
   let deferred = Promise.defer();
-  iframe.addEventListener(eventName, function load() {
+  iframe.addEventListener(eventName, function load(event) {
     info("page load is " + iframe.contentDocument.location.href);
     if (iframe.contentDocument.location.href != "data:text/plain;charset=utf8,") {
       iframe.removeEventListener(eventName, load, true);
-      deferred.resolve();
+      deferred.resolve(event);
     }
   }, true);
   return deferred.promise;
@@ -37,7 +36,17 @@ function promiseShareFrameEvent(iframe, eventName) {
 function test() {
   waitForExplicitFinish();
   Services.prefs.setCharPref("social.shareDirectory", activationPage);
+
+  let frameScript = "data:,(" + function frame_script() {
+    addEventListener("OpenGraphData", function (aEvent) {
+      sendAsyncMessage("sharedata", aEvent.detail);
+    }, true, true);
+  }.toString() + ")();";
+  let mm = getGroupMessageManager("social");
+  mm.loadFrameScript(frameScript, true);
+
   registerCleanupFunction(function () {
+    mm.removeDelayedFrameScript(frameScript);
     Services.prefs.clearUserPref("social.directories");
     Services.prefs.clearUserPref("social.shareDirectory");
     Services.prefs.clearUserPref("social.share.activationPanelEnabled");
@@ -48,7 +57,6 @@ function test() {
       CustomizableUI.removeWidgetFromArea("social-share-button", CustomizableUI.AREA_NAVBAR)
       shareButton.remove();
     }
-    ok(CustomizableUI.inDefaultState, "Should start in default state.");
     next();
   });
 }
@@ -175,11 +183,23 @@ var tests = {
   },
   testSharePage: function(next) {
     let provider = Social._getProviderFromOrigin(manifest.origin);
-    let port = provider.getWorkerPort();
-    ok(port, "provider has a port");
+
     let testTab;
     let testIndex = 0;
     let testData = corpus[testIndex++];
+
+    let mm = getGroupMessageManager("social");
+    mm.addMessageListener("sharedata", function handler(msg) {
+      gBrowser.removeTab(testTab);
+      hasoptions(testData.options, JSON.parse(msg.data));
+      testData = corpus[testIndex++];
+      if (testData) {
+        executeSoon(runOneTest);
+      } else {
+        mm.removeMessageListener("sharedata", handler);
+        SocialService.disableProvider(manifest.origin, next);
+      }
+    });
 
     function runOneTest() {
       addTab(testData.url, function(tab) {
@@ -187,88 +207,66 @@ var tests = {
         SocialShare.sharePage(manifest.origin);
       });
     }
-
-    port.onmessage = function (e) {
-      let topic = e.data.topic;
-      switch (topic) {
-        case "got-share-data-message":
-          gBrowser.removeTab(testTab);
-          hasoptions(testData.options, e.data.result);
-          testData = corpus[testIndex++];
-          if (testData) {
-            executeSoon(runOneTest);
-          } else {
-            SocialService.disableProvider(manifest.origin, next);
-          }
-          break;
-      }
-    }
-    port.postMessage({topic: "test-init"});
     executeSoon(runOneTest);
   },
-  testShareMicrodata: function(next) {
+  testShareMicroformats: function(next) {
     SocialService.addProvider(manifest, function(provider) {
-      let port = provider.getWorkerPort();
       let target, testTab;
 
       let expecting = JSON.stringify({
-        "url": "https://example.com/browser/browser/base/content/test/social/microdata.html",
-        "title": "My Blog",
-        "previews": [],
-        "microdata": {
+        "url": "https://example.com/browser/browser/base/content/test/social/microformats.html",
+        "title": "Raspberry Pi Page",
+        "previews": ["https://example.com/someimage.jpg"],
+        "microformats": {
           "items": [{
-              "types": ["http://schema.org/BlogPosting"],
+              "type": ["h-product"],
               "properties": {
-                "headline": ["Progress report"],
-                "datePublished": ["2013-08-29"],
-                "url": ["https://example.com/browser/browser/base/content/test/social/microdata.html?comments=0"],
-                "comment": [{
-                    "types": ["http://schema.org/UserComments"],
+                "name": ["Raspberry Pi"],
+                "photo": ["https://example.com/someimage.jpg"],
+                "description": [{
+                    "value": "The Raspberry Pi is a credit-card sized computer that plugs into your TV and a keyboard. It's a capable little PC which can be used for many of the things that your desktop PC does, like spreadsheets, word-processing and games. It also plays high-definition video. We want to see it being used by kids all over the world to learn programming.",
+                    "html": "The Raspberry Pi is a credit-card sized computer that plugs into your TV and a keyboard. It's a capable little PC which can be used for many of the things that your desktop PC does, like spreadsheets, word-processing and games. It also plays high-definition video. We want to see it being used by kids all over the world to learn programming."
+                  }
+                ],
+                "url": ["https://example.com/"],
+                "price": ["29.95"],
+                "review": [{
+                    "value": "4.5 out of 5",
+                    "type": ["h-review"],
                     "properties": {
-                      "url": ["https://example.com/browser/browser/base/content/test/social/microdata.html#c1"],
-                      "creator": [{
-                          "types": ["http://schema.org/Person"],
-                          "properties": {
-                            "name": ["Greg"]
-                          }
-                        }
-                      ],
-                      "commentTime": ["2013-08-29"]
-                    }
-                  }, {
-                    "types": ["http://schema.org/UserComments"],
-                    "properties": {
-                      "url": ["https://example.com/browser/browser/base/content/test/social/microdata.html#c2"],
-                      "creator": [{
-                          "types": ["http://schema.org/Person"],
-                          "properties": {
-                            "name": ["Charlotte"]
-                          }
-                        }
-                      ],
-                      "commentTime": ["2013-08-29"]
+                      "rating": ["4.5"]
                     }
                   }
-                ]
+                ],
+                "category": ["Computer", "Education"]
               }
             }
-          ]
+          ],
+          "rels": {
+            "tag": ["https://example.com/wiki/computer", "https://example.com/wiki/education"]
+          },
+          "rel-urls": {
+            "https://example.com/wiki/computer": {
+              "text": "Computer",
+              "rels": ["tag"]
+            },
+            "https://example.com/wiki/education": {
+              "text": "Education",
+              "rels": ["tag"]
+            }
+          }
         }
       });
 
-      port.onmessage = function (e) {
-        let topic = e.data.topic;
-        switch (topic) {
-          case "got-share-data-message":
-            is(JSON.stringify(e.data.result), expecting, "microdata data ok");
-            gBrowser.removeTab(testTab);
-            SocialService.disableProvider(manifest.origin, next);
-            break;
-        }
-      }
-      port.postMessage({topic: "test-init"});
-  
-      let url = "https://example.com/browser/browser/base/content/test/social/microdata.html"
+      let mm = getGroupMessageManager("social");
+      mm.addMessageListener("sharedata", function handler(msg) {
+        is(msg.data, expecting, "microformats data ok");
+        gBrowser.removeTab(testTab);
+        mm.removeMessageListener("sharedata", handler);
+        SocialService.disableProvider(manifest.origin, next);
+      });
+
+      let url = "https://example.com/browser/browser/base/content/test/social/microformats.html"
       addTab(url, function(tab) {
         testTab = tab;
         let doc = tab.linkedBrowser.contentDocument;
@@ -297,20 +295,13 @@ var tests = {
         }, () => {
         is(subframe.contentDocument.location.href, activationPage, "activation page loaded");
         promiseObserverNotified("social:provider-enabled").then(() => {
-          let provider = Social._getProviderFromOrigin(manifest.origin);
-          let port = provider.getWorkerPort();
-          ok(!!port, "got port");
-          port.onmessage = function (e) {
-            let topic = e.data.topic;
-            switch (topic) {
-              case "got-share-data-message":
-                ok(true, "share completed");
-                gBrowser.removeTab(testTab);
-                SocialService.uninstallProvider(manifest.origin, next);
-                break;
-            }
-          }
-          port.postMessage({topic: "test-init"});
+          let mm = getGroupMessageManager("social");
+          mm.addMessageListener("sharedata", function handler(msg) {
+            ok(true, "share completed");
+            gBrowser.removeTab(testTab);
+            mm.removeMessageListener("sharedata", handler);
+            SocialService.uninstallProvider(manifest.origin, next);
+          });
         });
         sendActivationEvent(subframe);
       }, "share panel did not open and load share page");

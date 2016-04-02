@@ -19,6 +19,12 @@
 #include <ui/Fence.h>
 #endif
 
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+#include <gui/Surface.h>
+#else
+#include <gui/SurfaceTextureClient.h>
+#endif
+
 #include "mozilla/layers/GrallocTextureClient.h"
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/Preferences.h"
@@ -29,7 +35,6 @@
 #include "mozilla/Logging.h"
 
 #include "GonkNativeWindow.h"
-#include "GonkNativeWindowClient.h"
 #include "OMXCodecProxy.h"
 #include "OmxDecoder.h"
 
@@ -37,7 +42,7 @@
 #define OD_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "OmxDecoder", __VA_ARGS__)
 
 #undef LOG
-PRLogModuleInfo *gOmxDecoderLog;
+mozilla::LazyLogModule gOmxDecoderLog("OmxDecoder");
 #define LOG(type, msg...) MOZ_LOG(gOmxDecoderLog, type, (msg))
 
 using namespace MPAPI;
@@ -102,10 +107,6 @@ static sp<IOMX> GetOMX()
 
 bool
 OmxDecoder::Init(sp<MediaExtractor>& extractor) {
-  if (!gOmxDecoderLog) {
-    gOmxDecoderLog = PR_NewLogModule("OmxDecoder");
-  }
-
   sp<MetaData> meta = extractor->getMetaData();
 
   ssize_t audioTrackIndex = -1;
@@ -235,11 +236,11 @@ OmxDecoder::AllocateMediaResources()
 #endif
 
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 21
-    mNativeWindowClient = new GonkNativeWindowClient(producer);
+    mNativeWindowClient = new Surface(producer);
 #elif defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-    mNativeWindowClient = new GonkNativeWindowClient(mNativeWindow->getBufferQueue());
+    mNativeWindowClient = new Surface(mNativeWindow->getBufferQueue());
 #else
-    mNativeWindowClient = new GonkNativeWindowClient(mNativeWindow);
+    mNativeWindowClient = new SurfaceTextureClient(mNativeWindow);
 #endif
 
     // Experience with OMX codecs is that only the HW decoders are
@@ -358,10 +359,10 @@ OmxDecoder::ReleaseMediaResources() {
       for (std::set<TextureClient*>::iterator it=mPendingRecycleTexutreClients.begin();
            it!=mPendingRecycleTexutreClients.end(); it++)
       {
-        GrallocTextureClientOGL* client = static_cast<GrallocTextureClientOGL*>(*it);
-        client->ClearRecycleCallback();
+        GrallocTextureData* client = static_cast<GrallocTextureData*>((*it)->GetInternalData());
+        (*it)->ClearRecycleCallback();
         if (client->GetMediaBuffer()) {
-          mPendingVideoBuffers.push(BufferItem(client->GetMediaBuffer(), client->GetAndResetReleaseFenceHandle()));
+          mPendingVideoBuffers.push(BufferItem(client->GetMediaBuffer(), (*it)->GetAndResetReleaseFenceHandle()));
         }
       }
       mPendingRecycleTexutreClients.clear();
@@ -657,8 +658,7 @@ OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
       // Manually increment reference count to keep MediaBuffer alive
       // during TextureClient is in use.
       mVideoBuffer->add_ref();
-      GrallocTextureClientOGL* grallocClient = static_cast<GrallocTextureClientOGL*>(textureClient.get());
-      grallocClient->SetMediaBuffer(mVideoBuffer);
+      static_cast<GrallocTextureData*>(textureClient->GetInternalData())->SetMediaBuffer(mVideoBuffer);
       // Set recycle callback for TextureClient
       textureClient->SetRecycleCallback(OmxDecoder::RecycleCallback, this);
       {
@@ -921,9 +921,9 @@ OmxDecoder::RecycleCallbackImp(TextureClient* aClient)
       return;
     }
     mPendingRecycleTexutreClients.erase(aClient);
-    GrallocTextureClientOGL* client = static_cast<GrallocTextureClientOGL*>(aClient);
-    if (client->GetMediaBuffer()) {
-      mPendingVideoBuffers.push(BufferItem(client->GetMediaBuffer(), client->GetAndResetReleaseFenceHandle()));
+    GrallocTextureData* grallocData = static_cast<GrallocTextureData*>(aClient->GetInternalData());
+    if (grallocData->GetMediaBuffer()) {
+      mPendingVideoBuffers.push(BufferItem(grallocData->GetMediaBuffer(), aClient->GetAndResetReleaseFenceHandle()));
     }
   }
   sp<AMessage> notify =

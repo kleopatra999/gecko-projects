@@ -73,11 +73,13 @@ StringValue(JSContext* cx, const nsAString& str, ErrorResult& rv)
 }
 
 bool
-WebGLContext::GetStencilBits(GLint* out_stencilBits)
+WebGLContext::GetStencilBits(GLint* const out_stencilBits)
 {
     *out_stencilBits = 0;
     if (mBoundDrawFramebuffer) {
-        if (mBoundDrawFramebuffer->HasDepthStencilConflict()) {
+        if (mBoundDrawFramebuffer->StencilAttachment().IsDefined() &&
+            mBoundDrawFramebuffer->DepthStencilAttachment().IsDefined())
+        {
             // Error, we don't know which stencil buffer's bits to use
             ErrorInvalidFramebufferOperation("getParameter: framebuffer has two stencil buffers bound");
             return false;
@@ -95,9 +97,107 @@ WebGLContext::GetStencilBits(GLint* out_stencilBits)
     return true;
 }
 
+bool
+WebGLContext::GetChannelBits(const char* funcName, GLenum pname, GLint* const out_val)
+{
+    if (mBoundDrawFramebuffer) {
+        if (!mBoundDrawFramebuffer->ValidateAndInitAttachments(funcName))
+            return false;
+    }
+
+    if (!mBoundDrawFramebuffer) {
+        switch (pname) {
+        case LOCAL_GL_RED_BITS:
+        case LOCAL_GL_GREEN_BITS:
+        case LOCAL_GL_BLUE_BITS:
+            *out_val = 8;
+            break;
+
+        case LOCAL_GL_ALPHA_BITS:
+            *out_val = (mOptions.alpha ? 8 : 0);
+            break;
+
+        case LOCAL_GL_DEPTH_BITS:
+            if (mOptions.depth) {
+                const auto& glFormats = gl->GetGLFormats();
+
+                GLenum depthFormat = glFormats.depth;
+                if (mOptions.stencil && glFormats.depthStencil) {
+                    depthFormat = glFormats.depthStencil;
+                }
+
+                if (depthFormat == LOCAL_GL_DEPTH_COMPONENT16) {
+                    *out_val = 16;
+                } else {
+                    *out_val = 24;
+                }
+            } else {
+                *out_val = 0;
+            }
+            break;
+
+        case LOCAL_GL_STENCIL_BITS:
+            *out_val = (mOptions.stencil ? 8 : 0);
+            break;
+
+        default:
+            MOZ_CRASH("bad pname");
+        }
+        return true;
+    }
+
+    if (!gl->IsCoreProfile()) {
+        gl->fGetIntegerv(pname, out_val);
+        return true;
+    }
+
+    GLenum fbAttachment = 0;
+    GLenum fbPName = 0;
+    switch (pname) {
+    case LOCAL_GL_RED_BITS:
+        fbAttachment = LOCAL_GL_COLOR_ATTACHMENT0;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE;
+        break;
+
+    case LOCAL_GL_GREEN_BITS:
+        fbAttachment = LOCAL_GL_COLOR_ATTACHMENT0;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE;
+        break;
+
+    case LOCAL_GL_BLUE_BITS:
+        fbAttachment = LOCAL_GL_COLOR_ATTACHMENT0;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE;
+        break;
+
+    case LOCAL_GL_ALPHA_BITS:
+        fbAttachment = LOCAL_GL_COLOR_ATTACHMENT0;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE;
+        break;
+
+    case LOCAL_GL_DEPTH_BITS:
+        fbAttachment = LOCAL_GL_DEPTH_ATTACHMENT;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE;
+        break;
+
+    case LOCAL_GL_STENCIL_BITS:
+        fbAttachment = LOCAL_GL_STENCIL_ATTACHMENT;
+        fbPName = LOCAL_GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE;
+        break;
+
+    default:
+        MOZ_CRASH("bad pname");
+    }
+
+    gl->fGetFramebufferAttachmentParameteriv(LOCAL_GL_DRAW_FRAMEBUFFER, fbAttachment,
+                                             fbPName, out_val);
+    return true;
+}
+
 JS::Value
 WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
 {
+    const char funcName[] = "getParameter";
+
     if (IsContextLost())
         return JS::NullValue();
 
@@ -142,15 +242,15 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
-    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers)) {
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers)) {
         if (pname == LOCAL_GL_MAX_COLOR_ATTACHMENTS) {
-            return JS::Int32Value(mGLMaxColorAttachments);
+            return JS::Int32Value(mImplMaxColorAttachments);
 
         } else if (pname == LOCAL_GL_MAX_DRAW_BUFFERS) {
-            return JS::Int32Value(mGLMaxDrawBuffers);
+            return JS::Int32Value(mImplMaxDrawBuffers);
 
         } else if (pname >= LOCAL_GL_DRAW_BUFFER0 &&
-                   pname < GLenum(LOCAL_GL_DRAW_BUFFER0 + mGLMaxDrawBuffers))
+                   pname < GLenum(LOCAL_GL_DRAW_BUFFER0 + mImplMaxDrawBuffers))
         {
             GLint iv = 0;
             gl->fGetIntegerv(pname, &iv);
@@ -166,7 +266,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
-    if (IsExtensionEnabled(WebGLExtensionID::OES_vertex_array_object)) {
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::OES_vertex_array_object)) {
         if (pname == LOCAL_GL_VERTEX_ARRAY_BINDING) {
             WebGLVertexArray* vao =
                 (mBoundVertexArray != mDefaultVertexArray) ? mBoundVertexArray.get() : nullptr;
@@ -174,7 +274,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
-    if (IsExtensionEnabled(WebGLExtensionID::EXT_disjoint_timer_query)) {
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::EXT_disjoint_timer_query)) {
         if (pname == LOCAL_GL_TIMESTAMP_EXT) {
             GLuint64 iv = 0;
             gl->fGetInteger64v(pname, (GLint64*) &iv);
@@ -235,7 +335,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
-    if (IsExtensionEnabled(WebGLExtensionID::OES_standard_derivatives)) {
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::OES_standard_derivatives)) {
         if (pname == LOCAL_GL_FRAGMENT_SHADER_DERIVATIVE_HINT) {
             GLint i = 0;
             gl->fGetIntegerv(pname, &i);
@@ -292,7 +392,8 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
         case LOCAL_GL_IMPLEMENTATION_COLOR_READ_TYPE: {
             if (mBoundReadFramebuffer) {
-                FBStatus status = mBoundReadFramebuffer->CheckFramebufferStatus();
+                nsCString fbStatusInfoIgnored;
+                const auto status = mBoundReadFramebuffer->CheckFramebufferStatus(&fbStatusInfoIgnored);
                 if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
                     ErrorInvalidOperation("getParameter: Read framebuffer must be"
                                           " complete before querying"
@@ -307,11 +408,13 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
             } else {
                 i = LOCAL_GL_UNSIGNED_BYTE;
             }
+
             return JS::NumberValue(uint32_t(i));
         }
         case LOCAL_GL_IMPLEMENTATION_COLOR_READ_FORMAT: {
             if (mBoundReadFramebuffer) {
-                FBStatus status = mBoundReadFramebuffer->CheckFramebufferStatus();
+                nsCString fbStatusInfoIgnored;
+                const auto status = mBoundReadFramebuffer->CheckFramebufferStatus(&fbStatusInfoIgnored);
                 if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
                     ErrorInvalidOperation("getParameter: Read framebuffer must be"
                                           " complete before querying"
@@ -326,6 +429,14 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
             } else {
                 i = LOCAL_GL_RGBA;
             }
+
+            // OpenGL ES 3.0.4 p112 Table 3.2 shows that read format SRGB_ALPHA is
+            // not supported. And if internal format of fbo is SRGB8_ALPHA8, then
+            // IMPLEMENTATION_COLOR_READ_FORMAT is SRGB_ALPHA which is not supported
+            // by ReadPixels. So, just return RGBA here.
+            if (i == LOCAL_GL_SRGB_ALPHA)
+                i = LOCAL_GL_RGBA;
+
             return JS::NumberValue(uint32_t(i));
         }
         // int
@@ -343,11 +454,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
 
             return JS::Int32Value(refValue & stencilMask);
         }
-        case LOCAL_GL_STENCIL_BITS: {
-            GLint stencilBits = 0;
-            GetStencilBits(&stencilBits);
-            return JS::Int32Value(stencilBits);
-        }
+
         case LOCAL_GL_STENCIL_CLEAR_VALUE:
         case LOCAL_GL_UNPACK_ALIGNMENT:
         case LOCAL_GL_PACK_ALIGNMENT:
@@ -357,36 +464,34 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_MAX_VERTEX_ATTRIBS:
         case LOCAL_GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
         case LOCAL_GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
-        case LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS:
-        case LOCAL_GL_RED_BITS:
-        case LOCAL_GL_GREEN_BITS:
-        case LOCAL_GL_BLUE_BITS: {
+        case LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS: {
             GLint i = 0;
             gl->fGetIntegerv(pname, &i);
             return JS::Int32Value(i);
         }
-        case LOCAL_GL_DEPTH_BITS: {
-            GLint i = 0;
-            if (!mNeedsFakeNoDepth) {
-                gl->fGetIntegerv(pname, &i);
-            }
-            return JS::Int32Value(i);
+
+        case LOCAL_GL_RED_BITS:
+        case LOCAL_GL_GREEN_BITS:
+        case LOCAL_GL_BLUE_BITS:
+        case LOCAL_GL_ALPHA_BITS:
+        case LOCAL_GL_DEPTH_BITS:
+        case LOCAL_GL_STENCIL_BITS: {
+            // Deprecated and removed in GL Core profiles, so special handling required.
+            GLint val;
+            if (!GetChannelBits(funcName, pname, &val))
+                return JS::NullValue();
+
+            return JS::Int32Value(val);
         }
-        case LOCAL_GL_ALPHA_BITS: {
-            GLint i = 0;
-            if (!mNeedsFakeNoAlpha) {
-                gl->fGetIntegerv(pname, &i);
-            }
-            return JS::Int32Value(i);
-        }
+
         case LOCAL_GL_MAX_TEXTURE_SIZE:
-            return JS::Int32Value(mGLMaxTextureSize);
+            return JS::Int32Value(mImplMaxTextureSize);
 
         case LOCAL_GL_MAX_CUBE_MAP_TEXTURE_SIZE:
-            return JS::Int32Value(mGLMaxCubeMapTextureSize);
+            return JS::Int32Value(mImplMaxCubeMapTextureSize);
 
         case LOCAL_GL_MAX_RENDERBUFFER_SIZE:
-            return JS::Int32Value(mGLMaxRenderbufferSize);
+            return JS::Int32Value(mImplMaxRenderbufferSize);
 
         case LOCAL_GL_MAX_VERTEX_UNIFORM_VECTORS:
             return JS::Int32Value(mGLMaxVertexUniformVectors);
@@ -449,13 +554,13 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
 
         // bool, WebGL-specific
         case UNPACK_FLIP_Y_WEBGL:
-            return JS::BooleanValue(mPixelStoreFlipY);
+            return JS::BooleanValue(mPixelStore_FlipY);
         case UNPACK_PREMULTIPLY_ALPHA_WEBGL:
-            return JS::BooleanValue(mPixelStorePremultiplyAlpha);
+            return JS::BooleanValue(mPixelStore_PremultiplyAlpha);
 
         // uint, WebGL-specific
         case UNPACK_COLORSPACE_CONVERSION_WEBGL:
-            return JS::NumberValue(uint32_t(mPixelStoreColorspaceConversion));
+            return JS::NumberValue(uint32_t(mPixelStore_ColorspaceConversion));
 
         ////////////////////////////////
         // Complex values

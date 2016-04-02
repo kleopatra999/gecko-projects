@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
 #include "PackagedAppService.h"
 #include "nsICacheStorage.h"
 #include "LoadContextInfo.h"
@@ -13,11 +12,22 @@
 #include "nsIMultiPartChannel.h"
 #include "../../cache2/CacheFileUtils.h"
 #include "nsStreamUtils.h"
-#include "mozilla/Logging.h"
 #include "mozilla/DebugOnly.h"
 #include "nsIHttpHeaderVisitor.h"
 #include "mozilla/LoadContext.h"
 #include "nsIInstallPackagedWebapp.h"
+#include "mozilla/Logging.h"
+#include "nsHttpResponseHead.h"
+#include "nsICachingChannel.h"
+#include "nsStringStream.h"
+#include "nsIOutputStream.h"
+#include "nsIInputStream.h"
+#include "nsNetUtil.h"
+#include "nsICacheEntryOpenCallback.h"
+#include "nsIURL.h"
+#include "nsContentUtils.h"
+#include "nsIStreamConverterService.h"
+#include "nsMimeTypes.h"
 
 namespace mozilla {
 namespace net {
@@ -747,7 +757,7 @@ PackagedAppService::PackagedAppDownloader::AddCallback(nsIURI *aURI,
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread(), "mCallbacks hashtable is not thread safe");
   nsAutoCString spec;
-  aURI->GetAsciiSpec(spec);
+  aURI->GetSpecIgnoringRef(spec);
 
   LogURI("PackagedAppDownloader::AddCallback", this, aURI);
   LOG(("[%p]    > callback: %p\n", this, aCallback));
@@ -906,7 +916,7 @@ static bool
 AddPackageIdToOrigin(nsACString& aOrigin, const nsACString& aPackageId)
 {
   nsAutoCString originNoSuffix;
-  mozilla::OriginAttributes attrs;
+  mozilla::NeckoOriginAttributes attrs;
   if (!attrs.PopulateFromOrigin(aOrigin, originNoSuffix)) {
     return false;
   }
@@ -1129,7 +1139,7 @@ PackagedAppService::GetResource(nsIChannel *aChannel,
   nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
 
   nsCOMPtr<nsIURI> uri;
-  rv = principal->GetURI(getter_AddRefs(uri));
+  rv = aChannel->GetURI(getter_AddRefs(uri));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     LOG(("[%p]    > Error calling GetURI rv=%X\n", this, rv));
     return rv;

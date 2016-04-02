@@ -13,8 +13,10 @@
 #include "nsHttpChannel.h"
 #include "HttpChannelChild.h"
 #include "nsHttpResponseHead.h"
+#include "nsNetUtil.h"
 #include "mozilla/ConsoleReportCollector.h"
 #include "mozilla/dom/ChannelInfo.h"
+#include "nsIChannelEventSink.h"
 
 namespace mozilla {
 namespace net {
@@ -64,19 +66,18 @@ InterceptedChannelBase::EnsureSynthesizedResponse()
 void
 InterceptedChannelBase::DoNotifyController()
 {
-    nsCOMPtr<nsIFetchEventDispatcher> dispatcher;
-    nsresult rv = mController->ChannelIntercepted(this,
-                                                  getter_AddRefs(dispatcher));
+    nsresult rv = NS_OK;
+
+    if (NS_WARN_IF(!mController)) {
+      rv = ResetInterception();
+      NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to resume intercepted network request");
+      return;
+    }
+
+    rv = mController->ChannelIntercepted(this);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       rv = ResetInterception();
       NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to resume intercepted network request");
-    }
-    if (dispatcher) {
-      rv = dispatcher->Dispatch();
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        rv = ResetInterception();
-        NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to resume intercepted network request");
-      }
     }
     mController = nullptr;
 }
@@ -116,6 +117,31 @@ InterceptedChannelBase::GetConsoleReportCollector(nsIConsoleReportCollector** aC
   nsCOMPtr<nsIConsoleReportCollector> ref = mReportCollector;
   ref.forget(aCollectorOut);
   return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedChannelBase::SetReleaseHandle(nsISupports* aHandle)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!mReleaseHandle);
+  MOZ_ASSERT(aHandle);
+  mReleaseHandle = aHandle;
+  return NS_OK;
+}
+
+/* static */
+already_AddRefed<nsIURI>
+InterceptedChannelBase::SecureUpgradeChannelURI(nsIChannel* aChannel)
+{
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = aChannel->GetURI(getter_AddRefs(uri));
+  NS_ENSURE_SUCCESS(rv, nullptr);
+
+  nsCOMPtr<nsIURI> upgradedURI;
+  rv = NS_GetSecureUpgradedURI(uri, getter_AddRefs(upgradedURI));
+  NS_ENSURE_SUCCESS(rv, nullptr);
+
+  return upgradedURI.forget();
 }
 
 InterceptedChannelChrome::InterceptedChannelChrome(nsHttpChannel* aChannel,
@@ -172,6 +198,7 @@ InterceptedChannelChrome::ResetInterception()
   nsresult rv = mChannel->StartRedirectChannelToURI(uri, nsIChannelEventSink::REDIRECT_INTERNAL);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  mReleaseHandle = nullptr;
   mChannel = nullptr;
   return NS_OK;
 }
@@ -265,6 +292,7 @@ InterceptedChannelChrome::FinishSynthesizedResponse(const nsACString& aFinalURLS
       NS_ENSURE_SUCCESS(rv, rv);
     }
   }
+  mReleaseHandle = nullptr;
   mChannel = nullptr;
   return NS_OK;
 }
@@ -284,6 +312,7 @@ InterceptedChannelChrome::Cancel(nsresult aStatus)
   // to cancel which will provide OnStart/OnStopRequest to the channel.
   nsresult rv = mChannel->AsyncAbort(aStatus);
   NS_ENSURE_SUCCESS(rv, rv);
+  mReleaseHandle = nullptr;
   return NS_OK;
 }
 
@@ -309,12 +338,20 @@ InterceptedChannelChrome::GetInternalContentPolicyType(nsContentPolicyType* aPol
   return NS_OK;
 }
 
+NS_IMETHODIMP
+InterceptedChannelChrome::GetSecureUpgradedChannelURI(nsIURI** aURI)
+{
+  return mChannel->GetURI(aURI);
+}
+
 InterceptedChannelContent::InterceptedChannelContent(HttpChannelChild* aChannel,
                                                      nsINetworkInterceptController* aController,
-                                                     InterceptStreamListener* aListener)
+                                                     InterceptStreamListener* aListener,
+                                                     bool aSecureUpgrade)
 : InterceptedChannelBase(aController)
 , mChannel(aChannel)
 , mStreamListener(aListener)
+, mSecureUpgrade(aSecureUpgrade)
 {
 }
 
@@ -349,6 +386,7 @@ InterceptedChannelContent::ResetInterception()
   mSynthesizedInput = nullptr;
 
   mChannel->ResetInterception();
+  mReleaseHandle = nullptr;
   mChannel = nullptr;
   return NS_OK;
 }
@@ -391,6 +429,10 @@ InterceptedChannelContent::FinishSynthesizedResponse(const nsACString& aFinalURL
   if (!aFinalURLSpec.IsEmpty()) {
     nsresult rv = NS_NewURI(getter_AddRefs(responseURI), aFinalURLSpec);
     NS_ENSURE_SUCCESS(rv, rv);
+  } else if (mSecureUpgrade) {
+    nsresult rv = NS_GetSecureUpgradedURI(originalURI,
+                                          getter_AddRefs(responseURI));
+    NS_ENSURE_SUCCESS(rv, rv);
   } else {
     responseURI = originalURI;
   }
@@ -407,6 +449,7 @@ InterceptedChannelContent::FinishSynthesizedResponse(const nsACString& aFinalURL
   }
 
   mResponseBody = nullptr;
+  mReleaseHandle = nullptr;
   mChannel = nullptr;
   mStreamListener = nullptr;
   return NS_OK;
@@ -427,6 +470,7 @@ InterceptedChannelContent::Cancel(nsresult aStatus)
   // to cancel which will provide OnStart/OnStopRequest to the channel.
   nsresult rv = mChannel->AsyncAbort(aStatus);
   NS_ENSURE_SUCCESS(rv, rv);
+  mReleaseHandle = nullptr;
   mChannel = nullptr;
   mStreamListener = nullptr;
   return NS_OK;
@@ -453,6 +497,23 @@ InterceptedChannelContent::GetInternalContentPolicyType(nsContentPolicyType* aPo
 
   *aPolicyType = loadInfo->InternalContentPolicyType();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedChannelContent::GetSecureUpgradedChannelURI(nsIURI** aURI)
+{
+  nsCOMPtr<nsIURI> uri;
+  if (mSecureUpgrade) {
+    uri = SecureUpgradeChannelURI(mChannel);
+  } else {
+    nsresult rv = mChannel->GetURI(getter_AddRefs(uri));
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  if (uri) {
+    uri.forget(aURI);
+    return NS_OK;
+  }
+  return NS_ERROR_FAILURE;
 }
 
 } // namespace net

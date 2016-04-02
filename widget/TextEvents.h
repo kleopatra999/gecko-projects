@@ -16,6 +16,7 @@
 #include "mozilla/FontRange.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMKeyEvent.h"
+#include "nsISelectionListener.h"
 #include "nsITransferable.h"
 #include "nsRect.h"
 #include "nsStringGlue.h"
@@ -70,6 +71,26 @@ struct AlternativeCharCode
 };
 
 /******************************************************************************
+ * mozilla::ShortcutKeyCandidate
+ *
+ * This stores a candidate of shortcut key combination.
+ ******************************************************************************/
+
+struct ShortcutKeyCandidate
+{
+  ShortcutKeyCandidate(uint32_t aCharCode, bool aIgnoreShift)
+    : mCharCode(aCharCode)
+    , mIgnoreShift(aIgnoreShift)
+  {
+  }
+  // The charCode value which must match keyboard shortcut definition.
+  uint32_t mCharCode;
+  // true if Shift state can be ignored.  Otherwise, Shift key state must
+  // match keyboard shortcut definition.
+  bool mIgnoreShift;
+};
+
+/******************************************************************************
  * mozilla::WidgetKeyboardEvent
  ******************************************************************************/
 
@@ -81,18 +102,9 @@ private:
 
 protected:
   WidgetKeyboardEvent()
-  {
-  }
-
-public:
-  virtual WidgetKeyboardEvent* AsKeyboardEvent() override { return this; }
-
-  WidgetKeyboardEvent(bool aIsTrusted, EventMessage aMessage,
-                      nsIWidget* aWidget,
-                      EventClassID aEventClassID = eKeyboardEventClass)
-    : WidgetInputEvent(aIsTrusted, aMessage, aWidget, aEventClassID)
-    , keyCode(0)
+    : keyCode(0)
     , charCode(0)
+    , mPseudoCharCode(0)
     , location(nsIDOMKeyEvent::DOM_KEY_LOCATION_STANDARD)
     , isChar(false)
     , mIsRepeat(false)
@@ -105,6 +117,35 @@ public:
     , mNativeKeyCode(0)
     , mNativeModifierFlags(0)
 #endif
+    , mInputMethodAppState(eNotHandled)
+    , mIsSynthesizedByTIP(false)
+  {
+  }
+
+public:
+  virtual WidgetKeyboardEvent* AsKeyboardEvent() override { return this; }
+
+  WidgetKeyboardEvent(bool aIsTrusted, EventMessage aMessage,
+                      nsIWidget* aWidget,
+                      EventClassID aEventClassID = eKeyboardEventClass)
+    : WidgetInputEvent(aIsTrusted, aMessage, aWidget, aEventClassID)
+    , keyCode(0)
+    , charCode(0)
+    , mPseudoCharCode(0)
+    , location(nsIDOMKeyEvent::DOM_KEY_LOCATION_STANDARD)
+    , isChar(false)
+    , mIsRepeat(false)
+    , mIsComposing(false)
+    , mKeyNameIndex(mozilla::KEY_NAME_INDEX_Unidentified)
+    , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
+    , mNativeKeyEvent(nullptr)
+    , mUniqueId(0)
+#ifdef XP_MACOSX
+    , mNativeKeyCode(0)
+    , mNativeModifierFlags(0)
+#endif
+    , mInputMethodAppState(eNotHandled)
+    , mIsSynthesizedByTIP(false)
   {
   }
 
@@ -128,6 +169,10 @@ public:
   // character when some modifiers are active.  Then, this value should be an
   // unmodified value except Shift and AltGr.
   uint32_t charCode;
+  // mPseudoCharCode is valid only when mMessage is an eKeyDown event.
+  // This stores charCode value of keypress event which is fired with same
+  // key value and same modifier state.
+  uint32_t mPseudoCharCode;
   // One of nsIDOMKeyEvent::DOM_KEY_LOCATION_*
   uint32_t location;
   // OS translated Unicode chars which are used for accesskey and accelkey
@@ -170,9 +215,41 @@ public:
   nsString mPluginTextEventString;
 #endif
 
+  // Indicates that the event is being handled by input method app
+  typedef uint8_t InputMethodAppStateType;
+  enum InputMethodAppState : InputMethodAppStateType
+  {
+    eNotHandled, // not yet handled by intput method app
+    eHandling,   // being handled by intput method app
+    eHandled     // handled by input method app
+  };
+  InputMethodAppState mInputMethodAppState;
+
+  // Indicates whether the event is synthesized from Text Input Processor
+  // or an actual event from nsAppShell.
+  bool mIsSynthesizedByTIP;
+
   // If the key should cause keypress events, this returns true.
   // Otherwise, false.
   bool ShouldCauseKeypressEvents() const;
+
+  // charCode value of non-eKeyPress events is always 0.  However, if
+  // non-eKeyPress event has one or more alternative char code values,
+  // its first item should be the charCode value of following eKeyPress event.
+  // PseudoCharCode() returns charCode value for eKeyPress event,
+  // the first alternative char code value of non-eKeyPress event or 0.
+  uint32_t PseudoCharCode() const
+  {
+    return mMessage == eKeyPress ? charCode : mPseudoCharCode;
+  }
+  void SetCharCode(uint32_t aCharCode)
+  {
+    if (mMessage == eKeyPress) {
+      charCode = aCharCode;
+    } else {
+      mPseudoCharCode = aCharCode;
+    }
+  }
 
   void GetDOMKeyName(nsAString& aKeyName)
   {
@@ -195,6 +272,22 @@ public:
   {
     return GetModifierForKeyName(mKeyNameIndex) != MODIFIER_NONE;
   }
+
+  /**
+   * Get the candidates for shortcut key.
+   *
+   * @param aCandidates [out] the candidate shortcut key combination list.
+   *                          the first item is most preferred.
+   */
+  void GetShortcutKeyCandidates(ShortcutKeyCandidateArray& aCandidates);
+
+  /**
+   * Get the candidates for access key.
+   *
+   * @param aCandidates [out] the candidate access key list.
+   *                          the first item is most preferred.
+   */
+  void GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates);
 
   static void Shutdown();
 
@@ -241,6 +334,7 @@ public:
 
     keyCode = aEvent.keyCode;
     charCode = aEvent.charCode;
+    mPseudoCharCode = aEvent.mPseudoCharCode;
     location = aEvent.location;
     alternativeCharCodes = aEvent.alternativeCharCodes;
     isChar = aEvent.isChar;
@@ -262,11 +356,13 @@ public:
       Assign(aEvent.mNativeCharactersIgnoringModifiers);
     mPluginTextEventString.Assign(aEvent.mPluginTextEventString);
 #endif
+    mInputMethodAppState = aEvent.mInputMethodAppState;
+    mIsSynthesizedByTIP = aEvent.mIsSynthesizedByTIP;
   }
 
 private:
-  static const char16_t* kKeyNames[];
-  static const char16_t* kCodeNames[];
+  static const char16_t* const kKeyNames[];
+  static const char16_t* const kCodeNames[];
   typedef nsDataHashtable<nsStringHashKey,
                           KeyNameIndex> KeyNameIndexHashtable;
   typedef nsDataHashtable<nsStringHashKey,
@@ -365,6 +461,7 @@ public:
   WidgetCompositionEvent(bool aIsTrusted, EventMessage aMessage,
                          nsIWidget* aWidget)
     : WidgetGUIEvent(aIsTrusted, aMessage, aWidget, eCompositionEventClass)
+    , mNativeIMEContext(aWidget)
     , mOriginalMessage(eVoidEvent)
   {
     // XXX compositionstart is cancelable in draft of DOM3 Events.
@@ -391,6 +488,10 @@ public:
   nsString mData;
 
   RefPtr<TextRangeArray> mRanges;
+
+  // mNativeIMEContext stores the native IME context which causes the
+  // composition event.
+  widget::NativeIMEContext mNativeIMEContext;
 
   // If the instance is a clone of another event, mOriginalMessage stores
   // the another event's mMessage.
@@ -464,6 +565,9 @@ private:
   friend class dom::PBrowserChild;
 
   WidgetQueryContentEvent()
+    : mSucceeded(false)
+    , mUseNativeLineBreak(true)
+    , mWithFontRanges(false)
   {
     MOZ_CRASH("WidgetQueryContentEvent is created without proper arguments");
   }
@@ -489,7 +593,6 @@ public:
     NS_ASSERTION(!IsAllowedToDispatchDOMEvent(),
       "WidgetQueryContentEvent needs to support Duplicate()");
     MOZ_CRASH("WidgetQueryContentEvent doesn't support Duplicate()");
-    return nullptr;
   }
 
   void InitForQueryTextContent(uint32_t aOffset, uint32_t aLength,
@@ -595,7 +698,7 @@ public:
     // Used by eQuerySelectionAsTransferable
     nsCOMPtr<nsITransferable> mTransferable;
     // Used by eQueryTextContent with font ranges requested
-    nsAutoTArray<mozilla::FontRange, 1> mFontRanges;
+    AutoTArray<mozilla::FontRange, 1> mFontRanges;
     // true if selection is reversed (end < start)
     bool mReversed;
     // true if the selection exists
@@ -645,6 +748,7 @@ private:
     , mReversed(false)
     , mExpandToClusterBoundary(true)
     , mSucceeded(false)
+    , mUseNativeLineBreak(true)
   {
   }
 
@@ -663,6 +767,7 @@ public:
     , mExpandToClusterBoundary(true)
     , mSucceeded(false)
     , mUseNativeLineBreak(true)
+    , mReason(nsISelectionListener::NO_REASON)
   {
   }
 
@@ -687,6 +792,9 @@ public:
   bool mSucceeded;
   // true if native line breaks are used for mOffset and mLength
   bool mUseNativeLineBreak;
+  // Fennec provides eSetSelection reason codes for downstream
+  // use in AccessibleCaret visibility logic.
+  int16_t mReason;
 };
 
 /******************************************************************************
