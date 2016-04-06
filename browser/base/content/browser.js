@@ -2526,6 +2526,7 @@ var gMenuButtonUpdateBadge = {
   enabled: false,
   badgeWaitTime: 0,
   timer: null,
+  cancelObserverRegistered: false,
 
   init: function () {
     try {
@@ -2550,6 +2551,10 @@ var gMenuButtonUpdateBadge = {
       Services.obs.removeObserver(this, "update-downloaded");
       this.enabled = false;
     }
+    if (this.cancelObserverRegistered) {
+      Services.obs.removeObserver(this, "update-canceled");
+      this.cancelObserverRegistered = false;
+    }
   },
 
   onMenuPanelCommand: function(event) {
@@ -2570,11 +2575,15 @@ var gMenuButtonUpdateBadge = {
   },
 
   observe: function (subject, topic, status) {
+    if (topic == "update-canceled") {
+      this.reset();
+      return;
+    }
     if (status == "failed") {
       // Background update has failed, let's show the UI responsible for
       // prompting the user to update manually.
-      this.displayBadge(false);
       this.uninit();
+      this.displayBadge(false);
       return;
     }
 
@@ -2589,8 +2598,8 @@ var gMenuButtonUpdateBadge = {
     // If the update is successfully applied, or if the updater has fallen back
     // to non-staged updates, add a badge to the hamburger menu to indicate an
     // update will be applied once the browser restarts.
-    this.displayBadge(true);
     this.uninit();
+    this.displayBadge(true);
   },
 
   displayBadge: function (succeeded) {
@@ -2606,6 +2615,8 @@ var gMenuButtonUpdateBadge = {
       stringId = "appmenu.restartNeeded.description";
       updateButtonText = gNavigatorBundle.getFormattedString(stringId,
                                                              [brandShortName]);
+      Services.obs.addObserver(this, "update-canceled", false);
+      this.cancelObserverRegistered = true;
     } else {
       stringId = "appmenu.updateFailed.description";
       updateButtonText = gNavigatorBundle.getString(stringId);
@@ -2615,6 +2626,15 @@ var gMenuButtonUpdateBadge = {
     updateButton.setAttribute("label", updateButtonText);
     updateButton.setAttribute("update-status", status);
     updateButton.hidden = false;
+  },
+
+  reset: function () {
+    gMenuButtonBadgeManager.removeBadge(
+      gMenuButtonBadgeManager.BADGEID_APPUPDATE);
+    let updateButton = document.getElementById("PanelUI-update-status");
+    updateButton.hidden = true;
+    this.uninit();
+    this.init();
   }
 };
 
