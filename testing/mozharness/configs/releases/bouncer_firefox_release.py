@@ -6,7 +6,7 @@ config = {
             "product-name": "Firefox-%(version)s",
             "alias": "firefox-latest",
             "ssl-only": False,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/releases/%(version)s/linux-i686/:lang/firefox-%(version)s.tar.bz2",
@@ -49,7 +49,7 @@ config = {
         "installer-ssl": {
             "product-name": "Firefox-%(version)s-SSL",
             "ssl-only": True,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/releases/%(version)s/linux-i686/:lang/firefox-%(version)s.tar.bz2",
@@ -93,7 +93,7 @@ config = {
             "product-name": "Firefox-%(version)s-stub",
             "alias": "firefox-stub",
             "ssl-only": True,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "win32": {
                     "path": "/firefox/releases/%(version)s/win32/:lang/Firefox%%20Setup%%20Stub%%20%(version)s.exe",
@@ -108,7 +108,7 @@ config = {
         "complete-mar": {
             "product-name": "Firefox-%(version)s-Complete",
             "ssl-only": False,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/releases/%(version)s/update/linux-i686/:lang/firefox-%(version)s.complete.mar",
@@ -151,7 +151,7 @@ config = {
         "complete-mar-candidates": {
             "product-name": "Firefox-%(version)sbuild%(build_number)s-Complete",
             "ssl-only": False,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/candidates/%(version)s-candidates/build%(build_number)s/update/linux-i686/:lang/firefox-%(version)s.complete.mar",
@@ -180,7 +180,7 @@ config = {
         "releases-dir": {
             "product-name": "Firefox-%(version)s-Partial-%(prev_version)s",
             "ssl-only": False,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/releases/%(version)s/update/linux-i686/:lang/firefox-%(prev_version)s-%(version)s.partial.mar",
@@ -223,7 +223,7 @@ config = {
         "candidates-dir": {
             "product-name": "Firefox-%(version)sbuild%(build_number)s-Partial-%(prev_version)sbuild%(prev_build_number)s",
             "ssl-only": False,
-            "add-locales": True,
+            "add-locales": False,
             "paths": {
                 "linux": {
                     "path": "/firefox/candidates/%(version)s-candidates/build%(build_number)s/update/linux-i686/:lang/firefox-%(prev_version)s-%(version)s.partial.mar",
