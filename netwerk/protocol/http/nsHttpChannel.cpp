@@ -1798,18 +1798,33 @@ nsHttpChannel::ContinueProcessResponse1(nsresult rv)
         break;
     }
 
-    CacheDisposition cacheDisposition;
-    if (!mDidReval)
-        cacheDisposition = kCacheMissed;
-    else if (successfulReval)
-        cacheDisposition = kCacheHitViaReval;
-    else
-        cacheDisposition = kCacheMissedViaReval;
+    if (gHttpHandler->IsTelemetryEnabled()) {
+        CacheDisposition cacheDisposition;
+        if (!mDidReval) {
+            cacheDisposition = kCacheMissed;
+        } else if (successfulReval) {
+            cacheDisposition = kCacheHitViaReval;
+        } else {
+            cacheDisposition = kCacheMissedViaReval;
+        }
+        AccumulateCacheHitTelemetry(cacheDisposition);
 
-    AccumulateCacheHitTelemetry(cacheDisposition);
-    Telemetry::Accumulate(Telemetry::HTTP_RESPONSE_VERSION,
-                          mResponseHead->Version());
+        Telemetry::Accumulate(Telemetry::HTTP_RESPONSE_VERSION,
+                              mResponseHead->Version());
 
+        if (mResponseHead->Version() == NS_HTTP_VERSION_0_9) {
+            // DefaultPortTopLevel = 0, DefaultPortSubResource = 1,
+            // NonDefaultPortTopLevel = 2, NonDefaultPortSubResource = 3
+            uint32_t v09Info = 0;
+            if (!(mLoadFlags & LOAD_INITIAL_DOCUMENT_URI)) {
+                v09Info += 1;
+            }
+            if (mConnectionInfo->OriginPort() != mConnectionInfo->DefaultPort()) {
+                v09Info += 2;
+            }
+            Telemetry::Accumulate(Telemetry::HTTP_09_INFO, v09Info);
+        }
+    }
     return rv;
 }
 
@@ -6179,7 +6194,10 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
 
     if (mListener) {
         LOG(("  calling OnStopRequest\n"));
+        MOZ_ASSERT(!mOnStopRequestCalled,
+                   "We should not call OnStopRequest twice");
         mListener->OnStopRequest(this, mListenerContext, status);
+        mOnStopRequestCalled = true;
     }
 
     CloseCacheEntry(!contentComplete);

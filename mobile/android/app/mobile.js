@@ -426,8 +426,6 @@ pref("javascript.options.mem.high_water_mark", 32);
 pref("dom.max_chrome_script_run_time", 0); // disable slow script dialog for chrome
 pref("dom.max_script_run_time", 20);
 
-// JS error console
-pref("devtools.errorconsole.enabled", false);
 // Absolute path to the devtools unix domain socket file used
 // to communicate with a usb cable via adb forward.
 pref("devtools.debugger.unix-domain-socket", "/data/data/@ANDROID_PACKAGE_NAME@/firefox-debugger-socket");
@@ -580,7 +578,6 @@ pref("ui.dragThresholdX", 25);
 pref("ui.dragThresholdY", 25);
 
 pref("layers.acceleration.disabled", false);
-pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.async-video.enabled", true);
 
 #ifdef MOZ_ANDROID_APZ

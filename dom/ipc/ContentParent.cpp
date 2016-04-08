@@ -88,6 +88,7 @@
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/SharedBufferManagerParent.h"
+#include "mozilla/layout/RenderFrameParent.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/media/MediaParent.h"
 #include "mozilla/Move.h"
@@ -303,6 +304,7 @@ using namespace mozilla::gmp;
 using namespace mozilla::hal;
 using namespace mozilla::ipc;
 using namespace mozilla::layers;
+using namespace mozilla::layout;
 using namespace mozilla::net;
 using namespace mozilla::jsipc;
 using namespace mozilla::psm;
@@ -1201,9 +1203,11 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
         constructorSender->IsForApp(),
         constructorSender->IsForBrowser());
 
-      RefPtr<TabParent> constructedTabParent = TabParent::GetFrom(browser);
-      constructedTabParent->SetOwnerElement(aFrameElement);
-      return constructedTabParent;
+      if (browser) {
+        RefPtr<TabParent> constructedTabParent = TabParent::GetFrom(browser);
+        constructedTabParent->SetOwnerElement(aFrameElement);
+        return constructedTabParent;
+      }
     }
     return nullptr;
   }
@@ -3134,6 +3138,27 @@ ContentParent::Observe(nsISupports* aSubject,
     NS_ASSERTION(!mSubprocess, "Close should have nulled mSubprocess");
   }
 
+#ifdef MOZ_ENABLE_PROFILER_SPS
+  // Need to do this before the mIsAlive check to avoid missing profiles.
+  if (!strcmp(aTopic, "profiler-subprocess-gather")) {
+    if (mGatherer) {
+      mGatherer->WillGatherOOPProfile();
+      if (mIsAlive && mSubprocess) {
+        Unused << SendGatherProfile();
+      }
+    }
+  }
+  else if (!strcmp(aTopic, "profiler-subprocess")) {
+    nsCOMPtr<nsIProfileSaveEvent> pse = do_QueryInterface(aSubject);
+    if (pse) {
+      if (!mProfile.IsEmpty()) {
+        pse->AddSubProfile(mProfile.get());
+        mProfile.Truncate();
+      }
+    }
+  }
+#endif
+
   if (!mIsAlive || !mSubprocess)
     return NS_OK;
 
@@ -3294,21 +3319,6 @@ ContentParent::Observe(nsISupports* aSubject,
   }
   else if (!strcmp(aTopic, "profiler-resumed")) {
     Unused << SendPauseProfiler(false);
-  }
-  else if (!strcmp(aTopic, "profiler-subprocess-gather")) {
-    if (mGatherer) {
-      mGatherer->WillGatherOOPProfile();
-      Unused << SendGatherProfile();
-    }
-  }
-  else if (!strcmp(aTopic, "profiler-subprocess")) {
-    nsCOMPtr<nsIProfileSaveEvent> pse = do_QueryInterface(aSubject);
-    if (pse) {
-      if (!mProfile.IsEmpty()) {
-        pse->AddSubProfile(mProfile.get());
-        mProfile.Truncate();
-      }
-    }
   }
 #endif
   else if (!strcmp(aTopic, "gmp-changed")) {
@@ -5330,6 +5340,7 @@ ContentParent::DeallocPWebBrowserPersistDocumentParent(PWebBrowserPersistDocumen
 bool
 ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
                                 PBrowserParent* aNewTab,
+                                PRenderFrameParent* aRenderFrame,
                                 const uint32_t& aChromeFlags,
                                 const bool& aCalledFromJS,
                                 const bool& aPositionSpecified,
@@ -5343,7 +5354,9 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
                                 nsresult* aResult,
                                 bool* aWindowIsNew,
                                 InfallibleTArray<FrameScriptInfo>* aFrameScripts,
-                                nsCString* aURLToLoad)
+                                nsCString* aURLToLoad,
+                                TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                uint64_t* aLayersId)
 {
   // We always expect to open a new window here. If we don't, it's an error.
   *aWindowIsNew = true;
@@ -5428,7 +5441,7 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
   // Opening new tabs is the easy case...
   if (openLocation == nsIBrowserDOMWindow::OPEN_NEWTAB) {
     if (NS_WARN_IF(!browserDOMWin)) {
-      *aResult = NS_ERROR_FAILURE;
+      *aResult = NS_ERROR_ABORT;
       return true;
     }
 
@@ -5455,6 +5468,13 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
     }
 
     newTab->SwapFrameScriptsFrom(*aFrameScripts);
+
+    RenderFrameParent* rfp = static_cast<RenderFrameParent*>(aRenderFrame);
+    if (!newTab->SetRenderFrame(rfp) ||
+        !newTab->GetRenderFrameInfo(aTextureFactoryIdentifier, aLayersId)) {
+      *aResult = NS_ERROR_FAILURE;
+    }
+
     return true;
   }
 
@@ -5534,6 +5554,13 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
   MOZ_ASSERT(TabParent::GetFrom(newRemoteTab) == newTab);
 
   newTab->SwapFrameScriptsFrom(*aFrameScripts);
+
+  RenderFrameParent* rfp = static_cast<RenderFrameParent*>(aRenderFrame);
+  if (!newTab->SetRenderFrame(rfp) ||
+      !newTab->GetRenderFrameInfo(aTextureFactoryIdentifier, aLayersId)) {
+    *aResult = NS_ERROR_FAILURE;
+  }
+
   return true;
 }
 

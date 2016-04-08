@@ -614,6 +614,20 @@ public class BrowserApp extends GeckoApp
         mActionBar = (ActionModeCompatView) findViewById(R.id.actionbar);
 
         mBrowserToolbar = (BrowserToolbar) findViewById(R.id.browser_toolbar);
+        mBrowserToolbar.setTouchEventInterceptor(new TouchEventInterceptor() {
+            @Override
+            public boolean onInterceptTouchEvent(View view, MotionEvent event) {
+                // Manually dismiss text selection bar if it's not overlaying the toolbar.
+                mTextSelection.dismiss();
+                return false;
+            }
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                return false;
+            }
+        });
+
         mProgressView = (ToolbarProgressView) findViewById(R.id.progress);
         mBrowserToolbar.setProgressBar(mProgressView);
 
@@ -817,27 +831,22 @@ public class BrowserApp extends GeckoApp
         final String hostExtra = ContextUtils.getStringExtra(intent, INTENT_KEY_SWITCHBOARD_HOST);
         final String host = TextUtils.isEmpty(hostExtra) ? DEFAULT_SWITCHBOARD_HOST : hostExtra;
 
-        final String configServerUpdateUrl;
-        final String configServerUrl;
+        final String serverUrl;
         try {
-            configServerUpdateUrl = new URL("https", host, "urls").toString();
-            configServerUrl = new URL("https", host, "v1").toString();
+            serverUrl = new URL("https", host, "v2").toString();
         } catch (MalformedURLException e) {
             Log.e(LOGTAG, "Error creating Switchboard server URL", e);
             return;
         }
 
-        SwitchBoard.initDefaultServerUrls(configServerUpdateUrl, configServerUrl, true);
-
         final String switchboardUUID = ContextUtils.getStringExtra(intent, INTENT_KEY_SWITCHBOARD_UUID);
         SwitchBoard.setUUIDFromExtra(switchboardUUID);
 
-        // Looks at the server if there are changes in the server URL that should be used in the future
-        new AsyncConfigLoader(this, AsyncConfigLoader.UPDATE_SERVER, switchboardUUID).execute();
-
-        // Loads the actual config. This can be done on app start or on app onResume() depending
-        // how often you want to update the config.
-        new AsyncConfigLoader(this, AsyncConfigLoader.CONFIG_SERVER, switchboardUUID).execute();
+        // Loads the Switchboard config from the specified server URL. Eventually, we
+        // should use the endpoint returned by the server URL, to support migrating
+        // to a new endpoint. However, if we want to do that, we'll need to find a different
+        // solution for dynamically changing the server URL from the intent.
+        new AsyncConfigLoader(this, switchboardUUID, serverUrl).execute();
     }
 
     private void showUpdaterPermissionSnackbar() {
@@ -951,6 +960,10 @@ public class BrowserApp extends GeckoApp
 
     @Override
     public void onBackPressed() {
+        if (mTextSelection.dismiss()) {
+            return;
+        }
+
         if (getSupportFragmentManager().getBackStackEntryCount() > 0) {
             super.onBackPressed();
             return;
@@ -1004,7 +1017,7 @@ public class BrowserApp extends GeckoApp
         Telemetry.addToHistogram("FENNEC_TABQUEUE_QUEUESIZE", queuedTabCount);
         Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.INTENT, "tabqueue-delayed");
 
-        TabQueueHelper.openQueuedUrls(BrowserApp.this, mProfile, TabQueueHelper.FILE_NAME, false);
+        TabQueueHelper.openQueuedUrls(BrowserApp.this, getProfile(), TabQueueHelper.FILE_NAME, false);
 
         // If there's more than one tab then also show the tabs panel.
         if (queuedTabCount > 1) {
@@ -1770,7 +1783,6 @@ public class BrowserApp extends GeckoApp
             Telemetry.addToHistogram("FENNEC_BOOKMARKS_COUNT", db.getCount(cr, "bookmarks"));
             Telemetry.addToHistogram("FENNEC_READING_LIST_COUNT", db.getReadingListAccessor().getCount(cr));
             Telemetry.addToHistogram("BROWSER_IS_USER_DEFAULT", (isDefaultBrowser(Intent.ACTION_VIEW) ? 1 : 0));
-            Telemetry.addToHistogram("FENNEC_TABQUEUE_ENABLED", (TabQueueHelper.isTabQueueEnabled(BrowserApp.this) ? 1 : 0));
             Telemetry.addToHistogram("FENNEC_CUSTOM_HOMEPAGE", (TextUtils.isEmpty(getHomepage()) ? 0 : 1));
             final SharedPreferences prefs = GeckoSharedPrefs.forProfile(getContext());
             final boolean hasCustomHomepanels = prefs.contains(HomeConfigPrefsBackend.PREFS_CONFIG_KEY) || prefs.contains(HomeConfigPrefsBackend.PREFS_CONFIG_KEY_OLD);
@@ -3383,7 +3395,7 @@ public class BrowserApp extends GeckoApp
 
         charEncoding.setVisible(GeckoPreferences.getCharEncodingState());
 
-        if (mProfile.inGuestMode()) {
+        if (getProfile().inGuestMode()) {
             exitGuestMode.setVisible(true);
         } else {
             enterGuestMode.setVisible(true);
@@ -3792,6 +3804,7 @@ public class BrowserApp extends GeckoApp
             // Launched from a "content notification"
             if (intent.hasExtra(CheckForUpdatesAction.EXTRA_CONTENT_NOTIFICATION)) {
                 Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.NOTIFICATION, "content_update");
+                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.INTENT, "content_update");
             }
         }
 
@@ -3943,11 +3956,6 @@ public class BrowserApp extends GeckoApp
     @Override
     public int getLayout() { return R.layout.gecko_app; }
 
-    @Override
-    protected String getDefaultProfileName() throws NoMozillaDirectoryException {
-        return GeckoProfile.getDefaultProfileName(this);
-    }
-
     // For use from tests only.
     @RobocopTarget
     public ReadingListHelper getReadingListHelper() {
@@ -4093,17 +4101,23 @@ public class BrowserApp extends GeckoApp
     }
 
     @Override
-    protected StartupAction getStartupAction(final String passedURL, final String action) {
-        final boolean inGuestMode = GeckoProfile.get(this).inGuestMode();
-        if (inGuestMode) {
-            return StartupAction.GUEST;
-        }
-        if (Restrictions.isRestrictedProfile(this)) {
-            return StartupAction.RESTRICTED;
-        }
+    protected void recordStartupActionTelemetry(final String passedURL, final String action) {
+        final TelemetryContract.Method method;
         if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
-            return StartupAction.SHORTCUT;
+            // This action is also recorded via "loadurl.1" > "homescreen".
+            method = TelemetryContract.Method.HOMESCREEN;
+        } else if (passedURL == null) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.LAUNCH, TelemetryContract.Method.HOMESCREEN, "launcher");
+            method = TelemetryContract.Method.HOMESCREEN;
+        } else {
+            // This is action is also recorded via "loadurl.1" > "intent".
+            method = TelemetryContract.Method.INTENT;
         }
-        return (passedURL == null ? StartupAction.NORMAL : StartupAction.URL);
+
+        if (GeckoProfile.get(this).inGuestMode()) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.LAUNCH, method, "guest");
+        } else if (Restrictions.isRestrictedProfile(this)) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.LAUNCH, method, "restricted");
+        }
     }
 }

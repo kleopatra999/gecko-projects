@@ -2303,8 +2303,8 @@ EventStateManager::SendLineScrollEvent(nsIFrame* aTargetFrame,
   event.mTimeStamp = aEvent->mTimeStamp;
   event.mModifiers = aEvent->mModifiers;
   event.buttons = aEvent->buttons;
-  event.isHorizontal = (aDeltaDirection == DELTA_DIRECTION_X);
-  event.delta = aDelta;
+  event.mIsHorizontal = (aDeltaDirection == DELTA_DIRECTION_X);
+  event.mDelta = aDelta;
   event.inputSource = aEvent->inputSource;
 
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -2343,8 +2343,8 @@ EventStateManager::SendPixelScrollEvent(nsIFrame* aTargetFrame,
   event.mTimeStamp = aEvent->mTimeStamp;
   event.mModifiers = aEvent->mModifiers;
   event.buttons = aEvent->buttons;
-  event.isHorizontal = (aDeltaDirection == DELTA_DIRECTION_X);
-  event.delta = aPixelDelta;
+  event.mIsHorizontal = (aDeltaDirection == DELTA_DIRECTION_X);
+  event.mDelta = aPixelDelta;
   event.inputSource = aEvent->inputSource;
 
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -3176,19 +3176,6 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       if (pluginFrame) {
         MOZ_ASSERT(pluginFrame->WantsToHandleWheelEventAsDefaultAction());
         action = WheelPrefs::ACTION_SEND_TO_PLUGIN;
-      } else if (!wheelEvent->mMayHaveMomentum &&
-            nsLayoutUtils::IsScrollFrameWithSnapping(frameToScroll)) {
-        // If the target has scroll-snapping points then we want to handle
-        // the wheel event on the main thread even if we have APZ enabled. Do
-        // so and let the APZ know that it should ignore this event. However,
-        // if the wheel event is synthesized from a Mac trackpad or other device
-        // that can generate additional momentum events, then we should allow
-        // APZ to handle it, because it will track the velocity and predicted
-        // destination from the momentum.
-        if (wheelEvent->mFlags.mHandledByAPZ) {
-          wheelEvent->PreventDefault();
-        }
-        action = WheelPrefs::GetInstance()->ComputeActionFor(wheelEvent);
       } else if (wheelEvent->mFlags.mHandledByAPZ) {
         action = WheelPrefs::ACTION_NONE;
       } else {
@@ -4517,6 +4504,13 @@ EventStateManager::FireDragEnterOrExit(nsPresContext* aPresContext,
   // Finally dispatch the event to the frame
   if (aTargetFrame)
     aTargetFrame->HandleEvent(aPresContext, &event, &status);
+
+  if (aMessage == eDragExit && IsRemoteTarget(aTargetContent)) {
+    nsEventStatus status = nsEventStatus_eIgnore;
+    WidgetDragEvent remoteEvent(aDragEvent->IsTrusted(), aMessage, aDragEvent->widget);
+    remoteEvent.AssignDragEventData(*aDragEvent, true);
+    HandleCrossProcessEvent(&remoteEvent, &status);
+  }
 }
 
 void

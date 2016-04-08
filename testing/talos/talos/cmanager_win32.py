@@ -38,13 +38,13 @@ def _getExpandedCounterPaths(processName, counterName):
         LPSTR(None),
         pointer(pcchPathListLength)
     ) != _PDH_MORE_DATA:
-        return None
+        return []
 
     pathListLength = pcchPathListLength.value
     szExpandedPathList = LPCSTR('\0' * pathListLength)
     if pdh.PdhExpandCounterPathA(szWildCardPath, szExpandedPathList,
                                  pointer(pcchPathListLength)) != 0:
-        return None
+        return []
     buffer = create_string_buffer(pcchPathListLength.value)
     memmove(buffer, szExpandedPathList, pcchPathListLength.value)
 
@@ -85,7 +85,7 @@ class WinCounterManager(CounterManager):
 
     def __init__(self, process_name, process, counters,
                  childProcess="firefox-webcontent",
-                 pluginProcess="firefox-plugin-container"):
+                 pluginProcess="plugin-container"):
         CounterManager.__init__(self)
         self.childProcess = childProcess
         self.pluginProcess = pluginProcess

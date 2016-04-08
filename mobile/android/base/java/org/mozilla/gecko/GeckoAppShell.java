@@ -265,6 +265,7 @@ public class GeckoAppShell
     public static native void onFullScreenPluginHidden(View view);
 
     private static LayerView sLayerView;
+    private static Rect sScreenSize;
 
     public static void setLayerView(LayerView lv) {
         if (sLayerView == lv) {
@@ -384,56 +385,6 @@ public class GeckoAppShell
         }
         CRASH_HANDLER.uncaughtException(null, e);
         return null;
-    }
-
-    private static final Object sEventAckLock = new Object();
-    private static boolean sWaitingForEventAck;
-
-    // Block the current thread until the Gecko event loop is caught up
-    public static void sendEventToGeckoSync(GeckoEvent e) {
-        e.setAckNeeded(true);
-
-        long time = SystemClock.uptimeMillis();
-        boolean isUiThread = ThreadUtils.isOnUiThread();
-
-        synchronized (sEventAckLock) {
-            if (sWaitingForEventAck) {
-                // should never happen since we always leave it as false when we exit this function.
-                Log.e(LOGTAG, "geckoEventSync() may have been called twice concurrently!", new Exception());
-                // fall through for graceful handling
-            }
-
-            sendEventToGecko(e);
-            sWaitingForEventAck = true;
-            while (true) {
-                if (GeckoThread.isStateAtLeast(GeckoThread.State.EXITING)) {
-                    // Gecko is quitting; don't do anything.
-                    Log.d(LOGTAG, "Skipping Gecko event sync during exit");
-                    sWaitingForEventAck = false;
-                    return;
-                }
-
-                try {
-                    sEventAckLock.wait(1000);
-                } catch (InterruptedException ie) {
-                }
-                if (!sWaitingForEventAck) {
-                    // response received
-                    break;
-                }
-                long waited = SystemClock.uptimeMillis() - time;
-                Log.d(LOGTAG, "Gecko event sync taking too long: " + waited + "ms");
-            }
-        }
-    }
-
-    // Signal the Java thread that it's time to wake up
-    @WrapForJNI
-    public static void acknowledgeEvent() {
-        synchronized (sEventAckLock) {
-            sWaitingForEventAck = false;
-            sEventAckLock.notifyAll();
-        }
     }
 
     private static final Runnable sCallbackRunnable = new Runnable() {
@@ -1120,13 +1071,6 @@ public class GeckoAppShell
     }
 
     @WrapForJNI
-    public static void showInputMethodPicker() {
-        InputMethodManager imm = (InputMethodManager)
-            getApplicationContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        imm.showInputMethodPicker();
-    }
-
-    @WrapForJNI
     public static void setKeepScreenOn(final boolean on) {
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
@@ -1283,7 +1227,7 @@ public class GeckoAppShell
                 return true;
             }
         };
-            
+
         EnumerateGeckoProcesses(visitor);
     }
 
@@ -1305,7 +1249,7 @@ public class GeckoAppShell
 
             // figure out the column offsets.  We only care about the pid and user fields
             StringTokenizer st = new StringTokenizer(headerOutput);
-            
+
             int tokenSoFar = 0;
             while (st.hasMoreTokens()) {
                 String next = st.nextToken();
@@ -1438,7 +1382,7 @@ public class GeckoAppShell
         final MimeTypeMap mtm = MimeTypeMap.getSingleton();
         return mtm.getMimeTypeFromExtension(ext);
     }
-    
+
     private static Drawable getDrawableForExtension(PackageManager pm, String aExt) {
         Intent intent = new Intent(Intent.ACTION_VIEW);
         final String mimeType = getMimeTypeFromExtension(aExt);
@@ -2210,7 +2154,7 @@ public class GeckoAppShell
         if (Proxy.NO_PROXY.equals(proxy)) {
             return "DIRECT";
         }
-        
+
         switch (proxy.type()) {
             case HTTP:
                 return "PROXY " + proxy.address().toString();
@@ -2375,11 +2319,18 @@ public class GeckoAppShell
         return 0;
     }
 
+    public static synchronized void resetScreenSize() {
+        sScreenSize = null;
+    }
+
     @WrapForJNI
-    static Rect getScreenSize() {
-        final WindowManager wm = (WindowManager)
-                getApplicationContext().getSystemService(Context.WINDOW_SERVICE);
-        final Display disp = wm.getDefaultDisplay();
-        return new Rect(0, 0, disp.getWidth(), disp.getHeight());
+    public static synchronized Rect getScreenSize() {
+        if (sScreenSize == null) {
+            final WindowManager wm = (WindowManager)
+                    getApplicationContext().getSystemService(Context.WINDOW_SERVICE);
+            final Display disp = wm.getDefaultDisplay();
+            sScreenSize = new Rect(0, 0, disp.getWidth(), disp.getHeight());
+        }
+        return sScreenSize;
     }
 }

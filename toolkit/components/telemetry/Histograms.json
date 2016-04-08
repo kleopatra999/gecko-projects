@@ -526,6 +526,20 @@
     "kind": "boolean",
     "description": "Geolocation on OS X is either MLS or CoreLocation"
   },
+  "GEOLOCATION_GETCURRENTPOSITION_VISIBLE": {
+    "alert_emails": ["michelangelo@mozilla.com"],
+    "expires_in_version": "55",
+    "kind": "boolean",
+    "bug_numbers": [1255198],
+    "description": "This metric is recorded every time a navigator.geolocation.getCurrentPosition() request gets allowed/fulfilled. A false value is recorded if the owner is not visible according to document.isVisible."
+  },
+  "GEOLOCATION_WATCHPOSITION_VISIBLE": {
+    "alert_emails": ["michelangelo@mozilla.com"],
+    "expires_in_version": "55",
+    "kind": "boolean",
+    "bug_numbers": [1255198],
+    "description": "This metric is recorded every time a navigator.geolocation.watchPosition() request gets allowed/fulfilled. A false value is recorded if the owner is not visible according to document.isVisible."
+  },
   "JS_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT": {
     "alert_emails": ["jdemooij@mozilla.com"],
     "expires_in_version": "never",
@@ -1466,6 +1480,14 @@
     "kind": "enumerated",
     "n_values": 48,
     "description": "HTTP: Protocol Version Used on Response from nsHttp.h"
+  },
+  "HTTP_09_INFO": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 4,
+    "description": "HTTP 09 Response Breakdown: lowbit subresource, high bit nonstd port",
+    "bug_numbers": [1262572],
+    "alert_emails": ["necko@mozilla.com"]
   },
   "SPDY_PARALLEL_STREAMS": {
     "expires_in_version": "never",
@@ -3355,6 +3377,13 @@
     "n_values": 16,
     "bug_numbers": [1150921],
     "description": "Server HTTP status code from remote SafeBrowsing gethash lookups. (0=1xx, 1=200, 2=2xx, 3=204, 4=3xx, 5=400, 6=4xx, 7=403, 8=404, 9=408, 10=413, 11=5xx, 12=502|504|511, 13=503, 14=505, 15=Other)"
+  },
+  "URLCLASSIFIER_COMPLETE_TIMEOUT": {
+    "alert_emails": ["gcp@mozilla.com", "francois@mozilla.com"],
+    "expires_in_version": "52",
+    "kind": "boolean",
+    "bug_numbers": [1172688],
+    "description": "This metric is recorded every time a gethash lookup is performed, `true` is recorded if the lookup times out."
   },
   "CSP_DOCUMENTS_COUNT": {
     "alert_emails": ["seceng@mozilla.com"],
@@ -5259,13 +5288,6 @@
     "description": "Time for a URL bar DB search to return (ms)",
     "cpp_guard": "ANDROID"
   },
-  "FENNEC_GECKOAPP_STARTUP_ACTION": {
-    "expires_in_version": "never",
-    "kind": "enumerated",
-    "n_values": 10,
-    "description": "The way the GeckoApp was launched. (Normal, URL, Prefetch, WebApp, Guest, Restricted, Shortcut)",
-    "cpp_guard": "ANDROID"
-  },
   "FENNEC_RESTRICTED_PROFILE_RESTRICTIONS": {
     "expires_in_version": "50",
     "kind": "enumerated",
@@ -5381,6 +5403,22 @@
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "search service has been initialized synchronously"
+  },
+  "SEARCH_SERVICE_HAS_UPDATES": {
+    "alert_emails": ["florian@mozilla.com"],
+    "expires_in_version": "50",
+    "kind": "boolean",
+    "bug_numbers": [1259510],
+    "description": "Recorded once per session near startup: records true/false whether the search service has engines with update URLs.",
+    "releaseChannelCollection": "opt-out"
+  },
+  "SEARCH_SERVICE_HAS_ICON_UPDATES": {
+    "alert_emails": ["florian@mozilla.com"],
+    "expires_in_version": "50",
+    "kind": "boolean",
+    "bug_numbers": [1259510],
+    "description": "Recorded once per session near startup: records true/false whether the search service has engines with icon update URLs.",
+    "releaseChannelCollection": "opt-out"
   },
   "SEARCH_SERVICE_BUILD_CACHE_MS": {
     "expires_in_version": "40",
@@ -9320,23 +9358,6 @@
     "n_buckets": 10,
     "description": "The number of tabs queued when opened."
   },
-  "FENNEC_TABQUEUE_PROMPT_ENABLE_YES" : {
-    "expires_in_version": "never",
-    "kind": "enumerated",
-    "n_values": 3,
-    "description": "The number of times the tab queue prompt was seen before the user selected YES."
-  },
-  "FENNEC_TABQUEUE_PROMPT_ENABLE_NO" : {
-    "expires_in_version": "never",
-    "kind": "enumerated",
-    "n_values": 3,
-    "description": "The number of times the tab queue prompt was seen before the user selected NO."
-  },
-  "FENNEC_TABQUEUE_ENABLED": {
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Has the tab queue functionality been enabled."
-  },
   "FENNEC_CUSTOM_HOMEPAGE": {
     "expires_in_version": "50",
     "alert_emails": ["mobile-frontend@mozilla.com"],
@@ -10473,5 +10494,12 @@
     "n_buckets": 50,
     "keyed": true,
     "description": "Measures the size of message manager messages by message name"
+  },
+  "SANDBOX_BROKER_INITIALIZED": {
+    "alert_emails": ["bowen@mozilla.com"],
+    "bug_numbers": [1256992],
+    "expires_in_version": "55",
+    "kind": "boolean",
+    "description": "Result of call to SandboxBroker::Initialize"
   }
 }

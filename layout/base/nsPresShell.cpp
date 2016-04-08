@@ -4562,18 +4562,6 @@ PresShell::StyleRuleRemoved(StyleSheetHandle aStyleSheet)
 }
 
 nsIFrame*
-PresShell::GetRealPrimaryFrameFor(nsIContent* aContent) const
-{
-  if (aContent->GetComposedDoc() != GetDocument()) {
-    return nullptr;
-  }
-  nsIFrame *primaryFrame = aContent->GetPrimaryFrame();
-  if (!primaryFrame)
-    return nullptr;
-  return nsPlaceholderFrame::GetRealFrameFor(primaryFrame);
-}
-
-nsIFrame*
 PresShell::GetPlaceholderFrameFor(nsIFrame* aFrame) const
 {
   return mFrameConstructor->GetPlaceholderFrameFor(aFrame);
@@ -6015,14 +6003,31 @@ PresShell::AssumeAllFramesVisible()
     return true;
   }
 
-  // We assume all frames are visible in print, print preview, chrome, xul, and
+  // We assume all frames are visible in print, print preview, chrome, and
   // resource docs and don't keep track of them.
   if (mPresContext->Type() == nsPresContext::eContext_PrintPreview ||
       mPresContext->Type() == nsPresContext::eContext_Print ||
       mPresContext->IsChrome() ||
-      mDocument->IsResourceDoc() ||
-      mDocument->IsXULDocument()) {
+      mDocument->IsResourceDoc()) {
     return true;
+  }
+
+  // If we're assuming all frames are visible in the top level content
+  // document, we need to in subdocuments as well. Otherwise we can get in a
+  // situation where things like animations won't work in subdocuments because
+  // their frames appear not to be visible, since we won't schedule an image
+  // visibility update if the top level content document is assuming all
+  // frames are visible.
+  //
+  // Note that it's not safe to call IsRootContentDocument() if we're
+  // currently being destroyed, so we have to check that first.
+  if (!mHaveShutDown && !mIsDestroying &&
+      !mPresContext->IsRootContentDocument()) {
+    nsPresContext* presContext =
+      mPresContext->GetToplevelContentDocumentPresContext();
+    if (presContext && presContext->PresShell()->AssumeAllFramesVisible()) {
+      return true;
+    }
   }
 
   return false;
@@ -6254,9 +6259,6 @@ PresShell::Paint(nsView*        aViewToPaint,
   // we only want to do that when we have real content to paint.
   // See Bug 798245
   if (mIsFirstPaint && !mPaintingSuppressed) {
-#ifdef MOZ_WIDGET_ANDROID
-    __android_log_print(ANDROID_LOG_INFO, "GeckoBug1151102", "PresShell doing a first-paint");
-#endif
     layerManager->SetIsFirstPaint();
     mIsFirstPaint = false;
   }

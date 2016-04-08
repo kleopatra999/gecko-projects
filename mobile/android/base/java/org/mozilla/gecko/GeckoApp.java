@@ -5,9 +5,6 @@
 
 package org.mozilla.gecko;
 
-import android.content.ContentResolver;
-import android.widget.AdapterView;
-import android.widget.Button;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.db.BrowserDB;
@@ -34,6 +31,8 @@ import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.PromptService;
 import org.mozilla.gecko.restrictions.Restrictions;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
+import org.mozilla.gecko.text.FloatingToolbarTextSelection;
+import org.mozilla.gecko.text.TextSelection;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
 import org.mozilla.gecko.util.ActivityUtils;
@@ -48,10 +47,10 @@ import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.PrefUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
-
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -96,6 +95,8 @@ import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.widget.AbsoluteLayout;
+import android.widget.AdapterView;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
@@ -141,15 +142,6 @@ public abstract class GeckoApp
     private static final String LOGTAG = "GeckoApp";
     private static final int ONE_DAY_MS = 1000*60*60*24;
 
-    public enum StartupAction {
-        NORMAL,     /* normal application start */
-        URL,        /* launched with a passed URL */
-        PREFETCH,   /* launched with a passed URL that we prefetch */
-        GUEST,      /* launched in guest browsing */
-        RESTRICTED, /* launched with restricted profile */
-        SHORTCUT    /* launched from a homescreen shortcut */
-    }
-
     public static final String ACTION_ALERT_CALLBACK       = "org.mozilla.gecko.ACTION_ALERT_CALLBACK";
     public static final String ACTION_HOMESCREEN_SHORTCUT  = "org.mozilla.gecko.BOOKMARK";
     public static final String ACTION_DEBUG                = "org.mozilla.gecko.DEBUG";
@@ -184,12 +176,11 @@ public abstract class GeckoApp
     public List<GeckoAppShell.AppStateListener> mAppStateListeners = new LinkedList<GeckoAppShell.AppStateListener>();
     protected MenuPanel mMenuPanel;
     protected Menu mMenu;
-    protected GeckoProfile mProfile;
     protected boolean mIsRestoringActivity;
 
     private ContactService mContactService;
     private PromptService mPromptService;
-    private TextSelection mTextSelection;
+    protected TextSelection mTextSelection;
 
     protected DoorHangerPopup mDoorHangerPopup;
     protected FormAssistPopup mFormAssistPopup;
@@ -217,8 +208,6 @@ public abstract class GeckoApp
     private Intent mRestartIntent;
 
     abstract public int getLayout();
-
-    abstract protected String getDefaultProfileName() throws NoMozillaDirectoryException;
 
     protected void processTabQueue() {};
 
@@ -727,7 +716,7 @@ public abstract class GeckoApp
                 return;
             }
             // We're on a background thread, so we can be synchronous.
-            final long millis = mProfile.getDB().getPrePathLastVisitedTimeMilliseconds(getContentResolver(), prePath);
+            final long millis = getProfile().getDB().getPrePathLastVisitedTimeMilliseconds(getContentResolver(), prePath);
             callback.sendSuccess(millis);
         }
     }
@@ -1131,8 +1120,6 @@ public abstract class GeckoApp
         mGeckoReadyStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_GECKOREADY");
 
         final SafeIntent intent = new SafeIntent(getIntent());
-        final String action = intent.getAction();
-        final String args = intent.getStringExtra("args");
 
         earlyStartJavaSampler(intent);
 
@@ -1140,26 +1127,6 @@ public abstract class GeckoApp
         // incoming intent, so pass it in here. GeckoLoader will do its
         // business later and dispose of the reference.
         GeckoLoader.setLastIntent(intent);
-
-        // If we don't already have a profile, but we do have arguments,
-        // let's see if they're enough to find one.
-        // Note that subclasses must ensure that if they try to access
-        // the profile prior to this code being run, then they do something
-        // similar.
-        if (mProfile == null && args != null) {
-            final GeckoProfile p = GeckoProfile.getFromArgs(this, args);
-            if (p != null) {
-                mProfile = p;
-            }
-        }
-
-        // Speculatively pre-fetch the profile in the background.
-        ThreadUtils.postToBackgroundThread(new Runnable() {
-            @Override
-            public void run() {
-                getProfile();
-            }
-        });
 
         // Workaround for <http://code.google.com/p/android/issues/detail?id=20915>.
         try {
@@ -1206,12 +1173,29 @@ public abstract class GeckoApp
             Telemetry.addToHistogram("FENNEC_RESTORING_ACTIVITY", 1);
 
         } else {
-            final String uri = getURIFromIntent(intent);
+            final String action = intent.getAction();
+            final String args = intent.getStringExtra("args");
+
+            // If we don't already have a profile, but we do have arguments,
+            // let's see if they're enough to find one.
+            // Note that subclasses must ensure that if they try to access
+            // the profile prior to this code being run, then they do something
+            // similar.
+            final GeckoProfile profile = (args != null) ?
+                GeckoProfile.getFromArgs(getApplicationContext(), args) : null;
 
             sAlreadyLoaded = true;
-            GeckoThread.ensureInit(args, action,
-                    /* debugging */ ACTION_DEBUG.equals(action));
+            GeckoThread.init(profile, args, action, /* debugging */ ACTION_DEBUG.equals(action));
 
+            // Speculatively pre-fetch the profile in the background.
+            ThreadUtils.postToBackgroundThread(new Runnable() {
+                @Override
+                public void run() {
+                    getProfile();
+                }
+            });
+
+            final String uri = getURIFromIntent(intent);
             if (!TextUtils.isEmpty(uri)) {
                 // Start a speculative connection as soon as Gecko loads.
                 GeckoThread.speculativeConnect(uri);
@@ -1284,6 +1268,16 @@ public abstract class GeckoApp
 
         // Use global layout state change to kick off additional initialization
         mMainLayout.getViewTreeObserver().addOnGlobalLayoutListener(this);
+
+        if (Versions.preMarshmallow || !AppConstants.NIGHTLY_BUILD) {
+            mTextSelection = new ActionBarTextSelection(
+                    (TextSelectionHandle) findViewById(R.id.anchor_handle),
+                    (TextSelectionHandle) findViewById(R.id.caret_handle),
+                    (TextSelectionHandle) findViewById(R.id.focus_handle));
+        } else {
+            mTextSelection = new FloatingToolbarTextSelection(this, mLayerView);
+        }
+        mTextSelection.create();
 
         // Determine whether we should restore tabs.
         mShouldRestore = getSessionRestoreState(savedInstanceState);
@@ -1537,8 +1531,7 @@ public abstract class GeckoApp
             getProfile().moveSessionFile();
         }
 
-        final StartupAction startupAction = getStartupAction(passedUri, action);
-        Telemetry.addToHistogram("FENNEC_GECKOAPP_STARTUP_ACTION", startupAction.ordinal());
+        recordStartupActionTelemetry(passedUri, action);
 
         // Check if launched from data reporting notification.
         if (ACTION_LAUNCH_SETTINGS.equals(action)) {
@@ -1558,10 +1551,6 @@ public abstract class GeckoApp
         mContactService = new ContactService(EventDispatcher.getInstance(), this);
 
         mPromptService = new PromptService(this);
-
-        mTextSelection = new TextSelection((TextSelectionHandle) findViewById(R.id.anchor_handle),
-                                           (TextSelectionHandle) findViewById(R.id.caret_handle),
-                                           (TextSelectionHandle) findViewById(R.id.focus_handle));
 
         // Trigger the completion of the telemetry timer that wraps activity startup,
         // then grab the duration to give to FHR.
@@ -1641,7 +1630,7 @@ public abstract class GeckoApp
                             }
                         }
                     }, "Tabs:TabsOpened");
-                    TabQueueHelper.openQueuedUrls(GeckoApp.this, mProfile, TabQueueHelper.FILE_NAME, true);
+                    TabQueueHelper.openQueuedUrls(GeckoApp.this, getProfile(), TabQueueHelper.FILE_NAME, true);
                 } else {
                     openTabsRunnable.run();
                 }
@@ -1712,12 +1701,8 @@ public abstract class GeckoApp
     }
 
     @Override
-    public synchronized GeckoProfile getProfile() {
-        // fall back to default profile if we didn't load a specific one
-        if (mProfile == null) {
-            mProfile = GeckoProfile.get(this);
-        }
-        return mProfile;
+    public GeckoProfile getProfile() {
+        return GeckoThread.getActiveProfile();
     }
 
     /**
@@ -1945,8 +1930,7 @@ public abstract class GeckoApp
             startActivity(settingsIntent);
         }
 
-        final StartupAction startupAction = getStartupAction(passedUri, action);
-        Telemetry.addToHistogram("FENNEC_GECKOAPP_STARTUP_ACTION", startupAction.ordinal());
+        recordStartupActionTelemetry(passedUri, action);
     }
 
     /**
@@ -2184,9 +2168,9 @@ public abstract class GeckoApp
             return;
         }
 
-        if (GeckoThread.isRunning()) {
-            // Let the Gecko thread prepare for exit.
-            GeckoAppShell.sendEventToGeckoSync(GeckoEvent.createAppBackgroundingEvent());
+        // Wait for Gecko to handle our pause event sent in onPause.
+        if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
+            GeckoThread.waitOnGecko();
         }
 
         if (mRestartIntent != null) {
@@ -2762,9 +2746,7 @@ public abstract class GeckoApp
         return new StubbedHealthRecorder();
     }
 
-    protected StartupAction getStartupAction(final String passedURL, final String action) {
-        // Default to NORMAL here. Subclasses can handle the other types.
-        return StartupAction.NORMAL;
+    protected void recordStartupActionTelemetry(final String passedURL, final String action) {
     }
 
     @Override

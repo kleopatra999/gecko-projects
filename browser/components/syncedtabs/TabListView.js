@@ -255,7 +255,7 @@ TabListView.prototype = {
     if (itemNode.classList.contains("tab")) {
       let url = itemNode.dataset.url;
       if (url) {
-        this.props.onOpenTab(url, event);
+        this.onOpenSelected(url, event);
       }
     }
 
@@ -264,11 +264,8 @@ TabListView.prototype = {
       return;
     }
 
-    this._selectRow(itemNode);
-  },
-
-  _selectRow(itemNode) {
-    this.props.onSelectRow(this._getSelectionPosition(itemNode), itemNode.dataset.id);
+    let position = this._getSelectionPosition(itemNode);
+    this.props.onSelectRow(position);
   },
 
   /**
@@ -285,7 +282,7 @@ TabListView.prototype = {
     } else if (event.keyCode == this._window.KeyEvent.DOM_VK_RETURN) {
       let selectedNode = this.container.querySelector('.item.selected');
       if (selectedNode.dataset.url) {
-        this.props.onOpenTab(selectedNode.dataset.url, event);
+        this.onOpenSelected(selectedNode.dataset.url, event);
       } else if (selectedNode) {
         this.props.onToggleBranch(selectedNode.dataset.id);
       }
@@ -293,21 +290,33 @@ TabListView.prototype = {
   },
 
   onBookmarkTab() {
-    let item = this.container.querySelector('.item.selected');
-    if (!item || !item.dataset.url) {
-      return;
+    let item = this._getSelectedTabNode();
+    if (item) {
+      let title = item.querySelector(".item-title").textContent;
+      this.props.onBookmarkTab(item.dataset.url, title);
     }
-
-    let uri = item.dataset.url;
-    let title = item.querySelector(".item-title").textContent;
-
-    this.props.onBookmarkTab(uri, title);
   },
 
-  onOpenSelected(event) {
-    let item = this.container.querySelector('.item.selected');
-    if (this._isTab(item) && item.dataset.url) {
-      this.props.onOpenTab(item.dataset.url, event);
+  onCopyTabLocation() {
+    let item = this._getSelectedTabNode();
+    if (item) {
+      this.props.onCopyTabLocation(item.dataset.url);
+    }
+  },
+
+  onOpenSelected(url, event) {
+    let where = getChromeWindow(this._window).whereToOpenLink(event);
+    this.props.onOpenTab(url, where, {});
+  },
+
+  onOpenSelectedFromContextMenu(event) {
+    let item = this._getSelectedTabNode();
+    if (item) {
+      let where = event.target.getAttribute("where");
+      let params = {
+        private: event.target.hasAttribute("private"),
+      };
+      this.props.onOpenTab(item.dataset.url, where, params);
     }
   },
 
@@ -329,6 +338,14 @@ TabListView.prototype = {
   },
   onFilterBlur() {
     this.props.onFilterBlur();
+  },
+
+  _getSelectedTabNode() {
+    let item = this.container.querySelector('.item.selected');
+    if (this._isTab(item) && item.dataset.url) {
+      return item;
+    }
+    return null;
   },
 
   // Set up the custom context menu
@@ -404,10 +421,16 @@ TabListView.prototype = {
     let id = event.target.getAttribute("id");
     switch (id) {
       case "syncedTabsOpenSelected":
-        this.onOpenSelected(event);
+      case "syncedTabsOpenSelectedInTab":
+      case "syncedTabsOpenSelectedInWindow":
+      case "syncedTabsOpenSelectedInPrivateWindow":
+        this.onOpenSelectedFromContextMenu(event);
         break;
       case "syncedTabsBookmarkSelected":
         this.onBookmarkTab();
+        break;
+      case "syncedTabsCopySelected":
+        this.onCopyTabLocation();
         break;
       case "syncedTabsRefresh":
       case "syncedTabsRefreshFilter":
@@ -431,7 +454,8 @@ TabListView.prototype = {
     } else {
       let itemNode = this._findParentItemNode(event.target);
       if (itemNode) {
-        this._selectRow(itemNode);
+        let position = this._getSelectionPosition(itemNode);
+        this.props.onSelectRow(position);
       }
       menu = getContextMenu(this._window);
       this.adjustContextMenu(menu);

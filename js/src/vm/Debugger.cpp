@@ -2430,8 +2430,8 @@ Debugger::updateObservesAsmJSOnDebuggees(IsObserving observing)
 /* static */ bool
 Debugger::cannotTrackAllocations(const GlobalObject& global)
 {
-    auto existingCallback = global.compartment()->getObjectMetadataCallback();
-    return existingCallback && existingCallback != SavedStacksMetadataCallback;
+    auto existingCallback = global.compartment()->getAllocationMetadataBuilder();
+    return existingCallback && existingCallback != &SavedStacks::metadataBuilder;
 }
 
 /* static */ bool
@@ -2461,7 +2461,7 @@ Debugger::addAllocationsTracking(JSContext* cx, Handle<GlobalObject*> debuggee)
         return false;
     }
 
-    debuggee->compartment()->setObjectMetadataCallback(SavedStacksMetadataCallback);
+    debuggee->compartment()->setAllocationMetadataBuilder(&SavedStacks::metadataBuilder);
     debuggee->compartment()->chooseAllocationSamplingProbability();
     return true;
 }
@@ -2477,7 +2477,7 @@ Debugger::removeAllocationsTracking(GlobalObject& global)
         return;
     }
 
-    global.compartment()->forgetObjectMetadataCallback();
+    global.compartment()->forgetAllocationMetadataBuilder();
 }
 
 bool
@@ -3485,7 +3485,7 @@ Debugger::addDebuggeeGlobal(JSContext* cx, Handle<GlobalObject*> global)
      * 2. global must be in this->debuggees,
      * 3. it must be in zone->getDebuggers(),
      * 4. the debuggee's zone must be in this->debuggeeZones,
-     * 5. if we are tracking allocations, the SavedStacksMetadataCallback must be
+     * 5. if we are tracking allocations, the SavedStacksMetadataBuilder must be
      *    installed for this compartment, and
      * 6. JSCompartment::isDebuggee()'s bit must be set.
      *
@@ -8006,7 +8006,7 @@ DebuggerObject_getGlobal(JSContext* cx, unsigned argc, Value* vp)
 /* static */ SavedFrame*
 Debugger::getObjectAllocationSite(JSObject& obj)
 {
-    JSObject* metadata = GetObjectMetadata(&obj);
+    JSObject* metadata = GetAllocationMetadata(&obj);
     if (!metadata)
         return nullptr;
 
@@ -8027,6 +8027,40 @@ DebuggerObject_getAllocationSite(JSContext* cx, unsigned argc, Value* vp)
     if (!cx->compartment()->wrap(cx, &allocSite))
         return false;
     args.rval().setObject(*allocSite);
+    return true;
+}
+
+// Returns the "name" field (see js.msg), which may be used as a unique
+// identifier, for any error object with a JSErrorReport or undefined
+// if the object has no JSErrorReport.
+static bool
+DebuggerObject_getErrorMessageName(JSContext *cx, unsigned argc, Value* vp)
+{
+    THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, "get errorMessageName", args, referent);
+
+    JSObject* obj = referent;
+    if (IsCrossCompartmentWrapper(obj))
+        obj = CheckedUnwrap(obj);
+
+    if (!obj) {
+        JS_ReportError(cx, "Permission denied to access object");
+        return false;
+    }
+
+    JSErrorReport* report = nullptr;
+    if (obj->is<ErrorObject>())
+        report = obj->as<ErrorObject>().getErrorReport();
+
+    if (report) {
+        const JSErrorFormatString* efs = GetErrorMessage(nullptr, report->errorNumber);
+        RootedString str(cx, JS_NewStringCopyZ(cx, efs->name));
+        if (!cx->compartment()->wrap(cx, &str))
+            return false;
+        args.rval().setString(str);
+    } else {
+        args.rval().setUndefined();
+    }
+
     return true;
 }
 
@@ -8511,45 +8545,6 @@ DebuggerObject_forceLexicalInitializationByName(JSContext *cx, unsigned argc, Va
     return true;
 }
 
-// Returns the "name" field (see js.msg), which may be used as a unique
-// identifier, for any error object with a JSErrorReport or undefined
-// if the error object has no JSErrorReport.
-bool
-DebuggerObject_getErrorMessageName(JSContext *cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    if (!args.requireAtLeast(cx, "Debugger.Object.prototype.getErrorMessageName", 1))
-        return false;
-
-    RootedObject obj(cx);
-
-    bool isErrorObject = false;
-    if (args[0].isObject()) {
-        obj = &args[0].toObject();
-        if (IsCrossCompartmentWrapper(obj))
-            obj = UncheckedUnwrap(obj);
-        isErrorObject = obj->is<ErrorObject>();
-    }
-
-    if (!isErrorObject) {
-        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_UNEXPECTED_TYPE,
-                             "argument", "not an error object");
-        return false;
-    }
-
-    JSErrorReport* report = obj->as<ErrorObject>().getErrorReport();
-
-    if (report) {
-        const JSErrorFormatString* efs = GetErrorMessage(nullptr, report->errorNumber);
-        RootedString str(cx, JS_NewStringCopyZ(cx, efs->name));
-        args.rval().setString(str);
-    } else {
-        args.rval().setUndefined();
-    }
-
-    return true;
-}
-
 static bool
 DebuggerObject_executeInGlobal(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -8655,6 +8650,7 @@ static const JSPropertySpec DebuggerObject_properties[] = {
     JS_PSG("boundArguments", DebuggerObject_getBoundArguments, 0),
     JS_PSG("global", DebuggerObject_getGlobal, 0),
     JS_PSG("allocationSite", DebuggerObject_getAllocationSite, 0),
+    JS_PSG("errorMessageName", DebuggerObject_getErrorMessageName, 0),
     JS_PS_END
 };
 
@@ -8684,7 +8680,6 @@ static const JSFunctionSpec DebuggerObject_methods[] = {
     JS_FN("preventExtensions", DebuggerObject_preventExtensions, 0, 0),
     JS_FN("isSealed", DebuggerObject_isSealed, 0, 0),
     JS_FN("forceLexicalInitializationByName", DebuggerObject_forceLexicalInitializationByName, 1, 0),
-    JS_FN("getErrorMessageName", DebuggerObject_getErrorMessageName, 1, 0),
     JS_FN("isFrozen", DebuggerObject_isFrozen, 0, 0),
     JS_FN("isExtensible", DebuggerObject_isExtensible, 0, 0),
     JS_FN("apply", DebuggerObject_apply, 0, 0),

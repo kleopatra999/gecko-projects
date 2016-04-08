@@ -1061,7 +1061,6 @@ var BrowserApp = {
   },
 
   contentDocumentChanged: function() {
-    dump("GeckoBug1151102: Setting first-paint flag on DWU");
     window.top.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).isFirstPaint = true;
     Services.androidBridge.contentDocumentChanged();
   },
@@ -3465,6 +3464,7 @@ Tab.prototype = {
     this.browser.addEventListener("MozScrolledAreaChanged", this, true);
     this.browser.addEventListener("pageshow", this, true);
     this.browser.addEventListener("MozApplicationManifest", this, true);
+    this.browser.addEventListener("TabPreZombify", this, true);
 
     // Note that the XBL binding is untrusted
     this.browser.addEventListener("PluginBindingAttached", this, true, true);
@@ -3572,6 +3572,7 @@ Tab.prototype = {
     this.browser.removeEventListener("MozScrolledAreaChanged", this, true);
     this.browser.removeEventListener("pageshow", this, true);
     this.browser.removeEventListener("MozApplicationManifest", this, true);
+    this.browser.removeEventListener("TabPreZombify", this, true);
 
     this.browser.removeEventListener("PluginBindingAttached", this, true, true);
     this.browser.removeEventListener("VideoBindingAttached", this, true, true);
@@ -4095,7 +4096,8 @@ Tab.prototype = {
       }
 
       case "DOMAudioPlaybackStarted":
-      case "DOMAudioPlaybackStopped": {
+      case "DOMAudioPlaybackStopped":
+      case "TabPreZombify": {
         if (!Services.prefs.getBoolPref("browser.tabs.showAudioPlayingIcon") ||
             !aEvent.isTrusted) {
           return;

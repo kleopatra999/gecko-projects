@@ -157,12 +157,6 @@ XPCOMUtils.defineLazyGetter(this, "PopupNotifications", function () {
   }
 });
 
-XPCOMUtils.defineLazyGetter(this, "DeveloperToolbar", function() {
-  let { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
-  let { DeveloperToolbar } = require("devtools/client/shared/developer-toolbar");
-  return new DeveloperToolbar(window);
-});
-
 XPCOMUtils.defineLazyGetter(this, "BrowserToolboxProcess", function() {
   let tmp = {};
   Cu.import("resource://devtools/client/framework/ToolboxProcess.jsm", tmp);
@@ -1399,11 +1393,6 @@ var gBrowserInit = {
     // load completes). In that case, there's nothing to do here.
     if (!this._loadHandled)
       return;
-
-    let desc = Object.getOwnPropertyDescriptor(window, "DeveloperToolbar");
-    if (desc && !desc.get) {
-      DeveloperToolbar.destroy();
-    }
 
     // First clean up services initialized in gBrowserInit.onLoad (or those whose
     // uninit methods don't depend on the services having been initialized).
@@ -2695,9 +2684,9 @@ var BrowserOnClick = {
   receiveMessage: function (msg) {
     switch (msg.name) {
       case "Browser:CertExceptionError":
-        this.onAboutCertError(msg.target, msg.data.elementId,
-                              msg.data.isTopFrame, msg.data.location,
-                              msg.data.securityInfoAsString);
+        this.onCertError(msg.target, msg.data.elementId,
+                         msg.data.isTopFrame, msg.data.location,
+                         msg.data.securityInfoAsString);
       break;
       case "Browser:SiteBlockedError":
         this.onAboutBlocked(msg.data.elementId, msg.data.reason,
@@ -2758,7 +2747,7 @@ var BrowserOnClick = {
                                  uri.host, uri.port);
   },
 
-  onAboutCertError: function (browser, elementId, isTopFrame, location, securityInfoAsString) {
+  onCertError: function (browser, elementId, isTopFrame, location, securityInfoAsString) {
     let secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
 
     switch (elementId) {
@@ -2809,7 +2798,7 @@ var BrowserOnClick = {
 
         let errorInfo = getDetailedCertErrorInfo(location,
                                                  securityInfoAsString);
-        browser.messageManager.sendAsyncMessage("AboutCertErrorDetails",
+        browser.messageManager.sendAsyncMessage("CertErrorDetails",
                                                 { info: errorInfo });
         break;
 
@@ -3885,15 +3874,7 @@ function OpenBrowserWindow(options)
   }
 
   if (options && options.remote) {
-    // If we're using remote tabs by default, then OMTC will be force-enabled,
-    // despite the preference returning as false.
-    let omtcEnabled = gPrefService.getBoolPref("layers.offmainthreadcomposition.enabled")
-                      || Services.appinfo.browserTabsRemoteAutostart;
-    if (!omtcEnabled) {
-      alert("To use out-of-process tabs, you must set the layers.offmainthreadcomposition.enabled preference and restart. Opening a normal window instead.");
-    } else {
-      extraFeatures += ",remote";
-    }
+    extraFeatures += ",remote";
   } else if (options && options.remote === false) {
     extraFeatures += ",non-remote";
   }

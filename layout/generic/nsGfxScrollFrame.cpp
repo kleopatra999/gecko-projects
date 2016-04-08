@@ -3488,19 +3488,7 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
 
               nsLayoutUtils::TransformRect(rootFrame, mOuter, rootCompBounds);
 
-              // Clamp the displayport base to the size of the transformed root
-              // composition bounds, by trimming an equal amount off opposite
-              // sides of the base rect.
-              if (rootCompBounds.width < displayportBase.width) {
-                nscoord diff = displayportBase.width - rootCompBounds.width;
-                displayportBase.x += diff / 2;
-                displayportBase.width -= diff;
-              }
-              if (rootCompBounds.height < displayportBase.height) {
-                nscoord diff = displayportBase.height - rootCompBounds.height;
-                displayportBase.y += diff / 2;
-                displayportBase.height -= diff;
-              }
+              displayportBase = displayportBase.Intersect(rootCompBounds);
             }
           }
         }
@@ -3641,26 +3629,6 @@ static void HandleScrollPref(nsIScrollable *aScrollable, int32_t aOrientation,
     case nsIScrollable::Scrollbar_Always:
       aValue = NS_STYLE_OVERFLOW_SCROLL;
       break;
-  }
-}
-
-bool
-ScrollFrameHelper::IsScrollFrameWithSnapping() const
-{
-  nsPresContext* presContext = mOuter->PresContext();
-  if (!presContext->IsDynamic() &&
-      !(mIsRoot && presContext->HasPaginatedScrolling())) {
-    return false;
-  }
-
-  if (!mIsRoot) {
-    const nsStyleDisplay& display = *mOuter->StyleDisplay();
-    return display.mScrollSnapTypeY != NS_STYLE_SCROLL_SNAP_TYPE_NONE ||
-           display.mScrollSnapTypeX != NS_STYLE_SCROLL_SNAP_TYPE_NONE;
-  } else {
-    const ScrollbarStyles& display = presContext->GetViewportScrollbarStylesOverride();
-    return display.mScrollSnapTypeY != NS_STYLE_SCROLL_SNAP_TYPE_NONE ||
-           display.mScrollSnapTypeX != NS_STYLE_SCROLL_SNAP_TYPE_NONE;
   }
 }
 

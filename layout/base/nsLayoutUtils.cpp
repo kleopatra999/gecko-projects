@@ -1533,6 +1533,17 @@ nsLayoutUtils::GetStyleFrame(const nsIContent* aContent)
   return nsLayoutUtils::GetStyleFrame(frame);
 }
 
+/* static */ nsIFrame*
+nsLayoutUtils::GetRealPrimaryFrameFor(const nsIContent* aContent)
+{
+  nsIFrame *frame = aContent->GetPrimaryFrame();
+  if (!frame) {
+    return nullptr;
+  }
+
+  return nsPlaceholderFrame::GetRealFrameFor(frame);
+}
+
 nsIFrame*
 nsLayoutUtils::GetFloatFromPlaceholder(nsIFrame* aFrame) {
   NS_ASSERTION(nsGkAtoms::placeholderFrame == aFrame->GetType(),
@@ -7303,7 +7314,7 @@ nsLayoutUtils::SurfaceFromElement(HTMLVideoElement* aElement,
   }
 
   // If it doesn't have a principal, just bail
-  nsCOMPtr<nsIPrincipal> principal = aElement->GetCurrentPrincipal();
+  nsCOMPtr<nsIPrincipal> principal = aElement->GetCurrentVideoPrincipal();
   if (!principal)
     return result;
 
@@ -8955,16 +8966,6 @@ nsLayoutUtils::GetSelectionBoundingRect(Selection* aSel)
   }
 
   return res;
-}
-
-/* static */ bool
-nsLayoutUtils::IsScrollFrameWithSnapping(nsIFrame* aFrame)
-{
-  nsIScrollableFrame* sf = do_QueryFrame(aFrame);
-  if (!sf) {
-    return false;
-  }
-  return sf->IsScrollFrameWithSnapping();
 }
 
 /* static */ nsBlockFrame*
