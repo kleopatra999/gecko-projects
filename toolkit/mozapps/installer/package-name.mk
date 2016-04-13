@@ -7,7 +7,6 @@
 # for (at least Firefox) releases we use a different format with directories,
 # e.g. win32/de/Firefox Setup 3.0.1.exe
 # the latter format is triggered with MOZ_PKG_PRETTYNAMES=1
-# Added a line to trigger a build
 
 ifndef PACKAGE_NAME_MK_INCLUDED
 PACKAGE_NAME_MK_INCLUDED := 1
