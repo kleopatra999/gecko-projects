@@ -2562,6 +2562,18 @@ int NS_main(int argc, NS_tchar **argv)
   // argument prior to callbackIndex is the working directory.
   const int callbackIndex = 6;
 
+#ifdef XP_MACOSX
+  bool isElevated =
+    strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") != 0;
+  if (isElevated) {
+    if (!ObtainUpdaterArguments(&argc, &argv)) {
+      // Won't actually get here because ObtainUpdaterArguments will terminate
+      // the current process on failure.
+      return 1;
+    }
+  }
+#endif
+
 #if defined(MOZ_WIDGET_GONK)
   if (EnvHasValue("LD_PRELOAD")) {
     // If the updater is launched with LD_PRELOAD set, then we wind up
@@ -2656,15 +2668,7 @@ int NS_main(int argc, NS_tchar **argv)
   gPatchDirPath = argv[1];
 
 #ifdef XP_MACOSX
-  bool isElevated =
-    strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") != 0;
-  if (isElevated) {
-    if (!ObtainUpdaterArguments(&argc, &argv)) {
-      // Won't actually get here because ObtainUpdaterArguments will terminate
-      // the current process on failure.
-      return 1;
-    }
-  } else if (!IsRecursivelyWritable(argv[2])) {
+  if (!isElevated && !IsRecursivelyWritable(argv[2])) {
     // If the app directory isn't recursively writeable, an elevated update is
     // required.
     gSucceeded = ServeElevatedUpdate(argc, (const char**)argv);
