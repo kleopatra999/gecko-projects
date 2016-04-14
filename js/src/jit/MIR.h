@@ -5518,6 +5518,10 @@ class MToString :
     {
         setResultType(MIRType_String);
         setMovable();
+
+        // Objects might override toString and Symbols throw.
+        if (def->mightBeType(MIRType_Object) || def->mightBeType(MIRType_Symbol))
+            setGuard();
     }
 
   public:
@@ -8055,7 +8059,6 @@ class MRegExpPrototypeOptimizable
       : MUnaryInstruction(object)
     {
         setResultType(MIRType_Boolean);
-        setMovable();
     }
 
   public:
@@ -8080,7 +8083,6 @@ class MRegExpInstanceOptimizable
       : MBinaryInstruction(object, proto)
     {
         setResultType(MIRType_Boolean);
-        setMovable();
     }
 
   public:

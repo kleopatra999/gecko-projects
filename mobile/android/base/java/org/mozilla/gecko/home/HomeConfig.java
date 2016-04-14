@@ -294,6 +294,10 @@ public final class HomeConfig {
             return (mViews != null ? mViews.get(index) : null);
         }
 
+        public EnumSet<Flags> getFlags() {
+            return mFlags.clone();
+        }
+
         public boolean isDynamic() {
             return (mType == PanelType.DYNAMIC);
         }
@@ -1629,7 +1633,7 @@ public final class HomeConfig {
     }
 
     public static int getTitleResourceIdForBuiltinPanelType(PanelType panelType) {
-        switch(panelType) {
+        switch (panelType) {
         case TOP_SITES:
             return R.string.home_top_sites_title;
 
@@ -1655,7 +1659,7 @@ public final class HomeConfig {
     }
 
     public static String getIdForBuiltinPanelType(PanelType panelType) {
-        switch(panelType) {
+        switch (panelType) {
         case TOP_SITES:
             return TOP_SITES_PANEL_ID;
 

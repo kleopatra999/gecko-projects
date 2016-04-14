@@ -236,7 +236,7 @@ nsImageBoxFrame::UpdateImage()
 
     if (uri && nsContentUtils::CanLoadImage(uri, mContent, doc,
                                             mContent->NodePrincipal())) {
-      nsContentUtils::LoadImage(uri, doc, mContent->NodePrincipal(),
+      nsContentUtils::LoadImage(uri, mContent, doc, mContent->NodePrincipal(),
                                 doc->GetDocumentURI(), doc->GetReferrerPolicy(),
                                 mListener, mLoadFlags,
                                 EmptyString(), getter_AddRefs(mImageRequest));
@@ -782,8 +782,8 @@ nsImageBoxListener::Notify(imgIRequest *request, int32_t aType, const nsIntRect*
 NS_IMETHODIMP
 nsImageBoxListener::BlockOnload(imgIRequest *aRequest)
 {
-  if (mFrame && mFrame->GetContent() && mFrame->GetContent()->GetCurrentDoc()) {
-    mFrame->GetContent()->GetCurrentDoc()->BlockOnload();
+  if (mFrame && mFrame->GetContent() && mFrame->GetContent()->GetUncomposedDoc()) {
+    mFrame->GetContent()->GetUncomposedDoc()->BlockOnload();
   }
 
   return NS_OK;
@@ -792,8 +792,8 @@ nsImageBoxListener::BlockOnload(imgIRequest *aRequest)
 NS_IMETHODIMP
 nsImageBoxListener::UnblockOnload(imgIRequest *aRequest)
 {
-  if (mFrame && mFrame->GetContent() && mFrame->GetContent()->GetCurrentDoc()) {
-    mFrame->GetContent()->GetCurrentDoc()->UnblockOnload(false);
+  if (mFrame && mFrame->GetContent() && mFrame->GetContent()->GetUncomposedDoc()) {
+    mFrame->GetContent()->GetUncomposedDoc()->UnblockOnload(false);
   }
 
   return NS_OK;

@@ -196,7 +196,7 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
 
     public void swapCursor(Cursor c, FolderInfo folderInfo, RefreshType refreshType) {
         updateOpenFolderType(folderInfo);
-        switch(refreshType) {
+        switch (refreshType) {
             case PARENT:
                 if (!isCurrentFolder(folderInfo)) {
                     mParentStack.removeFirst();
@@ -277,6 +277,8 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
             return res.getString(R.string.bookmarks_folder_unfiled);
         } else if (guid.equals(Bookmarks.SCREENSHOT_FOLDER_GUID)) {
             return res.getString(R.string.screenshot_folder_label_in_bookmarks);
+        } else if (guid.equals(Bookmarks.FAKE_READINGLIST_SMARTFOLDER_GUID)) {
+            return res.getString(R.string.readinglist_smartfolder_label_in_bookmarks);
         }
 
         // If for some reason we have a folder with a special GUID, but it's not one of

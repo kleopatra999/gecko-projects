@@ -742,7 +742,7 @@ public:
    * frame. Returns true if the smooth scroll should be advanced by one frame,
    * or false if the smooth scroll has ended.
    */
-  bool DoSample(FrameMetrics& aFrameMetrics, const TimeDuration& aDelta) {
+  bool DoSample(FrameMetrics& aFrameMetrics, const TimeDuration& aDelta) override {
     nsPoint oneParentLayerPixel =
       CSSPoint::ToAppUnits(ParentLayerPoint(1, 1) / aFrameMetrics.GetZoom());
     if (mXAxisModel.IsFinished(oneParentLayerPixel.x) &&
@@ -837,6 +837,15 @@ public:
   void SetDestination(const nsPoint& aNewDestination) {
     mXAxisModel.SetDestination(static_cast<int32_t>(aNewDestination.x));
     mYAxisModel.SetDestination(static_cast<int32_t>(aNewDestination.y));
+  }
+
+  CSSPoint GetDestination() const {
+    return CSSPoint::FromAppUnits(
+        nsPoint(mXAxisModel.GetDestination(), mYAxisModel.GetDestination()));
+  }
+
+  SmoothScrollAnimation* AsSmoothScrollAnimation() override {
+    return this;
   }
 
 private:
@@ -1641,6 +1650,14 @@ AsyncPanZoomController::ConvertToGecko(const ScreenIntPoint& aPoint, CSSPoint* a
   return false;
 }
 
+static bool
+AllowsScrollingMoreThanOnePage(double aMultiplier)
+{
+  const int32_t kMinAllowPageScroll =
+    EventStateManager::MIN_MULTIPLIER_VALUE_ALLOWING_OVER_ONE_PAGE_SCROLL;
+  return Abs(aMultiplier) >= kMinAllowPageScroll;
+}
+
 ParentLayerPoint
 AsyncPanZoomController::GetScrollWheelDelta(const ScrollWheelInput& aEvent) const
 {
@@ -1711,12 +1728,16 @@ AsyncPanZoomController::GetScrollWheelDelta(const ScrollWheelInput& aEvent) cons
     }
   }
 
-  if (Abs(delta.x) > pageScrollSize.width) {
+  // We shouldn't scroll more than one page at once except when the
+  // user preference is large.
+  if (!AllowsScrollingMoreThanOnePage(aEvent.mUserDeltaMultiplierX) &&
+      Abs(delta.x) > pageScrollSize.width) {
     delta.x = (delta.x >= 0)
               ? pageScrollSize.width
               : -pageScrollSize.width;
   }
-  if (Abs(delta.y) > pageScrollSize.height) {
+  if (!AllowsScrollingMoreThanOnePage(aEvent.mUserDeltaMultiplierY) &&
+      Abs(delta.y) > pageScrollSize.height) {
     delta.y = (delta.y >= 0)
               ? pageScrollSize.height
               : -pageScrollSize.height;
@@ -1827,13 +1848,16 @@ nsEventStatus AsyncPanZoomController::OnScrollWheel(const ScrollWheelInput& aEve
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
       (uint32_t) ScrollInputMethodForWheelDeltaType(aEvent.mDeltaType));
 
-  // Wheel events from "clicky" mouse wheels trigger scroll snapping to the
-  // next snap point. Check for this, and adjust the delta to take into
-  // account the snap point.
-  bool scrollSnapping = MaybeAdjustDeltaForScrollSnapping(delta, aEvent);
 
   switch (aEvent.mScrollMode) {
     case ScrollWheelInput::SCROLLMODE_INSTANT: {
+
+      // Wheel events from "clicky" mouse wheels trigger scroll snapping to the
+      // next snap point. Check for this, and adjust the delta to take into
+      // account the snap point.
+      CSSPoint startPosition = mFrameMetrics.GetScrollOffset();
+      MaybeAdjustDeltaForScrollSnapping(aEvent, delta, startPosition);
+
       ScreenPoint distance = ToScreenCoordinates(
         ParentLayerPoint(fabs(delta.x), fabs(delta.y)), aEvent.mLocalOrigin);
 
@@ -1863,33 +1887,43 @@ nsEventStatus AsyncPanZoomController::OnScrollWheel(const ScrollWheelInput& aEve
       // update it.
       ReentrantMonitorAutoEnter lock(mMonitor);
 
-      if (scrollSnapping) {
-        // If we're scroll snapping use a smooth scroll animation to get
+      // Perform scroll snapping if appropriate.
+      CSSPoint startPosition = mFrameMetrics.GetScrollOffset();
+      // If we're already in a wheel scroll or smooth scroll animation,
+      // the delta is applied to its destination, not to the current
+      // scroll position. Take this into account when finding a snap point.
+      if (mState == WHEEL_SCROLL) {
+        startPosition = mAnimation->AsWheelScrollAnimation()->GetDestination();
+      } else if (mState == SMOOTH_SCROLL) {
+        startPosition = mAnimation->AsSmoothScrollAnimation()->GetDestination();
+      }
+      if (MaybeAdjustDeltaForScrollSnapping(aEvent, delta, startPosition)) {
+        // If we're scroll snapping, use a smooth scroll animation to get
         // the desired physics. Note that SmoothScrollTo() will re-use an
         // existing smooth scroll animation if there is one.
-        CSSPoint snapPoint = mFrameMetrics.GetScrollOffset() + (delta / mFrameMetrics.GetZoom());
-        SmoothScrollTo(snapPoint);
-      } else {
-        // Otherwise, use a wheel scroll animation, also reusing one if possible.
-        if (mState != WHEEL_SCROLL) {
-          CancelAnimation();
-          SetState(WHEEL_SCROLL);
-
-          nsPoint initialPosition = CSSPoint::ToAppUnits(mFrameMetrics.GetScrollOffset());
-          StartAnimation(new WheelScrollAnimation(
-            *this, initialPosition, aEvent.mDeltaType));
-        }
-
-        nsPoint deltaInAppUnits =
-          CSSPoint::ToAppUnits(delta / mFrameMetrics.GetZoom());
-        // Cast velocity from ParentLayerPoints/ms to CSSPoints/ms then convert to
-        // appunits/second
-        nsPoint velocity =
-          CSSPoint::ToAppUnits(CSSPoint(mX.GetVelocity(), mY.GetVelocity())) * 1000.0f;
-
-        WheelScrollAnimation* animation = mAnimation->AsWheelScrollAnimation();
-        animation->Update(aEvent.mTimeStamp, deltaInAppUnits, nsSize(velocity.x, velocity.y));
+        SmoothScrollTo(startPosition);
+        break;
       }
+
+      // Otherwise, use a wheel scroll animation, also reusing one if possible.
+      if (mState != WHEEL_SCROLL) {
+        CancelAnimation();
+        SetState(WHEEL_SCROLL);
+
+        nsPoint initialPosition = CSSPoint::ToAppUnits(mFrameMetrics.GetScrollOffset());
+        StartAnimation(new WheelScrollAnimation(
+          *this, initialPosition, aEvent.mDeltaType));
+      }
+
+      nsPoint deltaInAppUnits =
+        CSSPoint::ToAppUnits(delta / mFrameMetrics.GetZoom());
+      // Cast velocity from ParentLayerPoints/ms to CSSPoints/ms then convert to
+      // appunits/second
+      nsPoint velocity =
+        CSSPoint::ToAppUnits(CSSPoint(mX.GetVelocity(), mY.GetVelocity())) * 1000.0f;
+
+      WheelScrollAnimation* animation = mAnimation->AsWheelScrollAnimation();
+      animation->Update(aEvent.mTimeStamp, deltaInAppUnits, nsSize(velocity.x, velocity.y));
       break;
     }
   }
@@ -3346,15 +3380,13 @@ void AsyncPanZoomController::NotifyLayersUpdated(const ScrollMetadata& aScrollMe
   const FrameMetrics& aLayerMetrics = aScrollMetadata.GetMetrics();
 
   if ((aLayerMetrics == mLastContentPaintMetrics) && !isDefault) {
-    // No new information here, skip it. Note that this is not just an
-    // optimization; it's correctness too. In the case where we get one of these
-    // stale aLayerMetrics *after* a call to NotifyScrollUpdated, processing the
-    // stale aLayerMetrics would clobber the more up-to-date information from
-    // NotifyScrollUpdated.
+    // No new information here, skip it.
     APZC_LOG("%p NotifyLayersUpdated short-circuit\n", this);
     return;
   }
-  mLastContentPaintMetrics = aLayerMetrics;
+  if (aLayerMetrics.GetScrollUpdateType() != FrameMetrics::ScrollOffsetUpdateType::ePending) {
+    mLastContentPaintMetrics = aLayerMetrics;
+  }
 
   mFrameMetrics.SetScrollParentId(aLayerMetrics.GetScrollParentId());
   APZC_LOG_FM(aLayerMetrics, "%p got a NotifyLayersUpdated with aIsFirstPaint=%d, aThisLayerTreeUpdated=%d",
@@ -3547,35 +3579,6 @@ void AsyncPanZoomController::NotifyLayersUpdated(const ScrollMetadata& aScrollMe
     RequestContentRepaint();
   }
   UpdateSharedCompositorFrameMetrics();
-}
-
-void
-AsyncPanZoomController::NotifyScrollUpdated(uint32_t aScrollGeneration,
-                                            const CSSPoint& aScrollOffset)
-{
-  APZThreadUtils::AssertOnCompositorThread();
-  ReentrantMonitorAutoEnter lock(mMonitor);
-
-  APZC_LOG("%p NotifyScrollUpdated(%d, %s)\n", this, aScrollGeneration,
-      Stringify(aScrollOffset).c_str());
-
-  bool scrollOffsetUpdated = aScrollGeneration != mFrameMetrics.GetScrollGeneration();
-  if (!scrollOffsetUpdated) {
-    return;
-  }
-  APZC_LOG("%p updating scroll offset from %s to %s\n", this,
-      Stringify(mFrameMetrics.GetScrollOffset()).c_str(),
-      Stringify(aScrollOffset).c_str());
-
-  mFrameMetrics.UpdateScrollInfo(aScrollGeneration, aScrollOffset);
-  AcknowledgeScrollUpdate();
-  mExpectedGeckoMetrics.UpdateScrollInfo(aScrollGeneration, aScrollOffset);
-  CancelAnimation();
-  RequestContentRepaint();
-  UpdateSharedCompositorFrameMetrics();
-  // We don't call ScheduleComposite() here because that happens higher up
-  // in the call stack, when LayerTransactionParent handles this message.
-  // If we did it here it would incur an extra message posting unnecessarily.
 }
 
 void
@@ -4027,7 +4030,9 @@ void AsyncPanZoomController::ScrollSnapToDestination() {
 }
 
 bool AsyncPanZoomController::MaybeAdjustDeltaForScrollSnapping(
-    ParentLayerPoint& aDelta, const ScrollWheelInput& aEvent)
+    const ScrollWheelInput& aEvent,
+    ParentLayerPoint& aDelta,
+    CSSPoint& aStartPosition)
 {
   // Don't scroll snap for pixel scrolls. This matches the main thread
   // behaviour in EventStateManager::DoScrollText().
@@ -4036,15 +4041,15 @@ bool AsyncPanZoomController::MaybeAdjustDeltaForScrollSnapping(
   }
 
   ReentrantMonitorAutoEnter lock(mMonitor);
-  CSSPoint scrollOffset = mFrameMetrics.GetScrollOffset();
   CSSToParentLayerScale2D zoom = mFrameMetrics.GetZoom();
   CSSPoint destination = mFrameMetrics.CalculateScrollRange().ClampPoint(
-      scrollOffset + (aDelta / zoom));
+      aStartPosition + (aDelta / zoom));
   nsIScrollableFrame::ScrollUnit unit =
       ScrollWheelInput::ScrollUnitForDeltaType(aEvent.mDeltaType);
 
   if (Maybe<CSSPoint> snapPoint = FindSnapPointNear(destination, unit)) {
-    aDelta = (*snapPoint - scrollOffset) * zoom;
+    aDelta = (*snapPoint - aStartPosition) * zoom;
+    aStartPosition = *snapPoint;
     return true;
   }
   return false;

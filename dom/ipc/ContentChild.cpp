@@ -42,6 +42,7 @@
 #include "mozilla/ipc/FileDescriptorSetChild.h"
 #include "mozilla/ipc/FileDescriptorUtils.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
+#include "mozilla/ipc/ProcessChild.h"
 #include "mozilla/ipc/TestShellChild.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/layers/APZChild.h"
@@ -176,8 +177,6 @@
 #include "mozilla/dom/mobileconnection/MobileConnectionChild.h"
 #include "mozilla/dom/mobilemessage/SmsChild.h"
 #include "mozilla/dom/devicestorage/DeviceStorageRequestChild.h"
-#include "mozilla/dom/PFileSystemRequestChild.h"
-#include "mozilla/dom/FileSystemTaskBase.h"
 #include "mozilla/dom/bluetooth/PBluetoothChild.h"
 #include "mozilla/dom/PFMRadioChild.h"
 #include "mozilla/dom/PPresentationChild.h"
@@ -1828,24 +1827,6 @@ ContentChild::DeallocPDeviceStorageRequestChild(PDeviceStorageRequestChild* aDev
   return true;
 }
 
-PFileSystemRequestChild*
-ContentChild::AllocPFileSystemRequestChild(const FileSystemParams& aParams)
-{
-  MOZ_CRASH("Should never get here!");
-  return nullptr;
-}
-
-bool
-ContentChild::DeallocPFileSystemRequestChild(PFileSystemRequestChild* aFileSystem)
-{
-  mozilla::dom::FileSystemTaskBase* child =
-    static_cast<mozilla::dom::FileSystemTaskBase*>(aFileSystem);
-  // The reference is increased in FileSystemTaskBase::Start of
-  // FileSystemTaskBase.cpp. We should decrease it after IPC.
-  NS_RELEASE(child);
-  return true;
-}
-
 PMobileConnectionChild*
 ContentChild::SendPMobileConnectionConstructor(PMobileConnectionChild* aActor,
                                                const uint32_t& aClientId)
@@ -2249,14 +2230,14 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
 {
   if (AbnormalShutdown == why) {
     NS_WARNING("shutting down early because of crash!");
-    QuickExit();
+    ProcessChild::QuickExit();
   }
 
 #ifndef NS_FREE_PERMANENT_DATA
   // In release builds, there's no point in the content process
   // going through the full XPCOM shutdown path, because it doesn't
   // keep persistent state.
-  QuickExit();
+  ProcessChild::QuickExit();
 #else
   if (sFirstIdleTask) {
     sFirstIdleTask->Cancel();
@@ -2277,7 +2258,7 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
   if (IsNuwaProcess()) {
     // The Nuwa cannot go through the full XPCOM shutdown path or deadlock
     // will result.
-    QuickExit();
+    ProcessChild::QuickExit();
   }
 #endif
 
@@ -2316,13 +2297,6 @@ ContentChild::ProcessingError(Result aCode, const char* aReason)
   }
 #endif
   NS_RUNTIMEABORT("Content child abort due to IPC error");
-}
-
-void
-ContentChild::QuickExit()
-{
-  NS_WARNING("content process _exit()ing");
-  _exit(0);
 }
 
 nsresult
@@ -2433,9 +2407,9 @@ ContentChild::RecvLoadProcessScript(const nsString& aURL)
 
 bool
 ContentChild::RecvAsyncMessage(const nsString& aMsg,
-                               const ClonedMessageData& aData,
                                InfallibleTArray<CpowEntry>&& aCpows,
-                               const IPC::Principal& aPrincipal)
+                               const IPC::Principal& aPrincipal,
+                               const ClonedMessageData& aData)
 {
   RefPtr<nsFrameMessageManager> cpm =
     nsFrameMessageManager::GetChildProcessManager();
@@ -3085,7 +3059,6 @@ ContentChild::RecvUpdateWindow(const uintptr_t& aChildId)
   NS_ASSERTION(aChildId, "Expected child hwnd value for remote plugin instance.");
   mozilla::plugins::PluginInstanceParent* parentInstance =
   mozilla::plugins::PluginInstanceParent::LookupPluginInstanceByID(aChildId);
-  NS_ASSERTION(parentInstance, "Expected matching plugin instance");
   if (parentInstance) {
   // sync! update call to the plugin instance that forces the
   // plugin to paint its child window.

@@ -20,6 +20,7 @@ PREPROCESSED_WEBIDL_FILES = [
 WEBIDL_FILES = [
     'AbstractWorker.webidl',
     'ActivityRequestHandler.webidl',
+    'AddonManager.webidl',
     'AnalyserNode.webidl',
     'Animatable.webidl',
     'Animation.webidl',
@@ -908,6 +909,7 @@ if CONFIG['MOZ_EME']:
         'MediaKeysRequestStatus.webidl',
         'MediaKeyStatusMap.webidl',
         'MediaKeySystemAccess.webidl',
+        'WidevineCDMManifest.webidl',
     ]
 
 if CONFIG['MOZ_PAY']:

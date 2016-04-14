@@ -641,6 +641,8 @@ public:
 
   bool IsTextField() const { return mType == eHTMLTextFieldType; }
 
+  bool IsText() const { return mGenericTypes & eText; }
+
   bool IsTextLeaf() const { return mType == eTextLeafType; }
   TextLeafAccessible* AsTextLeaf();
 
@@ -1092,14 +1094,14 @@ protected:
   nsCOMPtr<nsIContent> mContent;
   DocAccessible* mDoc;
 
-  RefPtr<Accessible> mParent;
-  nsTArray<RefPtr<Accessible> > mChildren;
+  Accessible* mParent;
+  nsTArray<Accessible*> mChildren;
   int32_t mIndexInParent;
 
   static const uint8_t kStateFlagsBits = 13;
   static const uint8_t kContextFlagsBits = 3;
   static const uint8_t kTypeBits = 6;
-  static const uint8_t kGenericTypesBits = 15;
+  static const uint8_t kGenericTypesBits = 16;
 
   /**
    * Keep in sync with StateFlags, ContextFlags, and AccTypes.

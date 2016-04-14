@@ -69,6 +69,10 @@
   background-image: linear-gradient(@toolbarHighlight@, @toolbarHighlight@);
 }
 
+#navigator-toolbox > toolbar:not(#toolbar-menubar):not(#TabsToolbar):-moz-lwtheme {
+  background-image: linear-gradient(@toolbarHighlightLWT@, @toolbarHighlightLWT@);
+}
+
 #navigator-toolbox > toolbar:not(:-moz-lwtheme):not(#toolbar-menubar):not(#TabsToolbar) {
   -moz-appearance: none;
   border-style: none;
@@ -106,6 +110,10 @@
   box-shadow: 0 1px 0 @toolbarHighlight@ inset;
   padding-top: 2px;
   padding-bottom: 2px;
+}
+
+#nav-bar:-moz-lwtheme {
+  box-shadow: 0 1px 0 @toolbarHighlightLWT@ inset;
 }
 
 #nav-bar-overflow-button {
@@ -1133,6 +1141,7 @@ html|span.ac-tag {
   padding: 0 1px;
 }
 
+.ac-separator,
 .ac-url,
 .ac-action {
   font-size: 12px;
@@ -1140,6 +1149,7 @@ html|span.ac-tag {
 }
 
 .ac-title[selected=true],
+.ac-separator[selected],
 .ac-url[selected=true],
 .ac-action[selected=true] {
   color: inherit !important;
@@ -1789,7 +1799,13 @@ toolbarbutton.chevron > .toolbarbutton-icon {
 %include ../shared/fullscreen/warning.inc.css
 %include ../../../devtools/client/themes/responsivedesign.inc.css
 %include ../../../devtools/client/themes/commandline.inc.css
+
 %include ../shared/plugin-doorhanger.inc.css
+
+notification.pluginVulnerable > .notification-inner > .messageCloseButton:not(:hover) {
+  background-image: -moz-image-rect(url("chrome://global/skin/icons/close.svg"), 0, 80, 16, 64);
+}
+
 %include ../shared/login-doorhanger.inc.css
 
 %include downloads/indicator.css

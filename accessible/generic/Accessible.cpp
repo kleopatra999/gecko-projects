@@ -7,7 +7,7 @@
 
 #include "nsIXBLAccessible.h"
 
-#include "AccCollector.h"
+#include "EmbeddedObjCollector.h"
 #include "AccGroupInfo.h"
 #include "AccIterator.h"
 #include "nsAccUtils.h"
@@ -94,8 +94,7 @@ using namespace mozilla::a11y;
 ////////////////////////////////////////////////////////////////////////////////
 // Accessible: nsISupports and cycle collection
 
-NS_IMPL_CYCLE_COLLECTION(Accessible,
-                         mContent, mParent, mChildren)
+NS_IMPL_CYCLE_COLLECTION(Accessible, mContent)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Accessible)
   if (aIID.Equals(NS_GET_IID(Accessible)))
@@ -278,7 +277,7 @@ Accessible::AccessKey() const
   }
 
   // Determine the access modifier used in this context.
-  nsIDocument* document = mContent->GetCurrentDoc();
+  nsIDocument* document = mContent->GetUncomposedDoc();
   if (!document)
     return KeyBinding();
 
@@ -1205,8 +1204,7 @@ Accessible::State()
   if (!frame)
     return state;
 
-  const nsStyleDisplay* display = frame->StyleDisplay();
-  if (display && display->mOpacity == 1.0f &&
+  if (frame->StyleEffects()->mOpacity == 1.0f &&
       !(state & states::INVISIBLE)) {
     state |= states::OPAQUE1;
   }
@@ -1971,7 +1969,7 @@ Accessible::BindToParent(Accessible* aParent, uint32_t aIndexInParent)
 #ifdef A11Y_LOG
   if (mParent) {
     logging::TreeInfo("BindToParent: stealing accessible", 0,
-                      "old parent", mParent.get(),
+                      "old parent", mParent,
                       "new parent", aParent,
                       "child", this, nullptr);
   }
@@ -2076,7 +2074,7 @@ Accessible::InsertChildAt(uint32_t aIndex, Accessible* aChild)
     MOZ_ASSERT(mStateFlags & eKidsMutating, "Illicit children change");
   }
 
-  if (!nsAccUtils::IsEmbeddedObject(aChild)) {
+  if (aChild->IsText()) {
     mStateFlags |= eHasTextKids;
   }
 
@@ -2235,7 +2233,7 @@ Accessible::IsLink()
 {
   // Every embedded accessible within hypertext accessible implements
   // hyperlink interface.
-  return mParent && mParent->IsHyperText() && nsAccUtils::IsEmbeddedObject(this);
+  return mParent && mParent->IsHyperText() && !IsText();
 }
 
 uint32_t

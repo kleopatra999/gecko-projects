@@ -407,14 +407,23 @@ private:
         MOZ_ASSERT(aRunnable);
       }
 
+      // If something goes wrong, we still need to release the ConsoleCallData
+      // object. For this reason we have a custom Cancel method.
+      nsresult
+      Cancel() override
+      {
+        mRunnable->ReleaseData();
+        mRunnable->mConsole = nullptr;
+        return NS_OK;
+      }
+
       virtual bool
       WorkerRun(JSContext* aCx, workers::WorkerPrivate* aWorkerPrivate) override
       {
         MOZ_ASSERT(aWorkerPrivate);
         aWorkerPrivate->AssertIsOnWorkerThread();
 
-        mRunnable->ReleaseData();
-        mRunnable->mConsole = nullptr;
+        Cancel();
 
         aWorkerPrivate->RemoveFeature(mRunnable);
         return true;
@@ -877,6 +886,8 @@ NS_INTERFACE_MAP_END
 /* static */ already_AddRefed<Console>
 Console::Create(nsPIDOMWindowInner* aWindow, ErrorResult& aRv)
 {
+  MOZ_ASSERT_IF(NS_IsMainThread(), aWindow);
+
   RefPtr<Console> console = new Console(aWindow);
   console->Initialize(aRv);
   if (NS_WARN_IF(aRv.Failed())) {
@@ -895,6 +906,8 @@ Console::Console(nsPIDOMWindowInner* aWindow)
   , mInnerID(0)
   , mStatus(eUnknown)
 {
+  MOZ_ASSERT_IF(NS_IsMainThread(), aWindow);
+
   if (mWindow) {
     MOZ_ASSERT(mWindow->IsInnerWindow());
     mInnerID = mWindow->WindowID();
@@ -1029,6 +1042,7 @@ METHOD(Error, "error")
 METHOD(Exception, "exception")
 METHOD(Debug, "debug")
 METHOD(Table, "table")
+METHOD(Clear, "clear")
 
 void
 Console::Trace(JSContext* aCx)
@@ -1522,6 +1536,11 @@ Console::ProcessCallData(JSContext* aCx, ConsoleCallData* aData,
     MOZ_ASSERT(aData->mIDType == ConsoleCallData::eNumber);
     outerID.AppendInt(aData->mOuterIDNumber);
     innerID.AppendInt(aData->mInnerIDNumber);
+  }
+
+  if (aData->mMethodName == MethodClear) {
+    nsresult rv = mStorage->ClearEvents(innerID);
+    NS_WARN_IF(NS_FAILED(rv));
   }
 
   if (NS_FAILED(mStorage->RecordEvent(innerID, outerID, eventValue))) {

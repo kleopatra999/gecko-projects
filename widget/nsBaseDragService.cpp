@@ -472,7 +472,7 @@ GetPresShellForContent(nsIDOMNode* aDOMNode)
   if (!content)
     return nullptr;
 
-  nsCOMPtr<nsIDocument> document = content->GetCurrentDoc();
+  nsCOMPtr<nsIDocument> document = content->GetUncomposedDoc();
   if (document) {
     document->FlushPendingNotifications(Flush_Display);
 
@@ -687,10 +687,10 @@ nsBaseDragService::DrawDragForImage(nsIImageLoadingContent* aImageLoader,
       gfxPlatform::GetPlatform()->
         CreateOffscreenContentDrawTarget(destSize,
                                          SurfaceFormat::B8G8R8A8);
-    if (!dt)
+    if (!dt || !dt->IsValid())
       return NS_ERROR_FAILURE;
 
-    RefPtr<gfxContext> ctx = new gfxContext(dt);
+    RefPtr<gfxContext> ctx = gfxContext::ForDrawTarget(dt);
     if (!ctx)
       return NS_ERROR_FAILURE;
 

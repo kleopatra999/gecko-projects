@@ -212,7 +212,7 @@ class LinuxArtifactJob(ArtifactJob):
         'firefox/firefox',
         'firefox/firefox-bin',
         'firefox/platform.ini',
-        'firefox/firefox-webcontent',
+        'firefox/plugin-container',
         'firefox/updater',
         'firefox/**/*.so',
         mozpath.join('firefox', buildconfig.substs.get('ICU_DATA_FILE')),
@@ -293,7 +293,7 @@ class MacArtifactJob(ArtifactJob):
                 # 'libreplace_jemalloc.dylib',
                 # 'libreplace_malloc.dylib',
                 'libsoftokn3.dylib',
-                'firefox-webcontent.app/Contents/MacOS/firefox-webcontent',
+                'plugin-container.app/Contents/MacOS/plugin-container',
                 'updater.app/Contents/MacOS/updater',
                 # 'xpcshell',
                 'XUL',
@@ -687,7 +687,7 @@ class ArtifactCache(CacheManager):
                 if now == self._last_dl_update:
                     return
                 self._last_dl_update = now
-                self.log(logging.DEBUG, 'artifact',
+                self.log(logging.INFO, 'artifact',
                          {'bytes_so_far': bytes_so_far, 'total_size': total_size, 'percent': percent},
                          'Downloading... {percent:02.1f} %')
 

@@ -155,7 +155,7 @@ CanBeFinalizedInBackground(AllocKind kind, const Class* clasp)
      * the alloc kind; kind may already be a background finalize kind.
      */
     return (!IsBackgroundFinalized(kind) &&
-            (!clasp->finalize || (clasp->flags & JSCLASS_BACKGROUND_FINALIZE)));
+            (!clasp->hasFinalize() || (clasp->flags & JSCLASS_BACKGROUND_FINALIZE)));
 }
 
 /* Capacity for slotsToThingKind */
@@ -1098,7 +1098,8 @@ struct MightBeForwarded
 
     static const bool value = mozilla::IsBaseOf<JSObject, T>::value ||
                               mozilla::IsBaseOf<Shape, T>::value ||
-                              mozilla::IsBaseOf<JSString, T>::value;
+                              mozilla::IsBaseOf<JSString, T>::value ||
+                              mozilla::IsBaseOf<JSScript, T>::value;
 };
 
 template <typename T>

@@ -17,6 +17,7 @@ Cu.import("resource://devtools/client/shared/browser-loader.js", BrowserLoaderMo
 const promise = require("promise");
 const Services = require("Services");
 const ErrorDocs = require("devtools/server/actors/errordocs");
+const Telemetry = require("devtools/client/shared/telemetry")
 
 loader.lazyServiceGetter(this, "clipboardHelper",
                          "@mozilla.org/widget/clipboardhelper;1",
@@ -141,6 +142,7 @@ const LEVELS = {
   warn: SEVERITY_WARNING,
   info: SEVERITY_INFO,
   log: SEVERITY_LOG,
+  clear: SEVERITY_LOG,
   trace: SEVERITY_LOG,
   table: SEVERITY_LOG,
   debug: SEVERITY_LOG,
@@ -241,6 +243,8 @@ function WebConsoleFrame(webConsoleOwner) {
   this.React = require("devtools/client/shared/vendor/react");
   this.ReactDOM = require("devtools/client/shared/vendor/react-dom");
   this.FrameView = this.React.createFactory(require("devtools/client/shared/components/frame"));
+
+  this._telemetry = new Telemetry();
 
   EventEmitter.decorate(this);
 }
@@ -1282,6 +1286,11 @@ WebConsoleFrame.prototype = {
         node = msg.init(this.output).render().element;
         break;
       }
+      case "clear": {
+        body = l10n.getStr("consoleCleared");
+        clipboardText = body;
+        break;
+      }
       case "dir": {
         body = { arguments: args };
         let clipboardArray = [];
@@ -1493,6 +1502,11 @@ WebConsoleFrame.prototype = {
 
     // Add the more info link node to messages that belong to certain categories
     this.addMoreInfoLink(msgBody, scriptError);
+
+    // Collect telemetry data regarding JavaScript errors
+    this._telemetry.logKeyed("DEVTOOLS_JAVASCRIPT_ERROR_DISPLAYED",
+                             scriptError.errorMessageName,
+                             true);
 
     if (objectActors.size > 0) {
       node._objectActors = objectActors;
@@ -2194,6 +2208,14 @@ WebConsoleFrame.prototype = {
     let isFiltered = this.filterMessageNode(node);
 
     let isRepeated = this._filterRepeatedMessage(node);
+
+    // If a clear message is processed while the webconsole is opened, the UI
+    // should be cleared.
+    if (message && message.level == "clear") {
+      // Do not clear the consoleStorage here as it has been cleared already
+      // by the clear method, only clear the UI.
+      this.jsterm.clearOutput(false);
+    }
 
     let visible = !isRepeated && !isFiltered;
     if (!isRepeated) {

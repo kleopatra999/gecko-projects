@@ -1544,7 +1544,7 @@ EventStateManager::FireContextClick()
         }
       }
 
-      nsIDocument* doc = mGestureDownContent->GetCrossShadowCurrentDoc();
+      nsIDocument* doc = mGestureDownContent->GetComposedDoc();
       AutoHandlingUserInputStatePusher userInpStatePusher(true, &event, doc);
 
       // dispatch to DOM
@@ -2975,7 +2975,7 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
         // NOTE: The newFocus isn't editable that also means it's not in
         // designMode.  In designMode, all contents are not focusable.
         if (newFocus && !newFocus->IsEditable()) {
-          nsIDocument *doc = newFocus->GetCrossShadowCurrentDoc();
+          nsIDocument *doc = newFocus->GetComposedDoc();
           if (doc && newFocus == doc->GetRootElement()) {
             nsIContent *bodyContent =
               nsLayoutUtils::GetEditableRootContentByContentEditable(doc);
@@ -4339,10 +4339,6 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
   // NOTE: aElement will be nullptr when unlocking.
   sIsPointerLocked = !!aElement;
 
-  if (!aWidget) {
-    return;
-  }
-
   // Reset mouse wheel transaction
   WheelTransaction::EndTransaction();
 
@@ -4351,6 +4347,8 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
     do_GetService("@mozilla.org/widget/dragservice;1");
 
   if (sIsPointerLocked) {
+    MOZ_ASSERT(aWidget, "Locking pointer requires a widget");
+
     // Store the last known ref point so we can reposition the pointer after unlock.
     mPreLockPoint = sLastRefPoint;
 
@@ -4358,8 +4356,8 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
     // set the mouse to the center of the window, so that the mouse event
     // doesn't report any movement.
     sLastRefPoint = GetWindowClientRectCenter(aWidget);
-    aWidget->SynthesizeNativeMouseMove(sLastRefPoint + aWidget->WidgetToScreenOffset(),
-                                       nullptr);
+    aWidget->SynthesizeNativeMouseMove(
+      sLastRefPoint + aWidget->WidgetToScreenOffset(), nullptr);
 
     // Retarget all events to this element via capture.
     nsIPresShell::SetCapturingContent(aElement, CAPTURE_POINTERLOCK);
@@ -4374,8 +4372,10 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
     // pre-pointerlock position, so that the synthetic mouse event reports
     // no movement.
     sLastRefPoint = mPreLockPoint;
-    aWidget->SynthesizeNativeMouseMove(mPreLockPoint + aWidget->WidgetToScreenOffset(),
-                                       nullptr);
+    if (aWidget) {
+      aWidget->SynthesizeNativeMouseMove(
+        mPreLockPoint + aWidget->WidgetToScreenOffset(), nullptr);
+    }
 
     // Don't retarget events to this element any more.
     nsIPresShell::SetCapturingContent(nullptr, CAPTURE_POINTERLOCK);
@@ -4933,7 +4933,7 @@ EventStateManager::SetContentState(nsIContent* aContent, EventStates aState)
         newHover = aContent;
       } else {
         NS_ASSERTION(!aContent ||
-                     aContent->GetCrossShadowCurrentDoc() ==
+                     aContent->GetComposedDoc() ==
                        mPresContext->PresShell()->GetDocument(),
                      "Unexpected document");
         nsIFrame *frame = aContent ? aContent->GetPrimaryFrame() : nullptr;

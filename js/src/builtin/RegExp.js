@@ -480,7 +480,16 @@ function RegExpLocalReplaceOpt(rx, S, lengthS, replaceValue)
 {
     var sticky = !!rx.sticky;
 
-    var lastIndex = sticky ? rx.lastIndex : 0;
+    var lastIndex;
+    if (sticky) {
+        lastIndex = ToLength(rx.lastIndex);
+        if (lastIndex > lengthS) {
+            rx.lastIndex = 0;
+            return S;
+        }
+    } else {
+        lastIndex = 0;
+    }
 
     // Step 11.a.
     var result = RegExpMatcher(rx, S, lastIndex, sticky);
@@ -738,7 +747,10 @@ function RegExpSplit(string, limit) {
     }
 
     // Steps 20-22.
-    _DefineDataProperty(A, lengthA, Substring(S, p, size - p));
+    if (p >= size)
+        _DefineDataProperty(A, lengthA, "");
+    else
+        _DefineDataProperty(A, lengthA, Substring(S, p, size - p));
 
     // Step 23.
     return A;
@@ -810,7 +822,7 @@ function RegExpBuiltinExec(R, S, forTest) {
     if (!global && !sticky) {
         lastIndex = 0;
     } else {
-        if (lastIndex < 0 || lastIndex > S.length) {
+        if (lastIndex > S.length) {
             // Steps 15.a.i-ii, 15.c.i.1-2.
             R.lastIndex = 0;
             return forTest ? false : null;

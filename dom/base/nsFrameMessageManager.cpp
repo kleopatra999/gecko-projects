@@ -1657,7 +1657,7 @@ nsMessageManagerScriptExecutor::DidCreateGlobal()
 
 // static
 void
-nsMessageManagerScriptExecutor::Shutdown()
+nsMessageManagerScriptExecutor::PurgeCache()
 {
   if (sCachedScripts) {
     NS_ASSERTION(sCachedScripts != nullptr, "Need cached scripts");
@@ -1665,6 +1665,15 @@ nsMessageManagerScriptExecutor::Shutdown()
       delete iter.Data();
       iter.Remove();
     }
+  }
+}
+
+// static
+void
+nsMessageManagerScriptExecutor::Shutdown()
+{
+  if (sCachedScripts) {
+    PurgeCache();
 
     delete sCachedScripts;
     sCachedScripts = nullptr;
@@ -2029,8 +2038,8 @@ public:
     if (aCpows && !cc->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
       return NS_ERROR_UNEXPECTED;
     }
-    if (!cc->SendAsyncMessage(PromiseFlatString(aMessage), data, cpows,
-                              IPC::Principal(aPrincipal))) {
+    if (!cc->SendAsyncMessage(PromiseFlatString(aMessage), cpows,
+                              IPC::Principal(aPrincipal), data)) {
       return NS_ERROR_UNEXPECTED;
     }
 
