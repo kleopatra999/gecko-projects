@@ -3421,12 +3421,17 @@ int NS_main(int argc, NS_tchar **argv)
   }
 #endif /* XP_WIN */
 
-  // Run update process on a background thread.  ShowProgressUI may return
+  // Run update process on a background thread. ShowProgressUI may return
   // before QuitProgressUI has been called, so wait for UpdateThreadFunc to
-  // terminate.  Avoid showing the progress UI when staging an update.
+  // terminate. Avoid showing the progress UI when staging an update, or if this
+  // is an elevated process on OSX.
   Thread t;
   if (t.Run(UpdateThreadFunc, nullptr) == 0) {
-    if (!sStagedUpdate && !sReplaceRequest) {
+    if (!sStagedUpdate && !sReplaceRequest
+#ifdef XP_MACOSX
+        && !isElevated
+#endif
+       ) {
       ShowProgressUI();
     }
   }
