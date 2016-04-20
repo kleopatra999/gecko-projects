@@ -18,4 +18,4 @@ RUN apt-get -q update \
 
 COPY requirements.txt /tmp/
 RUN pip install -r /tmp/requirements.txt
-RUN freshclam --verbose
+RUN for i in 1 2 3 4 5; do freshclam --verbose && break || sleep 15; done
