@@ -185,7 +185,7 @@ class BeetMover(BaseScript, VirtualenvMixin, object):
             "partial_version": self.config.get('partial_version', ''),
             "build_num": self.config['build_num'],
             # keep the trailing slash
-            "s3_prefix": 'pub/{prod}/candidates/{ver}-candidates/build{n}/'.format(
+            "s3_prefix": 'pub/{prod}/candidates/{ver}-candidates/{n}/'.format(
                 prod=self.config['product'], ver=self.config['version'],
                 n=self.config['build_num']
             ),
@@ -280,8 +280,8 @@ class BeetMover(BaseScript, VirtualenvMixin, object):
                 self.upload_bit(source=downloaded_file, s3_key=s3_key,
                                 bucket=bucket)
                 # upload checksums to a separate prefix
-                beet_info_dest = '{prefix}beetmover-checksums/{key}.beet'.format(
-                    prefix=self._get_template_vars()["s3_prefix"], key=s3_key
+                beet_info_dest = '{prefix}beetmover-checksums/{f}.beet'.format(
+                    prefix=self._get_template_vars()["s3_prefix"], f=file_
                 )
                 self.upload_bit(
                     source=downloaded_file_info, s3_key=beet_info_dest,
