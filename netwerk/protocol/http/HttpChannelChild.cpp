@@ -1274,14 +1274,8 @@ HttpChannelChild::Redirect1Begin(const uint32_t& newChannelId,
   if (NS_SUCCEEDED(rv)) {
     if (mRedirectChannelChild) {
       mRedirectChannelChild->ConnectParent(newChannelId);
-      rv = gHttpHandler->AsyncOnChannelRedirect(this,
-                                                newChannel,
-                                                redirectFlags);
-    } else {
-      LOG(("  redirecting to a protocol that doesn't implement"
-           " nsIChildChannel"));
-      rv = NS_ERROR_FAILURE;
     }
+    rv = gHttpHandler->AsyncOnChannelRedirect(this, newChannel, redirectFlags);
   }
 
   if (NS_FAILED(rv))
@@ -1506,7 +1500,7 @@ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener *listener,
 // HttpChannelChild::nsIAsyncVerifyRedirectCallback
 //-----------------------------------------------------------------------------
 
-class OverrideRunnable : public nsRunnable {
+class OverrideRunnable : public Runnable {
   RefPtr<HttpChannelChild> mChannel;
   RefPtr<HttpChannelChild> mNewChannel;
   RefPtr<InterceptStreamListener> mListener;
@@ -1541,6 +1535,17 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
   OptionalURIParams redirectURI;
   nsCOMPtr<nsIHttpChannel> newHttpChannel =
       do_QueryInterface(mRedirectChannelChild);
+
+  if (NS_SUCCEEDED(result) && !mRedirectChannelChild) {
+    // mRedirectChannelChild doesn't exist means we're redirecting to a protocol
+    // that doesn't implement nsIChildChannel. The redirect result should be set
+    // as failed by veto listeners and shouldn't enter this condition. As the
+    // last resort, we synthesize the error result as NS_ERROR_DOM_BAD_URI here
+    // to let nsHttpChannel::ContinueProcessResponse2 know it's redirecting to
+    // another protocol and throw an error.
+    LOG(("  redirecting to a protocol that doesn't implement nsIChildChannel"));
+    result = NS_ERROR_DOM_BAD_URI;
+  }
 
   if (newHttpChannel) {
     // Must not be called until after redirect observers called.
@@ -1774,9 +1779,6 @@ HttpChannelChild::AsyncOpen(nsIStreamListener *listener, nsISupports *aContext)
   // Set user agent override from docshell
   HttpBaseChannel::SetDocshellUserAgentOverride();
 
-  // Set user agent override from loadgroup
-  HttpBaseChannel::SetLoadGroupUserAgentOverride();
-
   MOZ_ASSERT_IF(mPostRedirectChannelShouldUpgrade,
                 mPostRedirectChannelShouldIntercept);
   bool shouldUpgrade = mPostRedirectChannelShouldUpgrade;
@@ -1942,10 +1944,10 @@ HttpChannelChild::ContinueAsyncOpen()
   nsresult rv = mozilla::ipc::LoadInfoToLoadInfoArgs(mLoadInfo, &openArgs.loadInfo());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  EnsureSchedulingContextID();
-  char scid[NSID_LENGTH];
-  mSchedulingContextID.ToProvidedString(scid);
-  openArgs.schedulingContextID().AssignASCII(scid);
+  EnsureRequestContextID();
+  char rcid[NSID_LENGTH];
+  mRequestContextID.ToProvidedString(rcid);
+  openArgs.requestContextID().AssignASCII(rcid);
 
   // The socket transport in the chrome process now holds a logical ref to us
   // until OnStopRequest, or we do a redirect, or we hit an IPDL error.

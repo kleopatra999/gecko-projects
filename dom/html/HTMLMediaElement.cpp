@@ -86,6 +86,7 @@
 #include "mozilla/dom/TextTrack.h"
 #include "nsIContentPolicy.h"
 #include "mozilla/Telemetry.h"
+#include "DecoderDoctorDiagnostics.h"
 
 #include "ImageContainer.h"
 #include "nsRange.h"
@@ -206,7 +207,7 @@ static const double THRESHOLD_LOW_PLAYBACKRATE_AUDIO = 0.5;
 // receive events. If we neglect to remove the self-reference then the element
 // just lives longer than it needs to.
 
-class nsMediaEvent : public nsRunnable
+class nsMediaEvent : public Runnable
 {
 public:
 
@@ -560,6 +561,14 @@ HTMLMediaElement::GetMozDebugReaderData(nsAString& aString)
 {
   if (mDecoder && !mSrcStream) {
     mDecoder->GetMozDebugReaderData(aString);
+  }
+}
+
+void
+HTMLMediaElement::MozDumpDebugInfo()
+{
+  if (mDecoder) {
+    mDecoder->DumpDebugInfo();
   }
 }
 
@@ -1061,12 +1070,17 @@ void HTMLMediaElement::LoadFromSourceChildren()
 
     // If we have a type attribute, it must be a supported type.
     nsAutoString type;
-    if (child->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type) &&
-        GetCanPlay(type) == CANPLAY_NO) {
-      DispatchAsyncSourceError(child);
-      const char16_t* params[] = { type.get(), src.get() };
-      ReportLoadError("MediaLoadUnsupportedTypeAttribute", params, ArrayLength(params));
-      continue;
+    if (child->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type)) {
+      DecoderDoctorDiagnostics diagnostics;
+      CanPlayStatus canPlay = GetCanPlay(type, &diagnostics);
+      diagnostics.StoreFormatDiagnostics(
+        OwnerDoc(), type, canPlay != CANPLAY_NO, __func__);
+      if (canPlay == CANPLAY_NO) {
+        DispatchAsyncSourceError(child);
+        const char16_t* params[] = { type.get(), src.get() };
+        ReportLoadError("MediaLoadUnsupportedTypeAttribute", params, ArrayLength(params));
+        continue;
+      }
     }
     nsAutoString media;
     HTMLSourceElement *childSrc = HTMLSourceElement::FromContent(child);
@@ -2025,7 +2039,7 @@ HTMLMediaElement::CaptureStreamInternal(bool aFinishWhenEnded,
 
   OutputMediaStream* out = mOutputStreams.AppendElement();
   MediaStreamTrackSourceGetter* getter = new CaptureStreamTrackSourceGetter(this);
-  out->mStream = DOMMediaStream::CreateTrackUnionStream(window, aGraph, getter);
+  out->mStream = DOMMediaStream::CreateTrackUnionStreamAsInput(window, aGraph, getter);
   out->mFinishWhenEnded = aFinishWhenEnded;
 
   mAudioCaptured = true;
@@ -2884,7 +2898,8 @@ void HTMLMediaElement::UnbindFromTree(bool aDeep,
 
 /* static */
 CanPlayStatus
-HTMLMediaElement::GetCanPlay(const nsAString& aType)
+HTMLMediaElement::GetCanPlay(const nsAString& aType,
+                             DecoderDoctorDiagnostics* aDiagnostics)
 {
   nsContentTypeParser parser(aType);
   nsAutoString mimeType;
@@ -2898,13 +2913,18 @@ HTMLMediaElement::GetCanPlay(const nsAString& aType)
   NS_ConvertUTF16toUTF8 mimeTypeUTF8(mimeType);
   return DecoderTraits::CanHandleMediaType(mimeTypeUTF8.get(),
                                            NS_SUCCEEDED(rv),
-                                           codecs);
+                                           codecs,
+                                           aDiagnostics);
 }
 
 NS_IMETHODIMP
 HTMLMediaElement::CanPlayType(const nsAString& aType, nsAString& aResult)
 {
-  switch (GetCanPlay(aType)) {
+  DecoderDoctorDiagnostics diagnostics;
+  CanPlayStatus canPlay = GetCanPlay(aType, &diagnostics);
+  diagnostics.StoreFormatDiagnostics(
+    OwnerDoc(), aType, canPlay != CANPLAY_NO, __func__);
+  switch (canPlay) {
   case CANPLAY_NO:
     aResult.Truncate();
     break;
@@ -2964,7 +2984,13 @@ nsresult HTMLMediaElement::InitializeDecoderForChannel(nsIChannel* aChannel,
   aChannel->GetContentType(mimeType);
   NS_ASSERTION(!mimeType.IsEmpty(), "We should have the Content-Type.");
 
-  RefPtr<MediaDecoder> decoder = DecoderTraits::CreateDecoder(mimeType, this);
+  DecoderDoctorDiagnostics diagnostics;
+  RefPtr<MediaDecoder> decoder =
+    DecoderTraits::CreateDecoder(mimeType, this, &diagnostics);
+  diagnostics.StoreFormatDiagnostics(OwnerDoc(),
+                                     NS_ConvertASCIItoUTF16(mimeType),
+                                     decoder != nullptr,
+                                     __func__);
   if (!decoder) {
     nsAutoString src;
     GetCurrentSrc(src);
@@ -3805,6 +3831,8 @@ void HTMLMediaElement::CheckProgress(bool aHaveNewProgress)
         ChangeDelayLoadStatus(true);
       }
     }
+    // Download statistics may have been updated, force a recheck of the readyState.
+    UpdateReadyStateInternal();
   }
 
   if (now - mDataTime >= TimeDuration::FromMilliseconds(STALL_MS)) {
@@ -3905,16 +3933,16 @@ HTMLMediaElement::UpdateReadyStateInternal()
   }
 
   if (mSrcStream && mReadyState < nsIDOMHTMLMediaElement::HAVE_METADATA) {
-    bool hasAudio = !AudioTracks()->IsEmpty();
-    bool hasVideo = !VideoTracks()->IsEmpty();
+    bool hasAudioTracks = !AudioTracks()->IsEmpty();
+    bool hasVideoTracks = !VideoTracks()->IsEmpty();
 
-    if (!hasAudio && !hasVideo) {
+    if (!hasAudioTracks && !hasVideoTracks) {
       LOG(LogLevel::Debug, ("MediaElement %p UpdateReadyStateInternal() "
                             "Stream with no tracks", this));
       return;
     }
 
-    if (IsVideo() && hasVideo && !HasVideo()) {
+    if (IsVideo() && hasVideoTracks && !HasVideo()) {
       LOG(LogLevel::Debug, ("MediaElement %p UpdateReadyStateInternal() "
                             "Stream waiting for video", this));
       return;
@@ -3928,10 +3956,10 @@ HTMLMediaElement::UpdateReadyStateInternal()
     // We are playing a stream that has video and a video frame is now set.
     // This means we have all metadata needed to change ready state.
     MediaInfo mediaInfo = mMediaInfo;
-    if (hasAudio) {
+    if (hasAudioTracks) {
       mediaInfo.EnableAudio();
     }
-    if (hasVideo) {
+    if (hasVideoTracks) {
       mediaInfo.EnableVideo();
     }
     MetadataLoaded(&mediaInfo, nsAutoPtr<const MetadataTags>(nullptr));
@@ -5123,6 +5151,9 @@ already_AddRefed<Promise>
 HTMLMediaElement::SetMediaKeys(mozilla::dom::MediaKeys* aMediaKeys,
                                ErrorResult& aRv)
 {
+  LOG(LogLevel::Debug, ("%p SetMediaKeys(%p) mMediaKeys=%p mDecoder=%p",
+    this, aMediaKeys, mMediaKeys.get(), mDecoder.get()));
+
   if (MozAudioCaptured()) {
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;

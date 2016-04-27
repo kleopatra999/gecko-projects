@@ -166,7 +166,7 @@ class MediaRecorder::Session: public nsIObserver,
 
   // Main thread task.
   // Create a blob event and send back to client.
-  class PushBlobRunnable : public nsRunnable
+  class PushBlobRunnable : public Runnable
   {
   public:
     explicit PushBlobRunnable(Session* aSession)
@@ -196,7 +196,7 @@ class MediaRecorder::Session: public nsIObserver,
   };
 
   // Notify encoder error, run in main thread task. (Bug 1095381)
-  class EncoderErrorNotifierRunnable : public nsRunnable
+  class EncoderErrorNotifierRunnable : public Runnable
   {
   public:
     explicit EncoderErrorNotifierRunnable(Session* aSession)
@@ -224,7 +224,7 @@ class MediaRecorder::Session: public nsIObserver,
   };
 
   // Fire start event and set mimeType, run in main thread task.
-  class DispatchStartEventRunnable : public nsRunnable
+  class DispatchStartEventRunnable : public Runnable
   {
   public:
     DispatchStartEventRunnable(Session* aSession, const nsAString & aEventName)
@@ -253,7 +253,7 @@ class MediaRecorder::Session: public nsIObserver,
 
   // Record thread task and it run in Media Encoder thread.
   // Fetch encoded Audio/Video data from MediaEncoder.
-  class ExtractRunnable : public nsRunnable
+  class ExtractRunnable : public Runnable
   {
   public:
     explicit ExtractRunnable(Session* aSession)
@@ -353,7 +353,7 @@ class MediaRecorder::Session: public nsIObserver,
   };
   // Main thread task.
   // To delete RecordingSession object.
-  class DestroyRunnable : public nsRunnable
+  class DestroyRunnable : public Runnable
   {
   public:
     explicit DestroyRunnable(Session* aSession)
@@ -1051,6 +1051,26 @@ MediaRecorder::Start(const Optional<int32_t>& aTimeSlice, ErrorResult& aResult)
     return;
   }
 
+  nsTArray<RefPtr<MediaStreamTrack>> tracks;
+  if (mDOMStream) {
+    mDOMStream->GetTracks(tracks);
+  }
+  if (!tracks.IsEmpty()) {
+    // If there are tracks already available that we're not allowed
+    // to record, we should throw a security error.
+    bool subsumes = false;
+    nsPIDOMWindowInner* window;
+    nsIDocument* doc;
+    if (!(window = GetOwner()) ||
+        !(doc = window->GetExtantDoc()) ||
+        NS_FAILED(doc->NodePrincipal()->Subsumes(
+                    mDOMStream->GetPrincipal(), &subsumes)) ||
+        !subsumes) {
+      aResult.Throw(NS_ERROR_DOM_SECURITY_ERR);
+      return;
+    }
+  }
+
   int32_t timeSlice = 0;
   if (aTimeSlice.WasPassed()) {
     if (aTimeSlice.Value() < 0) {
@@ -1224,14 +1244,12 @@ MediaRecorder::SetOptions(const MediaRecorderOptions& aInitDict)
   }
 }
 
-static char const *const gWebMAudioEncoderCodecs[3] = {
-  "vorbis",
+static char const *const gWebMAudioEncoderCodecs[2] = {
   "opus",
   // no VP9 yet
   nullptr,
 };
-static char const *const gWebMVideoEncoderCodecs[5] = {
-  "vorbis",
+static char const *const gWebMVideoEncoderCodecs[4] = {
   "opus",
   "vp8",
   "vp8.0",

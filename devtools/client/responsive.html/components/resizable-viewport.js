@@ -28,6 +28,7 @@ module.exports = createClass({
     onContentResize: PropTypes.func.isRequired,
     onResizeViewport: PropTypes.func.isRequired,
     onRotateViewport: PropTypes.func.isRequired,
+    onUpdateDeviceModalOpen: PropTypes.func.isRequired,
   },
 
   displayName: "ResizableViewport",
@@ -74,8 +75,10 @@ module.exports = createClass({
     }
 
     let { lastClientX, lastClientY, ignoreX, ignoreY } = this.state;
-    let deltaX = clientX - lastClientX;
-    let deltaY = clientY - lastClientY;
+    // we are resizing a centered viewport, so dragging a mouse resizes
+    // twice as much - also on opposite side.
+    let deltaX = 2 * (clientX - lastClientX);
+    let deltaY = 2 * (clientY - lastClientY);
 
     if (ignoreX) {
       deltaX = 0;
@@ -121,6 +124,7 @@ module.exports = createClass({
       onContentResize,
       onResizeViewport,
       onRotateViewport,
+      onUpdateDeviceModalOpen,
     } = this.props;
 
     let resizeHandleClass = "viewport-resize-handle";
@@ -143,6 +147,7 @@ module.exports = createClass({
         onChangeViewportDevice,
         onResizeViewport,
         onRotateViewport,
+        onUpdateDeviceModalOpen,
       }),
       dom.div(
         {

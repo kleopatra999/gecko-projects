@@ -1330,22 +1330,6 @@ CSS_PROP_XUL(
     kBoxOrientKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None) // XXX bug 3935
-/* We treat -webkit-box-orient as a writing-mode-aware logical alias
- * for "flex-direction": */
-CSS_PROP_LOGICAL(
-    -webkit-box-orient,
-    webkit_box_orient,
-    WebkitBoxOrient,
-    CSS_PROPERTY_PARSE_VALUE |
-      CSS_PROPERTY_LOGICAL |
-      CSS_PROPERTY_LOGICAL_SINGLE_CUSTOM_VALMAPPING,
-    "layout.css.prefixes.webkit",
-    VARIANT_HK,
-    kBoxOrientKTable,
-    WebkitBoxOrient,
-    Position,
-    CSS_PROP_NO_OFFSET,
-    eStyleAnimType_None)
 CSS_PROP_XUL(
     -moz-box-pack,
     box_pack,
@@ -1421,7 +1405,7 @@ CSS_PROP_SVGRESET(
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
-    eStyleAnimType_None)
+    eStyleAnimType_Custom)
 CSS_PROP_SVG(
     clip-rule,
     clip_rule,
@@ -2197,6 +2181,12 @@ CSS_PROP_POSITION(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+CSS_PROP_SHORTHAND(
+    grid-template,
+    grid_template,
+    GridTemplate,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "layout.css.grid.enabled")
 CSS_PROP_POSITION(
     grid-template-areas,
     grid_template_areas,
@@ -4059,6 +4049,38 @@ CSS_PROP_TEXT(
     "",
     VARIANT_AUTO | VARIANT_NONE | VARIANT_INHERIT,
     nullptr,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_SHORTHAND(
+    -webkit-text-stroke,
+    _webkit_text_stroke,
+    WebkitTextStroke,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "layout.css.prefixes.webkit")
+CSS_PROP_TEXT(
+    -webkit-text-stroke-color,
+    _webkit_text_stroke_color,
+    WebkitTextStrokeColor,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
+        CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
+    "layout.css.prefixes.webkit",
+    VARIANT_HC,
+    nullptr,
+    offsetof(nsStyleText, mWebkitTextStrokeColor),
+    eStyleAnimType_Custom)
+CSS_PROP_TEXT(
+    -webkit-text-stroke-width,
+    _webkit_text_stroke_width,
+    WebkitTextStrokeWidth,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_NONNEGATIVE |
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
+    "layout.css.prefixes.webkit",
+    VARIANT_HKL | VARIANT_CALC,
+    kBorderWidthKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_TEXT(

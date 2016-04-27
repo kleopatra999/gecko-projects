@@ -110,7 +110,7 @@ using namespace mozilla::jsipc;
 // from the ones registered by webProgressListeners.
 #define NOTIFY_FLAG_SHIFT 16
 
-class OpenFileAndSendFDRunnable : public nsRunnable
+class OpenFileAndSendFDRunnable : public mozilla::Runnable
 {
     const nsString mPath;
     RefPtr<TabParent> mTabParent;
@@ -1168,7 +1168,7 @@ bool TabParent::SendRealMouseEvent(WidgetMouseEvent& event)
   if (mIsDestroyed) {
     return false;
   }
-  event.refPoint += GetChildProcessOffset();
+  event.mRefPoint += GetChildProcessOffset();
 
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (widget) {
@@ -1220,7 +1220,7 @@ TabParent::SendRealDragEvent(WidgetDragEvent& event, uint32_t aDragAction,
   if (mIsDestroyed) {
     return false;
   }
-  event.refPoint += GetChildProcessOffset();
+  event.mRefPoint += GetChildProcessOffset();
   return PBrowserParent::SendRealDragEvent(event, aDragAction, aDropEffect);
 }
 
@@ -1238,7 +1238,7 @@ bool TabParent::SendMouseWheelEvent(WidgetWheelEvent& event)
   ScrollableLayerGuid guid;
   uint64_t blockId;
   ApzAwareEventRoutingToChild(&guid, &blockId, nullptr);
-  event.refPoint += GetChildProcessOffset();
+  event.mRefPoint += GetChildProcessOffset();
   return PBrowserParent::SendMouseWheelEvent(event, guid, blockId);
 }
 
@@ -1251,7 +1251,7 @@ bool TabParent::RecvDispatchWheelEvent(const mozilla::WidgetWheelEvent& aEvent)
 
   WidgetWheelEvent localEvent(aEvent);
   localEvent.mWidget = widget;
-  localEvent.refPoint -= GetChildProcessOffset();
+  localEvent.mRefPoint -= GetChildProcessOffset();
 
   widget->DispatchInputEvent(&localEvent);
   return true;
@@ -1267,7 +1267,7 @@ TabParent::RecvDispatchMouseEvent(const mozilla::WidgetMouseEvent& aEvent)
 
   WidgetMouseEvent localEvent(aEvent);
   localEvent.mWidget = widget;
-  localEvent.refPoint -= GetChildProcessOffset();
+  localEvent.mRefPoint -= GetChildProcessOffset();
 
   widget->DispatchInputEvent(&localEvent);
   return true;
@@ -1283,7 +1283,7 @@ TabParent::RecvDispatchKeyboardEvent(const mozilla::WidgetKeyboardEvent& aEvent)
 
   WidgetKeyboardEvent localEvent(aEvent);
   localEvent.mWidget = widget;
-  localEvent.refPoint -= GetChildProcessOffset();
+  localEvent.mRefPoint -= GetChildProcessOffset();
 
   widget->DispatchInputEvent(&localEvent);
   return true;
@@ -1505,7 +1505,7 @@ bool TabParent::SendRealKeyEvent(WidgetKeyboardEvent& event)
   if (mIsDestroyed) {
     return false;
   }
-  event.refPoint += GetChildProcessOffset();
+  event.mRefPoint += GetChildProcessOffset();
 
   MaybeNativeKeyBinding bindings;
   bindings = void_t();
@@ -1896,6 +1896,44 @@ TabParent::RecvOnEventNeedingAckHandled(const EventMessage& aMessage)
   // since it may send notifications to IME.
   RefPtr<TabParent> kungFuDeathGrip(this);
   mContentCache.OnEventNeedingAckHandled(widget, aMessage);
+  return true;
+}
+
+void
+TabParent::HandledWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
+                                         bool aIsConsumed)
+{
+  bool ok = SendHandledWindowedPluginKeyEvent(aKeyEventData, aIsConsumed);
+  NS_WARN_IF(!ok);
+}
+
+bool
+TabParent::RecvOnWindowedPluginKeyEvent(const NativeEventData& aKeyEventData)
+{
+  nsCOMPtr<nsIWidget> widget = GetWidget();
+  if (NS_WARN_IF(!widget)) {
+    // Notifies the plugin process of the key event being not consumed by us.
+    HandledWindowedPluginKeyEvent(aKeyEventData, false);
+    return true;
+  }
+  nsresult rv = widget->OnWindowedPluginKeyEvent(aKeyEventData, this);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    // Notifies the plugin process of the key event being not consumed by us.
+    HandledWindowedPluginKeyEvent(aKeyEventData, false);
+    return true;
+  }
+
+  // If the key event is posted to another process, we need to wait a call
+  // of HandledWindowedPluginKeyEvent().  So, nothing to do here in this case.
+  if (rv == NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY) {
+    return true;
+  }
+
+  // Otherwise, the key event is handled synchronously.  Let's notify the
+  // plugin process of the key event's result.
+  bool consumed = (rv == NS_SUCCESS_EVENT_CONSUMED);
+  HandledWindowedPluginKeyEvent(aKeyEventData, consumed);
+
   return true;
 }
 
@@ -2797,7 +2835,7 @@ TabParent::NavigateByKey(bool aForward, bool aForDocumentNavigation)
 }
 
 class LayerTreeUpdateRunnable final
-  : public nsRunnable
+  : public mozilla::Runnable
 {
   uint64_t mLayersId;
   bool mActive;
@@ -3142,24 +3180,27 @@ TabParent::AddInitialDnDDataTo(DataTransfer* aDataTransfer)
         auto* parent = static_cast<BlobParent*>(item.data().get_PBlobParent());
         RefPtr<BlobImpl> impl = parent->GetBlobImpl();
         variant->SetAsISupports(impl);
-      } else if (item.data().type() == IPCDataTransferData::TnsCString &&
-                 nsContentUtils::IsFlavorImage(item.flavor())) {
-        // An image! Get the imgIContainer for it and set it in the variant.
-        nsCOMPtr<imgIContainer> imageContainer;
-        nsresult rv =
-          nsContentUtils::DataTransferItemToImage(item,
-                                                  getter_AddRefs(imageContainer));
-        if (NS_FAILED(rv)) {
-          continue;
+      } else if (item.data().type() == IPCDataTransferData::TnsCString) {
+        if (nsContentUtils::IsFlavorImage(item.flavor())) {
+          // An image! Get the imgIContainer for it and set it in the variant.
+          nsCOMPtr<imgIContainer> imageContainer;
+          nsresult rv =
+            nsContentUtils::DataTransferItemToImage(item,
+                                                    getter_AddRefs(imageContainer));
+          if (NS_FAILED(rv)) {
+            continue;
+          }
+          variant->SetAsISupports(imageContainer);
+        } else {
+          variant->SetAsACString(item.data().get_nsCString());
         }
-        variant->SetAsISupports(imageContainer);
       }
 
       // Using system principal here, since once the data is on parent process
       // side, it can be handled as being from browser chrome or OS.
-      aDataTransfer->SetDataWithPrincipal(NS_ConvertUTF8toUTF16(item.flavor()),
-                                          variant, i,
-                                          nsContentUtils::GetSystemPrincipal());
+      aDataTransfer->SetDataWithPrincipalFromOtherProcess(NS_ConvertUTF8toUTF16(item.flavor()),
+                                                          variant, i,
+                                                          nsContentUtils::GetSystemPrincipal());
     }
   }
   mInitialDataTransferItems.Clear();
@@ -3246,12 +3287,14 @@ TabParent::AudioChannelChangeNotification(nsPIDOMWindowOuter* aWindow,
 bool
 TabParent::RecvGetTabCount(uint32_t* aValue)
 {
+  *aValue = 0;
+
   nsCOMPtr<nsIXULBrowserWindow> xulBrowserWindow = GetXULBrowserWindow();
-  NS_ENSURE_TRUE(xulBrowserWindow, false);
+  NS_ENSURE_TRUE(xulBrowserWindow, true);
 
   uint32_t tabCount;
   nsresult rv = xulBrowserWindow->GetTabCount(&tabCount);
-  NS_ENSURE_SUCCESS(rv, false);
+  NS_ENSURE_SUCCESS(rv, true);
 
   *aValue = tabCount;
   return true;

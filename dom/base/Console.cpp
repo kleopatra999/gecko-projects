@@ -57,7 +57,7 @@
 #define CONSOLE_TAG_BLOB   JS_SCTAG_USER_MIN
 
 // This value is taken from ConsoleAPIStorage.js
-#define STORAGE_MAX_EVENTS 200
+#define STORAGE_MAX_EVENTS 1000
 
 using namespace mozilla::dom::exceptions;
 using namespace mozilla::dom::workers;
@@ -96,6 +96,7 @@ public:
     , mIDType(eUnknown)
     , mOuterIDNumber(0)
     , mInnerIDNumber(0)
+    , mStatus(eUnused)
 #ifdef DEBUG
     , mOwningThread(PR_GetCurrentThread())
 #endif
@@ -311,7 +312,7 @@ private:
   JSContext* mCx;
 };
 
-class ConsoleRunnable : public nsRunnable
+class ConsoleRunnable : public Runnable
                       , public WorkerFeature
                       , public StructuredCloneHolderBase
 {

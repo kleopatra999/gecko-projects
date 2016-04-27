@@ -629,6 +629,9 @@ NS_IMETHODIMP nsChildView::Destroy()
     return NS_OK;
   mOnDestroyCalled = true;
 
+  // Stuff below may delete the last ref to this
+  nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
+
   [mView widgetDestroyed];
 
   nsBaseWidget::Destroy();
@@ -2072,7 +2075,7 @@ nsChildView::MaybeDrawResizeIndicator(GLManager* aManager)
   }
 
   if (!mResizerImage) {
-    mResizerImage = new RectTextureImage(aManager->gl());
+    mResizerImage = MakeUnique<RectTextureImage>(aManager->gl());
   }
 
   LayoutDeviceIntSize size = mResizeIndicatorRect.Size();
@@ -2286,7 +2289,7 @@ nsChildView::MaybeDrawTitlebar(GLManager* aManager)
   mUpdatedTitlebarRegion.SetEmpty();
 
   if (!mTitlebarImage) {
-    mTitlebarImage = new RectTextureImage(aManager->gl());
+    mTitlebarImage = MakeUnique<RectTextureImage>(aManager->gl());
   }
 
   mTitlebarImage->UpdateFromCGContext(mTitlebarRect.Size(),
@@ -2310,7 +2313,7 @@ nsChildView::MaybeDrawRoundedCorners(GLManager* aManager,
   MutexAutoLock lock(mEffectsLock);
 
   if (!mCornerMaskImage) {
-    mCornerMaskImage = new RectTextureImage(aManager->gl());
+    mCornerMaskImage = MakeUnique<RectTextureImage>(aManager->gl());
   }
 
   LayoutDeviceIntSize size(mDevPixelCornerRadius, mDevPixelCornerRadius);
@@ -2631,7 +2634,7 @@ nsChildView::StartRemoteDrawingInRegion(LayoutDeviceIntRegion& aInvalidRegion,
   LayoutDeviceIntSize renderSize = mBounds.Size();
 
   if (!mBasicCompositorImage) {
-    mBasicCompositorImage = new RectTextureImage(mGLPresenter->gl());
+    mBasicCompositorImage = MakeUnique<RectTextureImage>(mGLPresenter->gl());
   }
 
   RefPtr<gfx::DrawTarget> drawTarget =
@@ -4561,7 +4564,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   // Check to see if we are double-clicking in the titlebar.
   CGFloat locationInTitlebar = [[self window] frame].size.height - [theEvent locationInWindow].y;
-  LayoutDeviceIntPoint pos = geckoEvent.refPoint;
+  LayoutDeviceIntPoint pos = geckoEvent.mRefPoint;
   if (!defaultPrevented && [theEvent clickCount] == 2 &&
       mGeckoChild->GetDraggableRegion().Contains(pos.x, pos.y) &&
       [[self window] isKindOfClass:[ToolbarWindow class]] &&
@@ -4590,7 +4593,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   EventMessage msg = aEnter ? eMouseEnterIntoWidget : eMouseExitFromWidget;
   WidgetMouseEvent event(true, msg, mGeckoChild, WidgetMouseEvent::eReal);
-  event.refPoint = mGeckoChild->CocoaPointsToDevPixels(localEventLocation);
+  event.mRefPoint = mGeckoChild->CocoaPointsToDevPixels(localEventLocation);
 
   event.exit = aType;
 
@@ -5177,7 +5180,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   // convert point to view coordinate system
   NSPoint locationInWindow = nsCocoaUtils::EventLocationForWindow(aMouseEvent, [self window]);
 
-  outGeckoEvent->refPoint = [self convertWindowCoordinates:locationInWindow];
+  outGeckoEvent->mRefPoint = [self convertWindowCoordinates:locationInWindow];
 
   WidgetMouseEventBase* mouseEvent = outGeckoEvent->AsMouseEventBase();
   mouseEvent->buttons = 0;
@@ -5709,7 +5712,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   // Convert event from gecko global coords to gecko view coords.
   NSPoint draggingLoc = [aSender draggingLocation];
 
-  geckoEvent.refPoint = [self convertWindowCoordinates:draggingLoc];
+  geckoEvent.mRefPoint = [self convertWindowCoordinates:draggingLoc];
 
   nsAutoRetainCocoaObject kungFuDeathGrip(self);
   mGeckoChild->DispatchInputEvent(&geckoEvent);

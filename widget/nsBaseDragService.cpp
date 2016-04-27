@@ -433,8 +433,16 @@ nsBaseDragService::FireDragEventAtSource(EventMessage aEventMessage)
         WidgetDragEvent event(true, aEventMessage, nullptr);
         event.inputSource = mInputSource;
         if (aEventMessage == eDragEnd) {
-          event.refPoint = mEndDragPoint;
+          event.mRefPoint = mEndDragPoint;
           event.mUserCancelled = mUserCancelled;
+        }
+
+        // Send the drag event to APZ, which needs to know about them to be
+        // able to accurately detect the end of a drag gesture.
+        if (nsPresContext* presContext = presShell->GetPresContext()) {
+          if (nsCOMPtr<nsIWidget> widget = presContext->GetRootWidget()) {
+            widget->DispatchEventToAPZOnly(&event);
+          }
         }
 
         nsCOMPtr<nsIContent> content = do_QueryInterface(mSourceNode);
@@ -697,7 +705,7 @@ nsBaseDragService::DrawDragForImage(nsIImageLoadingContent* aImageLoader,
     DrawResult res =
       imgContainer->Draw(ctx, destSize, ImageRegion::Create(destSize),
                          imgIContainer::FRAME_CURRENT,
-                         Filter::GOOD, Nothing(),
+                         Filter::GOOD, /* no SVGImageContext */ Nothing(),
                          imgIContainer::FLAG_SYNC_DECODE);
     if (res == DrawResult::BAD_IMAGE || res == DrawResult::BAD_ARGS) {
       return NS_ERROR_FAILURE;

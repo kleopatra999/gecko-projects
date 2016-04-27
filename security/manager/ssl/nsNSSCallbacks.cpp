@@ -23,6 +23,7 @@
 #include "nsProxyRelease.h"
 #include "pkix/pkixtypes.h"
 #include "PSMRunnable.h"
+#include "ScopedNSSTypes.h"
 #include "SharedSSLState.h"
 #include "ssl.h"
 #include "sslproto.h"
@@ -47,7 +48,7 @@ const uint32_t KEA_NOT_SUPPORTED = 1;
 
 } // namespace
 
-class nsHTTPDownloadEvent : public nsRunnable {
+class nsHTTPDownloadEvent : public Runnable {
 public:
   nsHTTPDownloadEvent();
   ~nsHTTPDownloadEvent();
@@ -174,7 +175,7 @@ nsHTTPDownloadEvent::Run()
   return NS_OK;
 }
 
-struct nsCancelHTTPDownloadEvent : nsRunnable {
+struct nsCancelHTTPDownloadEvent : Runnable {
   RefPtr<nsHTTPListener> mListener;
 
   NS_IMETHOD Run() {
@@ -1229,7 +1230,7 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("HandshakeCallback KEEPING existing cert\n"));
   } else {
-    ScopedCERTCertificate serverCert(SSL_PeerCertificate(fd));
+    UniqueCERTCertificate serverCert(SSL_PeerCertificate(fd));
     RefPtr<nsNSSCertificate> nssc(nsNSSCertificate::Create(serverCert.get()));
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("HandshakeCallback using NEW cert %p\n", nssc.get()));

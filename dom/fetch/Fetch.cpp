@@ -106,7 +106,7 @@ private:
   ~MainThreadFetchResolver();
 };
 
-class MainThreadFetchRunnable : public nsRunnable
+class MainThreadFetchRunnable : public Runnable
 {
   RefPtr<WorkerFetchResolver> mResolver;
   RefPtr<InternalRequest> mRequest;
@@ -451,7 +451,7 @@ ExtractFromURLSearchParams(const URLSearchParams& aParams,
   nsAutoString serialized;
   aParams.Stringify(serialized);
   aContentType = NS_LITERAL_CSTRING("application/x-www-form-urlencoded;charset=UTF-8");
-  return NS_NewStringInputStream(aStream, serialized);
+  return NS_NewCStringInputStream(aStream, NS_ConvertUTF16toUTF8(serialized));
 }
 } // namespace
 
@@ -696,7 +696,7 @@ NS_INTERFACE_MAP_BEGIN(ConsumeBodyDoneObserver<Derived>)
 NS_INTERFACE_MAP_END
 
 template <class Derived>
-class BeginConsumeBodyRunnable final : public nsRunnable
+class BeginConsumeBodyRunnable final : public Runnable
 {
   FetchBody<Derived>* mFetchBody;
 public:

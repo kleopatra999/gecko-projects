@@ -118,7 +118,7 @@ using namespace mozilla::dom;
  * nsGenericHTMLFormElement is binded to the tree with the autofocus attribute
  * enabled.
  */
-class nsAutoFocusEvent : public nsRunnable
+class nsAutoFocusEvent : public Runnable
 {
 public:
   explicit nsAutoFocusEvent(nsGenericHTMLFormElement* aElement) : mElement(aElement) {}
@@ -2277,7 +2277,7 @@ nsGenericHTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
         // this parent file control -- leave focus on the child.
         nsIFormControlFrame* formControlFrame = GetFormControlFrame(true);
         if (formControlFrame &&
-            aVisitor.mEvent->originalTarget == static_cast<nsINode*>(this))
+            aVisitor.mEvent->mOriginalTarget == static_cast<nsINode*>(this))
           formControlFrame->SetFocus(true, true);
         break;
       }

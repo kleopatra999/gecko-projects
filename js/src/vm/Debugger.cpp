@@ -5875,6 +5875,14 @@ Debugger::replaceFrameGuts(JSContext* cx, AbstractFramePtr from, AbstractFramePt
     if (!getDebuggerFrames(from, &frames))
         return false;
 
+    // If during the loop below we hit an OOM, we must also rollback any of
+    // the frames that were successfully replaced. For OSR frames, OOM here
+    // means those frames will pop from the OSR trampoline, which does not
+    // call Debugger::onLeaveFrame.
+    auto removeToDebuggerFramesOnExit = MakeScopeExit([&] {
+        removeFromFrameMapsAndClearBreakpointsIn(cx, to);
+    });
+
     for (size_t i = 0; i < frames.length(); i++) {
         HandleNativeObject frameobj = frames[i];
         Debugger* dbg = Debugger::fromChildJSObject(frameobj);
@@ -5895,6 +5903,9 @@ Debugger::replaceFrameGuts(JSContext* cx, AbstractFramePtr from, AbstractFramePt
             return false;
         }
     }
+
+    // All frames successfuly replaced, cancel the rollback.
+    removeToDebuggerFramesOnExit.release();
 
     return true;
 }
@@ -6464,6 +6475,8 @@ class DebuggerSourceGetURLMatcher
         // end to prevent them from being blacklisted by devtools by having
         // the same value as a source mapped URL.
         char* buf = JS_smprintf("%s > wasm", wasmModule->module().filename());
+        if (!buf)
+            return Nothing();
         JSString* str = NewStringCopyZ<CanGC>(cx_, buf);
         JS_smprintf_free(buf);
         return Some(str);
@@ -8184,9 +8197,12 @@ DebuggerObject_getOwnPropertyDescriptor(JSContext* cx, unsigned argc, Value* vp)
                 return false;
             desc.setSetterObject(set.toObjectOrNull());
         }
+
+        // Avoid tripping same-compartment assertions in JS::FromPropertyDescriptor().
+        desc.object().set(&args.thisv().toObject());
     }
 
-    return FromPropertyDescriptor(cx, desc, args.rval());
+    return JS::FromPropertyDescriptor(cx, desc, args.rval());
 }
 
 

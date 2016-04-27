@@ -757,7 +757,7 @@ StateChangeTask::Run()
 }
 
 /* This runnable allows to fire the "statechange" event */
-class OnStateChangeTask final : public nsRunnable
+class OnStateChangeTask final : public Runnable
 {
 public:
   explicit OnStateChangeTask(AudioContext* aAudioContext)
@@ -1036,11 +1036,21 @@ AudioContext::StartRendering(ErrorResult& aRv)
 
   mIsStarted = true;
   RefPtr<Promise> promise = Promise::Create(parentObject, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
   mDestination->StartRendering(promise);
 
   OnStateChanged(nullptr, AudioContextState::Running);
 
   return promise.forget();
+}
+
+unsigned long
+AudioContext::Length()
+{
+  MOZ_ASSERT(mIsOffline);
+  return mDestination->Length();
 }
 
 void

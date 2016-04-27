@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEventDispatcherListener.h"
 
@@ -17,6 +18,7 @@
 #include "nsGfxCIID.h"
 #include "nsWidgetsCID.h"
 #include "nsServiceManagerUtils.h"
+#include "nsIKeyEventInPluginCallback.h"
 #include "nsIScreenManager.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsISimpleEnumerator.h"
@@ -978,10 +980,10 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
         aInputBlockId, aFlags));
   };
 
-  RefPtr<GeckoContentController> controller = CreateRootContentController();
-  if (controller) {
+  mRootContentController = CreateRootContentController();
+  if (mRootContentController) {
     uint64_t rootLayerTreeId = mCompositorBridgeParent->RootLayerTreeId();
-    CompositorBridgeParent::SetControllerForLayerTree(rootLayerTreeId, controller);
+    CompositorBridgeParent::SetControllerForLayerTree(rootLayerTreeId, mRootContentController);
   }
 
   // When APZ is enabled, we can actually enable raw touch events because we
@@ -1197,6 +1199,18 @@ nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent)
   return status;
 }
 
+void
+nsBaseWidget::DispatchEventToAPZOnly(mozilla::WidgetInputEvent* aEvent)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (mAPZC) {
+    MOZ_ASSERT(APZThreadUtils::IsControllerThread());
+    uint64_t inputBlockId = 0;
+    ScrollableLayerGuid guid;
+    mAPZC->ReceiveInputEvent(*aEvent, &guid, &inputBlockId);
+  }
+}
+
 nsIDocument*
 nsBaseWidget::GetDocument() const
 {
@@ -1287,6 +1301,10 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   if (!success || !lf) {
     NS_WARNING("Failed to create an OMT compositor.");
     mAPZC = nullptr;
+    if (mRootContentController) {
+      mRootContentController->Destroy();
+      mRootContentController = nullptr;
+    }
     DestroyCompositor();
     mLayerManager = nullptr;
     mCompositorBridgeChild = nullptr;
@@ -1405,6 +1423,14 @@ void nsBaseWidget::OnDestroy()
     mTextEventDispatcher->OnDestroyWidget();
     // Don't release it until this widget actually released because after this
     // is called, TextEventDispatcher() may create it again.
+  }
+
+  // If this widget is being destroyed, let the APZ code know to drop references
+  // to this widget. Callers of this function all should be holding a deathgrip
+  // on this widget already.
+  if (mRootContentController) {
+    mRootContentController->Destroy();
+    mRootContentController = nullptr;
   }
 }
 
@@ -1973,9 +1999,10 @@ nsIWidget::SynthesizeNativeTouchTap(LayoutDeviceIntPoint aPoint, bool aLongTap,
                                mLongTapTouchPoint->mPosition, 0, 0, nullptr);
   }
 
-  mLongTapTouchPoint = new LongTapInfo(pointerId, aPoint,
-                                       TimeDuration::FromMilliseconds(elapse),
-                                       aObserver);
+  mLongTapTouchPoint =
+    MakeUnique<LongTapInfo>(pointerId, aPoint,
+                            TimeDuration::FromMilliseconds(elapse),
+                            aObserver);
   notifier.SkipNotification();  // we'll do it in the long-tap callback
   return NS_OK;
 }
@@ -2112,6 +2139,13 @@ NS_IMETHODIMP_(nsIWidget::NativeIMEContext)
 nsIWidget::GetNativeIMEContext()
 {
   return NativeIMEContext(this);
+}
+
+nsresult
+nsIWidget::OnWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
+                                    nsIKeyEventInPluginCallback* aCallback)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 namespace mozilla {
@@ -3037,8 +3071,8 @@ nsBaseWidget::debug_DumpEvent(FILE *                aFileOut,
           (void *) aWidget,
           aWidgetName,
           aWindowID,
-          aGuiEvent->refPoint.x,
-          aGuiEvent->refPoint.y);
+          aGuiEvent->mRefPoint.x,
+          aGuiEvent->mRefPoint.y);
 }
 //////////////////////////////////////////////////////////////
 /* static */ void

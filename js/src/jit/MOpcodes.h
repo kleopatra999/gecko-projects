@@ -52,6 +52,7 @@ namespace jit {
     _(ReturnFromCtor)                                                       \
     _(BinarySharedStub)                                                     \
     _(UnarySharedStub)                                                      \
+    _(NullarySharedStub)                                                    \
     _(CheckOverRecursed)                                                    \
     _(DefVar)                                                               \
     _(DefLexical)                                                           \
@@ -150,6 +151,7 @@ namespace jit {
     _(RegExpTester)                                                         \
     _(RegExpPrototypeOptimizable)                                           \
     _(RegExpInstanceOptimizable)                                            \
+    _(GetFirstDollarIndex)                                                  \
     _(StringReplace)                                                        \
     _(Lambda)                                                               \
     _(LambdaArrow)                                                          \

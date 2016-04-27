@@ -1999,18 +1999,10 @@ ContentParent::RecvDeallocateLayerTreeId(const uint64_t& aId)
 
 namespace {
 
-void
-DelayedDeleteSubprocess(GeckoChildProcessHost* aSubprocess)
-{
-  XRE_GetIOMessageLoop()
-    ->PostTask(FROM_HERE,
-           new DeleteTask<GeckoChildProcessHost>(aSubprocess));
-}
-
 // This runnable only exists to delegate ownership of the
 // ContentParent to this runnable, until it's deleted by the event
 // system.
-struct DelayedDeleteContentParentTask : public nsRunnable
+struct DelayedDeleteContentParentTask : public Runnable
 {
   explicit DelayedDeleteContentParentTask(ContentParent* aObj) : mObj(aObj) { }
 
@@ -2138,10 +2130,10 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
   }
   mIdleListeners.Clear();
 
-  MessageLoop::current()->
-    PostTask(FROM_HERE,
-             NewRunnableFunction(DelayedDeleteSubprocess, mSubprocess));
-  mSubprocess = nullptr;
+  if (mSubprocess) {
+    mSubprocess->DissociateActor();
+    mSubprocess = nullptr;
+  }
 
   // IPDL rules require actors to live on past ActorDestroy, but it
   // may be that the kungFuDeathGrip above is the last reference to
@@ -3353,7 +3345,7 @@ PCompositorBridgeParent*
 ContentParent::AllocPCompositorBridgeParent(mozilla::ipc::Transport* aTransport,
                                             base::ProcessId aOtherProcess)
 {
-  return CompositorBridgeParent::Create(aTransport, aOtherProcess);
+  return CompositorBridgeParent::Create(aTransport, aOtherProcess, mSubprocess);
 }
 
 gfx::PVRManagerParent*
@@ -3367,7 +3359,7 @@ PImageBridgeParent*
 ContentParent::AllocPImageBridgeParent(mozilla::ipc::Transport* aTransport,
                                        base::ProcessId aOtherProcess)
 {
-  return ImageBridgeParent::Create(aTransport, aOtherProcess);
+  return ImageBridgeParent::Create(aTransport, aOtherProcess, mSubprocess);
 }
 
 PBackgroundParent*
@@ -4971,6 +4963,7 @@ ContentParent::RecvRecordingDeviceEvents(const nsString& aRecordingStatus,
 bool
 ContentParent::RecvGetGraphicsFeatureStatus(const int32_t& aFeature,
                                             int32_t* aStatus,
+                                            nsCString* aFailureId,
                                             bool* aSuccess)
 {
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
@@ -4979,7 +4972,7 @@ ContentParent::RecvGetGraphicsFeatureStatus(const int32_t& aFeature,
     return true;
   }
 
-  *aSuccess = NS_SUCCEEDED(gfxInfo->GetFeatureStatus(aFeature, aStatus));
+  *aSuccess = NS_SUCCEEDED(gfxInfo->GetFeatureStatus(aFeature, *aFailureId, aStatus));
   return true;
 }
 

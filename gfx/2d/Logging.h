@@ -137,6 +137,8 @@ enum class LogReason : int {
   MessageChannelCloseFailure,
   TextureAliveAfterShutdown,
   InvalidContext,
+  InvalidCommandList,
+  AsyncTransactionTimeout,
   // End
   MustBeLessThanThis = 101,
 };

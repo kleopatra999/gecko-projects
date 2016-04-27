@@ -249,7 +249,7 @@ StorageActors.defaults = function(typeName, observationTopic, storeObjectType) {
      * @param {window} window
      *        The window which was added.
      */
-    onWindowReady: Task.async(function*(window) {
+    onWindowReady: Task.async(function* (window) {
       let host = this.getHostName(window.location);
       if (!this.hostVsStores.has(host)) {
         yield this.populateStoresForHost(host, window);
@@ -333,7 +333,7 @@ StorageActors.defaults = function(typeName, observationTopic, storeObjectType) {
      *          - total - The total number of entries possible.
      *          - data - The requested values.
      */
-    getStoreObjects: method(Task.async(function*(host, names, options = {}) {
+    getStoreObjects: method(Task.async(function* (host, names, options = {}) {
       let offset = options.offset || 0;
       let size = options.size || MAX_STORE_OBJECT_COUNT;
       if (size > MAX_STORE_OBJECT_COUNT) {
@@ -359,8 +359,8 @@ StorageActors.defaults = function(typeName, observationTopic, storeObjectType) {
 
       if (names) {
         for (let name of names) {
-          let values =
-            yield this.getValuesForHost(host, name, options, this.hostVsStores, principal);
+          let values = yield this.getValuesForHost(host, name, options,
+            this.hostVsStores, principal);
 
           let {result, objectStores} = values;
 
@@ -531,7 +531,7 @@ StorageActors.createActor({
       return host == null;
     }
     if (cookie.host.startsWith(".")) {
-      return host.endsWith(cookie.host);
+      return ("." + host).endsWith(cookie.host);
     }
     if (cookie.host === "") {
       return host.startsWith("file://" + cookie.path);
@@ -652,7 +652,7 @@ StorageActors.createActor({
    * @return {Array}
    *         An array of column header ids.
    */
-  getEditableFields: method(Task.async(function*() {
+  getEditableFields: method(Task.async(function* () {
     return [
       "name",
       "path",
@@ -675,7 +675,7 @@ StorageActors.createActor({
    * @param {Object} data
    *        See editCookie() for format details.
    */
-  editItem: method(Task.async(function*(data) {
+  editItem: method(Task.async(function* (data) {
     this.editCookie(data);
   }), {
     request: {
@@ -684,7 +684,7 @@ StorageActors.createActor({
     response: {}
   }),
 
-  removeItem: method(Task.async(function*(host, name) {
+  removeItem: method(Task.async(function* (host, name) {
     this.removeCookie(host, name);
   }), {
     request: {
@@ -694,7 +694,7 @@ StorageActors.createActor({
     response: {}
   }),
 
-  removeAll: method(Task.async(function*(host, domain) {
+  removeAll: method(Task.async(function* (host, domain) {
     this.removeAllCookies(host, domain);
   }), {
     request: {
@@ -902,7 +902,7 @@ var cookieHelpers = {
         return matchHost == null;
       }
       if (cookieHost.startsWith(".")) {
-        return matchHost.endsWith(cookieHost);
+        return ("." + matchHost).endsWith(cookieHost);
       }
       return cookieHost == host;
     }
@@ -1129,7 +1129,7 @@ function getObjectForLocalOrSessionStorage(type) {
      * @return {Array}
      *         An array of field ids.
      */
-    getEditableFields: method(Task.async(function*() {
+    getEditableFields: method(Task.async(function* () {
       return [
         "name",
         "value"
@@ -1147,7 +1147,7 @@ function getObjectForLocalOrSessionStorage(type) {
      * @param {Object} data
      *        See editCookie() for format details.
      */
-    editItem: method(Task.async(function*({host, field, oldValue, items}) {
+    editItem: method(Task.async(function* ({host, field, oldValue, items}) {
       let storage = this.hostVsStores.get(host);
 
       if (field === "name") {
@@ -1208,7 +1208,7 @@ function getObjectForLocalOrSessionStorage(type) {
       };
     },
 
-    removeItem: method(Task.async(function*(host, name) {
+    removeItem: method(Task.async(function* (host, name) {
       let storage = this.hostVsStores.get(host);
       storage.removeItem(name);
     }), {
@@ -1219,7 +1219,7 @@ function getObjectForLocalOrSessionStorage(type) {
       response: {}
     }),
 
-    removeAll: method(Task.async(function*(host) {
+    removeAll: method(Task.async(function* (host) {
       let storage = this.hostVsStores.get(host);
       storage.clear();
     }), {
@@ -1265,7 +1265,7 @@ StorageActors.createActor({
   typeName: "Cache",
   storeObjectType: "cachestoreobject"
 }, {
-  getCachesForHost: Task.async(function*(host) {
+  getCachesForHost: Task.async(function* (host) {
     let uri = Services.io.newURI(host, null, null);
     let principal =
       Services.scriptSecurityManager.getNoAppCodebasePrincipal(uri);
@@ -1281,7 +1281,7 @@ StorageActors.createActor({
     return cache;
   }),
 
-  preListStores: Task.async(function*() {
+  preListStores: Task.async(function* () {
     for (let host of this.hosts) {
       yield this.populateStoresForHost(host);
     }
@@ -1310,7 +1310,7 @@ StorageActors.createActor({
     });
   },
 
-  getValuesForHost: Task.async(function*(host, name) {
+  getValuesForHost: Task.async(function* (host, name) {
     if (!name) {
       return [];
     }
@@ -1330,7 +1330,7 @@ StorageActors.createActor({
     return results;
   }),
 
-  processEntry: Task.async(function*(request, response) {
+  processEntry: Task.async(function* (request, response) {
     return {
       url: String(request.url),
       status: String(response.statusText),
@@ -1344,7 +1344,7 @@ StorageActors.createActor({
     return location.protocol + "//" + location.host;
   },
 
-  populateStoresForHost: Task.async(function*(host) {
+  populateStoresForHost: Task.async(function* (host) {
     let storeMap = new Map();
     let caches = yield this.getCachesForHost(host);
     try {
@@ -1519,6 +1519,31 @@ StorageActors.createActor({
     events.off(this.storageActor, "window-destroyed", this.onWindowDestroyed);
   },
 
+  /**
+   * Remove an indexedDB database from given host with a given name.
+   */
+  removeDatabase: method(Task.async(function* (host, name) {
+    let win = this.storageActor.getWindowFromHost(host);
+    if (win) {
+      let principal = win.document.nodePrincipal;
+      let result = yield this.removeDB(host, principal, name);
+      if (!result.error) {
+        if (this.hostVsStores.has(host)) {
+          this.hostVsStores.get(host).delete(name);
+        }
+        this.storageActor.update("deleted", "indexedDB", {
+          [host]: [ JSON.stringify([name]) ]
+        });
+      }
+    }
+  }), {
+    request: {
+      host: Arg(0, "string"),
+      name: Arg(1, "string"),
+    },
+    response: {}
+  }),
+
   getHostName: function(location) {
     if (!location.host) {
       return location.href;
@@ -1604,7 +1629,7 @@ StorageActors.createActor({
    * method, as that method is called in initialize method of the actor, which
    * cannot be asynchronous.
    */
-  preListStores: Task.async(function*() {
+  preListStores: Task.async(function* () {
     this.hostVsStores = new Map();
 
     for (let host of this.hosts) {
@@ -1612,7 +1637,7 @@ StorageActors.createActor({
     }
   }),
 
-  populateStoresForHost: Task.async(function*(host) {
+  populateStoresForHost: Task.async(function* (host) {
     let storeMap = new Map();
     let {names} = yield this.getDBNamesForHost(host);
     let win = this.storageActor.getWindowFromHost(host);
@@ -1691,8 +1716,7 @@ StorageActors.createActor({
       this.getNameFromDatabaseFile = indexedDBHelpers.getNameFromDatabaseFile;
       this.getValuesForHost = indexedDBHelpers.getValuesForHost;
       this.getObjectStoreData = indexedDBHelpers.getObjectStoreData;
-      this.patchMetadataMapsAndProtos =
-        indexedDBHelpers.patchMetadataMapsAndProtos;
+      this.removeDB = indexedDBHelpers.removeDB;
       return;
     }
 
@@ -1710,13 +1734,14 @@ StorageActors.createActor({
       callParentProcessAsync.bind(null, "getDBNamesForHost");
     this.getValuesForHost =
       callParentProcessAsync.bind(null, "getValuesForHost");
+    this.removeDB =
+      callParentProcessAsync.bind(null, "removeDB");
 
     addMessageListener("storage:storage-indexedDB-request-child", msg => {
       switch (msg.json.method) {
         case "backToChild":
           let func = msg.json.args.shift();
           let deferred = unresolvedPromises.get(func);
-
           if (deferred) {
             unresolvedPromises.delete(func);
             deferred.resolve(msg.json.args[0]);
@@ -1757,7 +1782,7 @@ var indexedDBHelpers = {
    * `name` for the given `host` with its `principal`. The stored metadata
    * information is of `DatabaseMetadata` type.
    */
-  getDBMetaData: Task.async(function*(host, principal, name) {
+  getDBMetaData: Task.async(function* (host, principal, name) {
     let request = this.openWithPrincipal(principal, name);
     let success = promise.defer();
 
@@ -1767,29 +1792,52 @@ var indexedDBHelpers = {
       let dbData = new DatabaseMetadata(host, db);
       db.close();
 
-      this.backToChild("getDBMetaData", dbData);
-      success.resolve(dbData);
+      success.resolve(this.backToChild("getDBMetaData", dbData));
     };
     request.onerror = () => {
-      console.error("Error opening indexeddb database " + name + " for host " +
-                    host);
-      this.backToChild("getDBMetaData", null);
-      success.resolve(null);
+      console.error(
+        `Error opening indexeddb database ${name} for host ${host}`);
+      success.resolve(this.backToChild("getDBMetaData", null));
     };
     return success.promise;
   }),
 
   /**
-   * Opens an indexed db connection for the given `principal` and database `name`.
+   * Opens an indexed db connection for the given `principal` and
+   * database `name`.
    */
   openWithPrincipal: function(principal, name) {
     return require("indexedDB").openForPrincipal(principal, name);
   },
 
-    /**
+  removeDB: Task.async(function* (host, principal, name) {
+    let request = require("indexedDB").deleteForPrincipal(principal, name);
+
+    let result = new promise(resolve => {
+      request.onsuccess = () => {
+        resolve({});
+      };
+
+      request.onblocked = () => {
+        console.error(
+          `Deleting indexedDB database ${name} for host ${host} is blocked`);
+        resolve({ error: "blocked" });
+      };
+
+      request.onerror = () => {
+        console.error(
+          `Error deleting indexedDB database ${name} for host ${host}`);
+        resolve({ error: request.error });
+      };
+    });
+
+    return this.backToChild("removeDB", yield result);
+  }),
+
+  /**
    * Fetches all the databases and their metadata for the given `host`.
    */
-  getDBNamesForHost: Task.async(function*(host) {
+  getDBNamesForHost: Task.async(function* (host) {
     let sanitizedHost = this.getSanitizedHost(host);
     let directory = OS.Path.join(OS.Constants.Path.profileDir, "storage",
                                  "default", sanitizedHost, "idb");
@@ -1845,7 +1893,7 @@ var indexedDBHelpers = {
    * Retrieves the proper indexed db database name from the provided .sqlite
    * file location.
    */
-  getNameFromDatabaseFile: Task.async(function*(path) {
+  getNameFromDatabaseFile: Task.async(function* (path) {
     let connection = null;
     let retryCount = 0;
 
@@ -1877,8 +1925,8 @@ var indexedDBHelpers = {
     return name;
   }),
 
-  getValuesForHost:
-  Task.async(function*(host, name = "null", options, hostVsStores, principal) {
+  getValuesForHost: Task.async(function* (host, name = "null", options,
+                                          hostVsStores, principal) {
     name = JSON.parse(name);
     if (!name || !name.length) {
       // This means that details about the db in this particular host are
@@ -1912,8 +1960,8 @@ var indexedDBHelpers = {
       return this.backToChild("getValuesForHost", {objectStores: objectStores});
     }
     // Get either all entries from the object store, or a particular id
-    let result = yield this.getObjectStoreData(host, principal, db2, objectStore, id,
-                                               options.index, options.size);
+    let result = yield this.getObjectStoreData(host, principal, db2,
+      objectStore, id, options.index, options.size);
     return this.backToChild("getValuesForHost", {result: result});
   }),
 
@@ -2041,28 +2089,25 @@ var indexedDBHelpers = {
   },
 
   handleChildRequest: function(msg) {
-    let host;
-    let name;
     let args = msg.data.args;
 
     switch (msg.json.method) {
       case "getDBMetaData": {
-        host = args[0];
-        let principal = args[1];
-        name = args[2];
+        let [host, principal, name] = args;
         return indexedDBHelpers.getDBMetaData(host, principal, name);
       }
-      case "getDBNamesForHost":
-        host = args[0];
+      case "getDBNamesForHost": {
+        let [host] = args;
         return indexedDBHelpers.getDBNamesForHost(host);
+      }
       case "getValuesForHost": {
-        host = args[0];
-        name = args[1];
-        let options = args[2];
-        let hostVsStores = args[3];
-        let principal = args[4];
+        let [host, name, options, hostVsStores, principal] = args;
         return indexedDBHelpers.getValuesForHost(host, name, options,
                                                  hostVsStores, principal);
+      }
+      case "removeDB": {
+        let [host, principal, name] = args;
+        return indexedDBHelpers.removeDB(host, principal, name);
       }
       default:
         console.error("ERR_DIRECTOR_PARENT_UNKNOWN_METHOD", msg.json.method);
@@ -2314,7 +2359,7 @@ var StorageActor = exports.StorageActor = protocol.ActorClass({
    *      host: <hostname>
    *    }]
    */
-  listStores: method(Task.async(function*() {
+  listStores: method(Task.async(function* () {
     let toReturn = {};
 
     for (let [name, value] of this.childActorPool) {

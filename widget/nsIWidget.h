@@ -6,13 +6,13 @@
 #ifndef nsIWidget_h__
 #define nsIWidget_h__
 
+#include "mozilla/UniquePtr.h"
 #include "nsISupports.h"
 #include "nsColor.h"
 #include "nsRect.h"
 #include "nsStringGlue.h"
 
 #include "nsCOMPtr.h"
-#include "nsAutoPtr.h"
 #include "nsWidgetInitData.h"
 #include "nsTArray.h"
 #include "nsITheme.h"
@@ -39,6 +39,7 @@ class   nsIContent;
 class   ViewWrapper;
 class   nsIScreen;
 class   nsIRunnable;
+class   nsIKeyEventInPluginCallback;
 
 namespace mozilla {
 class CompositorVsyncDispatcher;
@@ -1425,6 +1426,12 @@ class nsIWidget : public nsISupports {
                              nsEventStatus & aStatus) = 0;
 
     /**
+     * Dispatches an event to APZ only.
+     * No-op in the child process.
+     */
+    virtual void DispatchEventToAPZOnly(mozilla::WidgetInputEvent* aEvent) = 0;
+
+    /**
      * Dispatches an event that must be handled by APZ first, when APZ is
      * enabled. If invoked in the child process, it is forwarded to the
      * parent process synchronously.
@@ -1747,7 +1754,7 @@ private:
 
   static void OnLongTapTimerCallback(nsITimer* aTimer, void* aClosure);
 
-  nsAutoPtr<LongTapInfo> mLongTapTouchPoint;
+  mozilla::UniquePtr<LongTapInfo> mLongTapTouchPoint;
   nsCOMPtr<nsITimer> mLongTapTimer;
   static int32_t sPointerIdCounter;
 
@@ -2047,6 +2054,28 @@ public:
                             const FrameMetrics::ViewID& aViewId,
                             const CSSRect& aRect,
                             const uint32_t& aFlags) = 0;
+
+    /**
+     * OnWindowedPluginKeyEvent() is called when native key event is
+     * received in the focused plugin process directly in PluginInstanceChild.
+     *
+     * @param aKeyEventData     The native key event data.  The actual type
+     *                          copied into NativeEventData depends on the
+     *                          caller.  Please check PluginInstanceChild.
+     * @param aCallback         Callback interface.  When this returns
+     *                          NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY,
+     *                          the event handler has to call this callback.
+     *                          Otherwise, the caller should do that instead.
+     * @return                  NS_ERROR_* if this fails to handle the event.
+     *                          NS_SUCCESS_EVENT_CONSUMED if the key event is
+     *                          consumed.
+     *                          NS_OK if the key event isn't consumed.
+     *                          NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY if the
+     *                          key event will be handled asynchronously.
+     */
+    virtual nsresult OnWindowedPluginKeyEvent(
+                       const mozilla::NativeEventData& aKeyEventData,
+                       nsIKeyEventInPluginCallback* aCallback);
 
 protected:
     /**

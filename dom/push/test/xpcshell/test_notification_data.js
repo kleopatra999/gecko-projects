@@ -4,7 +4,6 @@
 'use strict';
 
 const {PushDB, PushService, PushServiceWebSocket} = serviceExports;
-const {base64UrlDecode} = Cu.import('resource://gre/modules/PushCrypto.jsm', {});
 
 let db;
 let userAgentID = 'f5b47f8d-771f-4ea3-b999-91c135f8766d';
@@ -27,9 +26,13 @@ function putRecord(channelID, scope, publicKey, privateKey, authSecret) {
     originAttributes: '',
     quota: Infinity,
     systemRecord: true,
-    p256dhPublicKey: base64UrlDecode(publicKey),
+    p256dhPublicKey: ChromeUtils.base64URLDecode(publicKey, {
+      padding: "reject",
+    }),
     p256dhPrivateKey: privateKey,
-    authenticationSecret: base64UrlDecode(authSecret),
+    authenticationSecret: ChromeUtils.base64URLDecode(authSecret, {
+      padding: "reject",
+    }),
   });
 }
 
@@ -90,7 +93,6 @@ add_task(function* test_notification_ack_data_setup() {
 
   PushService.init({
     serverURI: "wss://push.example.org/",
-    networkInfo: new MockDesktopNetworkInfo(),
     db,
     makeWebSocket(uri) {
       return new MockWebSocket(uri, {

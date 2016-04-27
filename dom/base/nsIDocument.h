@@ -388,7 +388,7 @@ public:
   }
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
-  virtual nsresult SetBaseURI(nsIURI* aURI) = 0;
+  virtual void SetBaseURI(nsIURI* aURI) = 0;
 
   /**
    * Get/Set the base target of a link in a document.
@@ -2791,6 +2791,11 @@ protected:
   void HandleRebuildUserFontSet() {
     mPostedFlushUserFontSet = false;
     FlushUserFontSet();
+  }
+
+  const nsString& GetId() const
+  {
+    return mId;
   }
 
   nsCString mReferrer;

@@ -115,28 +115,10 @@ CryptoBuffer::FromJwkBase64(const nsString& aBase64)
   NS_ConvertUTF16toUTF8 temp(aBase64);
   temp.StripWhitespace();
 
-  // Re-add padding
-  if (temp.Length() % 4 == 3) {
-    temp.AppendLiteral("=");
-  } else if (temp.Length() % 4 == 2) {
-    temp.AppendLiteral("==");
-  } if (temp.Length() % 4 == 1) {
-    return NS_ERROR_FAILURE; // bad Base64
-  }
-
-  // Translate from URL-safe character set to normal
-  temp.ReplaceChar('-', '+');
-  temp.ReplaceChar('_', '/');
-
-  // Perform the actual base64 decode
-  nsCString binaryData;
-  nsresult rv = Base64Decode(temp, binaryData);
+  // JWK prohibits padding per RFC 7515, section 2.
+  nsresult rv = Base64URLDecode(temp, Base64URLDecodePaddingPolicy::Reject,
+                                *this);
   NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!Assign((const uint8_t*) binaryData.BeginReading(),
-              binaryData.Length())) {
-    return NS_ERROR_FAILURE;
-  }
 
   return NS_OK;
 }
@@ -150,22 +132,10 @@ CryptoBuffer::ToJwkBase64(nsString& aBase64)
     return NS_OK;
   }
 
-  // Perform the actual base64 encode
-  nsCString base64;
-  nsDependentCSubstring binaryData((const char*) Elements(),
-                                   (const char*) (Elements() + Length()));
-  nsresult rv = Base64Encode(binaryData, base64);
+  nsAutoCString base64;
+  nsresult rv = Base64URLEncode(Length(), Elements(),
+                                Base64URLEncodePaddingPolicy::Omit, base64);
   NS_ENSURE_SUCCESS(rv, rv);
-
-  // Strip padding
-  base64.Trim("=");
-
-  // Translate to the URL-safe charset
-  base64.ReplaceChar('+', '-');
-  base64.ReplaceChar('/', '_');
-  if (base64.FindCharInSet("+/", 0) != kNotFound) {
-    return NS_ERROR_FAILURE;
-  }
 
   CopyASCIItoUTF16(base64, aBase64);
   return NS_OK;

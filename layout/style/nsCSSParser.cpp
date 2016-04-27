@@ -35,6 +35,7 @@
 #include "nsColor.h"
 #include "nsCSSPseudoClasses.h"
 #include "nsCSSPseudoElements.h"
+#include "nsCSSAnonBoxes.h"
 #include "nsNameSpaceManager.h"
 #include "nsXMLNameSpaceMap.h"
 #include "nsError.h"
@@ -964,7 +965,7 @@ protected:
   // Assuming a [ <line-names>? ] has already been parsed,
   // parse the rest of a <track-list>.
   //
-  // This exists because [ <line-names>? ] is ambiguous in the 'grid'
+  // This exists because [ <line-names>? ] is ambiguous in the 'grid-template'
   // shorthand: it can be either the start of a <track-list> (in
   // a <'grid-template-rows'>) or of the intertwined syntax that sets both
   // grid-template-rows and grid-template-areas.
@@ -1085,6 +1086,7 @@ protected:
   bool ParseScrollSnapPoints(nsCSSValue& aValue, nsCSSProperty aPropID);
   bool ParseScrollSnapDestination(nsCSSValue& aValue);
   bool ParseScrollSnapCoordinate(nsCSSValue& aValue);
+  bool ParseWebkitTextStroke();
 
   /**
    * Parses a variable value from a custom property declaration.
@@ -5927,6 +5929,13 @@ CSSParserImpl::ParsePseudoSelector(int32_t&       aDataMask,
     return eSelectorParsingStatus_Error;
   }
 
+  if (nsCSSAnonBoxes::IsNonElement(pseudo)) {
+    // Non-element anonymous boxes should not match any rule.
+    REPORT_UNEXPECTED_TOKEN(PEPseudoSelUnknown);
+    UngetToken();
+    return eSelectorParsingStatus_Error;
+  }
+
   // We currently allow :-moz-placeholder and ::-moz-placeholder. We have to
   // be a bit stricter regarding the pseudo-element parsing rules.
   if (pseudoElementType == CSSPseudoElementType::mozPlaceholder &&
@@ -6274,6 +6283,13 @@ CSSParserImpl::ParsePseudoClassWithNthPairArg(nsCSSSelector& aSelector,
     }
   }
 
+  // A helper function that checks if the token starts with literal string
+  // |aStr| using a case-insensitive match.
+  auto TokenBeginsWith = [this] (const nsLiteralString& aStr) {
+    return StringBeginsWith(mToken.mIdent, aStr,
+                            nsASCIICaseInsensitiveStringComparator());
+  };
+
   if (eCSSToken_Ident == mToken.mType || eCSSToken_Dimension == mToken.mType) {
     // The CSS tokenization doesn't handle :nth-child() containing - well:
     //   2n-1 is a dimension
@@ -6281,9 +6297,9 @@ CSSParserImpl::ParsePseudoClassWithNthPairArg(nsCSSSelector& aSelector,
     // The easiest way to deal with that is to push everything from the
     // minus on back onto the scanner's pushback buffer.
     uint32_t truncAt = 0;
-    if (StringBeginsWith(mToken.mIdent, NS_LITERAL_STRING("n-"))) {
+    if (TokenBeginsWith(NS_LITERAL_STRING("n-"))) {
       truncAt = 1;
-    } else if (StringBeginsWith(mToken.mIdent, NS_LITERAL_STRING("-n-")) && !hasSign[0]) {
+    } else if (TokenBeginsWith(NS_LITERAL_STRING("-n-")) && !hasSign[0]) {
       truncAt = 2;
     }
     if (truncAt != 0) {
@@ -6334,7 +6350,7 @@ CSSParserImpl::ParsePseudoClassWithNthPairArg(nsCSSSelector& aSelector,
       if (eCSSToken_Ident == mToken.mType && mToken.mIdent.LowerCaseEqualsLiteral("n")) {
         numbers[0] = intValue;
       }
-      else if (eCSSToken_Ident == mToken.mType && StringBeginsWith(mToken.mIdent, NS_LITERAL_STRING("n-"))) {
+      else if (eCSSToken_Ident == mToken.mType && TokenBeginsWith(NS_LITERAL_STRING("n-"))) {
         numbers[0] = intValue;
         mScanner->Backup(mToken.mIdent.Length() - 1);
       }
@@ -8515,7 +8531,7 @@ CSSParserImpl::ParseGridLineNames(nsCSSValue& aValue)
   nsCSSValueList* item;
   if (aValue.GetUnit() == eCSSUnit_List) {
     // Find the end of an existing list.
-    // The 'grid' shorthand uses this, at most once for a given list.
+    // The grid-template shorthand uses this, at most once for a given list.
 
     // NOTE: we could avoid this traversal by somehow keeping around
     // a pointer to the last item from the previous call.
@@ -8717,6 +8733,10 @@ CSSParserImpl::ParseGridTrackSize(nsCSSValue& aValue,
     if (requireFixedSize &&
         !func->Item(1).IsLengthPercentCalcUnit() &&
         !func->Item(2).IsLengthPercentCalcUnit()) {
+      return CSSParseResult::Error;
+    }
+    // Reject 'fr' min-sizing.
+    if (func->Item(1).GetUnit() == eCSSUnit_FlexFraction) {
       return CSSParseResult::Error;
     }
     return CSSParseResult::Ok;
@@ -9353,7 +9373,7 @@ CSSParserImpl::ParseGridTemplate()
   return ParseGridTemplateColumnsRows(eCSSProperty_grid_template_columns);
 }
 
-// Helper for parsing <'grid-template'> part of the 'grid' shorthand:
+// Helper for parsing the 'grid-template' shorthand:
 // Parse [ <line-names>? <string> <track-size>? <line-names>? ]+
 // with a <line-names>? already consumed, stored in |aFirstLineNames|,
 // and the current token a <string>
@@ -10788,6 +10808,37 @@ CSSParserImpl::ParseWebkitGradient(nsCSSValue& aValue)
   return true;
 }
 
+bool
+CSSParserImpl::ParseWebkitTextStroke()
+{
+  static const nsCSSProperty kWebkitTextStrokeIDs[] = {
+    eCSSProperty__webkit_text_stroke_width,
+    eCSSProperty__webkit_text_stroke_color
+  };
+
+  const size_t numProps = MOZ_ARRAY_LENGTH(kWebkitTextStrokeIDs);
+  nsCSSValue values[numProps];
+
+  int32_t found = ParseChoice(values, kWebkitTextStrokeIDs, numProps);
+  if (found < 1) {
+    return false;
+  }
+
+  if (!(found & 1)) { // Provide default -webkit-text-stroke-width
+    values[0].SetFloatValue(0, eCSSUnit_Pixel);
+  }
+
+  if (!(found & 2)) { // Provide default -webkit-text-stroke-color
+    values[1].SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
+  }
+
+  for (size_t index = 0; index < numProps; ++index) {
+    AppendValue(kWebkitTextStrokeIDs[index], values[index]);
+  }
+
+  return true;
+}
+
   int32_t
 CSSParserImpl::ParseChoice(nsCSSValue aValues[],
                            const nsCSSProperty aPropIDs[], int32_t aNumIDs)
@@ -11471,6 +11522,8 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSProperty aPropID)
   case eCSSProperty_grid_template_columns:
   case eCSSProperty_grid_template_rows:
     return ParseGridTemplateColumnsRows(aPropID);
+  case eCSSProperty_grid_template:
+    return ParseGridTemplate();
   case eCSSProperty_grid:
     return ParseGrid();
   case eCSSProperty_grid_column_start:
@@ -11559,6 +11612,8 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSProperty aPropID)
   case eCSSProperty_mask_size:
     return ParseImageLayerSize(eCSSProperty_mask_size);
 #endif
+  case eCSSProperty__webkit_text_stroke:
+    return ParseWebkitTextStroke();
   case eCSSProperty_all:
     return ParseAll();
   default:
@@ -15156,6 +15211,9 @@ CSSParserImpl::ParseTextCombineUpright(nsCSSValue& aValue)
   // if 'digits', need to check for an explicit number [2, 3, 4]
   if (eCSSUnit_Enumerated == aValue.GetUnit() &&
       aValue.GetIntValue() == NS_STYLE_TEXT_COMBINE_UPRIGHT_DIGITS_2) {
+    if (!nsLayoutUtils::TextCombineUprightDigitsEnabled()) {
+      return false;
+    }
     if (!GetToken(true)) {
       return true;
     }

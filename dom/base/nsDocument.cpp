@@ -200,6 +200,7 @@
 #include "imgRequestProxy.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsSandboxFlags.h"
+#include "nsIAddonPolicyService.h"
 #include "nsIAppsService.h"
 #include "mozilla/dom/AnimatableBinding.h"
 #include "mozilla/dom/AnonymousContent.h"
@@ -1359,7 +1360,7 @@ void nsIDocument::SelectorCache::CacheList(const nsAString& aSelector,
   AddObject(key);
 }
 
-class nsIDocument::SelectorCacheKeyDeleter final : public nsRunnable
+class nsIDocument::SelectorCacheKeyDeleter final : public Runnable
 {
 public:
   explicit SelectorCacheKeyDeleter(SelectorCacheKey* aToDelete)
@@ -1678,11 +1679,6 @@ nsDocument::~nsDocument()
   mImageTracker.Clear();
 
   mPlugins.Clear();
-
-  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  if (os) {
-    os->RemoveObserver(this, "service-worker-get-client");
-  }
 }
 
 NS_INTERFACE_TABLE_HEAD(nsDocument)
@@ -2083,11 +2079,6 @@ nsDocument::Init()
   mScriptLoader = new nsScriptLoader(this);
 
   mozilla::HoldJSObjects(this);
-
-  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  if (os) {
-    os->AddObserver(this, "service-worker-get-client", /* ownsWeak */ true);
-  }
 
   return NS_OK;
 }
@@ -2814,12 +2805,18 @@ nsDocument::InitCSP(nsIChannel* aChannel)
     }
   }
 
- // Check if this is part of the Loop/Hello service
- bool applyLoopCSP = IsLoopDocument(aChannel);
+  // Check if this is a document from a WebExtension.
+  nsString addonId;
+  principal->GetAddonId(addonId);
+  bool applyAddonCSP = !addonId.IsEmpty();
+
+  // Check if this is part of the Loop/Hello service
+  bool applyLoopCSP = IsLoopDocument(aChannel);
 
   // If there's no CSP to apply, go ahead and return early
   if (!applyAppDefaultCSP &&
       !applyAppManifestCSP &&
+      !applyAddonCSP &&
       !applyLoopCSP &&
       cspHeaderValue.IsEmpty() &&
       cspROHeaderValue.IsEmpty()) {
@@ -2875,6 +2872,22 @@ nsDocument::InitCSP(nsIChannel* aChannel)
   // ----- if the doc is an app and specifies a CSP in its manifest, apply it.
   if (applyAppManifestCSP) {
     csp->AppendPolicy(appManifestCSP, false, false);
+  }
+
+  // ----- if the doc is an addon, apply its CSP.
+  if (applyAddonCSP) {
+    nsCOMPtr<nsIAddonPolicyService> aps = do_GetService("@mozilla.org/addons/policy-service;1");
+
+    nsAutoString addonCSP;
+    rv = aps->GetBaseCSP(addonCSP);
+    if (NS_SUCCEEDED(rv)) {
+      csp->AppendPolicy(addonCSP, false, false);
+    }
+
+    rv = aps->GetAddonCSP(addonId, addonCSP);
+    if (NS_SUCCEEDED(rv)) {
+      csp->AppendPolicy(addonCSP, false, false);
+    }
   }
 
   // ----- if the doc is part of Loop, apply the loop CSP
@@ -3561,11 +3574,11 @@ nsIDocument::GetBaseURI(bool aTryUseXHRDocBaseURI) const
   return uri.forget();
 }
 
-nsresult
+void
 nsDocument::SetBaseURI(nsIURI* aURI)
 {
   if (!aURI && !mDocumentBaseURI) {
-    return NS_OK;
+    return;
   }
 
   // Don't do anything if the URI wasn't actually changed.
@@ -3573,25 +3586,7 @@ nsDocument::SetBaseURI(nsIURI* aURI)
     bool equalBases = false;
     mDocumentBaseURI->Equals(aURI, &equalBases);
     if (equalBases) {
-      return NS_OK;
-    }
-  }
-
-  // Check if CSP allows this base-uri
-  nsCOMPtr<nsIContentSecurityPolicy> csp;
-  nsresult rv = NodePrincipal()->GetCsp(getter_AddRefs(csp));
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (csp && aURI) {
-    bool permitsBaseURI = false;
-
-    // base-uri is only enforced if explicitly defined in the
-    // policy - do *not* consult default-src, see:
-    // http://www.w3.org/TR/CSP2/#directive-default-src
-    rv = csp->Permits(aURI, nsIContentSecurityPolicy::BASE_URI_DIRECTIVE,
-                      true, &permitsBaseURI);
-    NS_ENSURE_SUCCESS(rv, rv);
-    if (!permitsBaseURI) {
-      return NS_OK;
+      return;
     }
   }
 
@@ -3601,8 +3596,6 @@ nsDocument::SetBaseURI(nsIURI* aURI)
     mDocumentBaseURI = nullptr;
   }
   RefreshLinkHrefs();
-
-  return NS_OK;
 }
 
 void
@@ -4669,6 +4662,48 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
         loadGroup->RemoveRequest(mOnloadBlocker, nullptr, NS_OK);
       }
     }
+
+    using mozilla::dom::workers::ServiceWorkerManager;
+    RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+    if (swm) {
+      ErrorResult error;
+      if (swm->IsControlled(this, error)) {
+        imgLoader* loader = nsContentUtils::GetImgLoaderForDocument(this);
+        if (loader) {
+          loader->ClearCacheForControlledDocument(this);
+        }
+
+        // We may become controlled again if this document comes back out
+        // of bfcache.  Clear our state to allow that to happen.  Only
+        // clear this flag if we are actually controlled, though, so pages
+        // that were force reloaded don't become controlled when they
+        // come out of bfcache.
+        mMaybeServiceWorkerControlled = false;
+      }
+      swm->MaybeStopControlling(this);
+    }
+
+    // Remove ourself from the list of clients.  We only register
+    // content principal documents in this list.
+    if (!nsContentUtils::IsSystemPrincipal(GetPrincipal()) &&
+        !GetPrincipal()->GetIsNullPrincipal()) {
+      nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+      if (os) {
+        os->RemoveObserver(this, "service-worker-get-client");
+      }
+    }
+
+  } else if (!mScriptGlobalObject && aScriptGlobalObject &&
+             mDocumentContainer && GetChannel() &&
+             !nsContentUtils::IsSystemPrincipal(GetPrincipal()) &&
+             !GetPrincipal()->GetIsNullPrincipal()) {
+    // This document is being activated.  Register it in the list of
+    // clients.  We only do this for content principal documents
+    // since we can never observe system or null principals.
+    nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+    if (os) {
+      os->AddObserver(this, "service-worker-get-client", /* ownsWeak */ false);
+    }
   }
 
   mScriptGlobalObject = aScriptGlobalObject;
@@ -4774,8 +4809,13 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
 
     nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
     if (swm) {
-      nsAutoString documentId;
-      static_cast<nsDocShell*>(docShell.get())->GetInterceptedDocumentId(documentId);
+      // If this document is being resurrected from the bfcache, then we may
+      // already have a document ID.  In that case reuse the same ID.  Otherwise
+      // get our document ID from the docshell.
+      nsString documentId(GetId());
+      if (documentId.IsEmpty()) {
+        static_cast<nsDocShell*>(docShell.get())->GetInterceptedDocumentId(documentId);
+      }
 
       swm->MaybeStartControlling(this, documentId);
       mMaybeServiceWorkerControlled = true;
@@ -8918,6 +8958,7 @@ nsDocument::Destroy()
 
   mIsGoingAway = true;
 
+  SetScriptGlobalObject(nullptr);
   RemovedFromDocShell();
 
   bool oldVal = mInUnlinkOrDeletion;
@@ -8943,19 +8984,6 @@ nsDocument::RemovedFromDocShell()
 {
   if (mRemovedFromDocShell)
     return;
-
-  using mozilla::dom::workers::ServiceWorkerManager;
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  if (swm) {
-    ErrorResult error;
-    if (swm->IsControlled(this, error)) {
-      imgLoader* loader = nsContentUtils::GetImgLoaderForDocument(this);
-      if (loader) {
-        loader->ClearCacheForControlledDocument(this);
-      }
-    }
-    swm->MaybeStopControlling(this);
-  }
 
   mRemovedFromDocShell = true;
   EnumerateActivityObservers(NotifyActivityChanged, nullptr);
@@ -9099,7 +9127,7 @@ nsDocument::UnblockOnload(bool aFireSync)
   }
 }
 
-class nsUnblockOnloadEvent : public nsRunnable {
+class nsUnblockOnloadEvent : public Runnable {
 public:
   explicit nsUnblockOnloadEvent(nsDocument* aDoc) : mDoc(aDoc) {}
   NS_IMETHOD Run() {
@@ -9973,7 +10001,7 @@ nsDocument::LoadChromeSheetSync(nsIURI* uri, bool isAgentSheet,
   return CSSLoader()->LoadSheetSync(uri, mode, isAgentSheet, aSheet);
 }
 
-class nsDelayedEventDispatcher : public nsRunnable
+class nsDelayedEventDispatcher : public Runnable
 {
 public:
   explicit nsDelayedEventDispatcher(nsTArray<nsCOMPtr<nsIDocument>>& aDocuments)
@@ -11162,7 +11190,7 @@ AskWindowToExitFullscreen(nsIDocument* aDoc)
   }
 }
 
-class nsCallExitFullscreen : public nsRunnable
+class nsCallExitFullscreen : public Runnable
 {
 public:
   explicit nsCallExitFullscreen(nsIDocument* aDoc)
@@ -11236,7 +11264,7 @@ ResetFullScreen(nsIDocument* aDocument, void* aData)
 // Since nsIDocument::ExitFullscreenInDocTree() could be called from
 // Element::UnbindFromTree() where it is not safe to synchronously run
 // script. This runnable is the script part of that function.
-class ExitFullscreenScriptRunnable : public nsRunnable
+class ExitFullscreenScriptRunnable : public Runnable
 {
 public:
   explicit ExitFullscreenScriptRunnable(nsCOMArray<nsIDocument>&& aDocuments)
@@ -11430,7 +11458,7 @@ nsDocument::RestorePreviousFullScreenState()
   }
 }
 
-class nsCallRequestFullScreen : public nsRunnable
+class nsCallRequestFullScreen : public Runnable
 {
 public:
   explicit nsCallRequestFullScreen(UniquePtr<FullscreenRequest>&& aRequest)
@@ -11677,8 +11705,8 @@ GetFullscreenError(nsIDocument* aDoc, bool aCallerIsChrome)
   if (nsContentUtils::IsFullScreenApiEnabled() && aCallerIsChrome) {
     // Chrome code can always use the full-screen API, provided it's not
     // explicitly disabled. Note IsCallerChrome() returns true when running
-    // in an nsRunnable, so don't use GetMozFullScreenEnabled() from an
-    // nsRunnable!
+    // in a Runnable, so don't use GetMozFullScreenEnabled() from a
+    // Runnable!
     return nullptr;
   }
 
@@ -12203,7 +12231,7 @@ static const uint8_t kPointerLockRequestLimit = 2;
 class nsPointerLockPermissionRequest;
 mozilla::StaticRefPtr<nsPointerLockPermissionRequest> gPendingPointerLockRequest;
 
-class nsPointerLockPermissionRequest : public nsRunnable,
+class nsPointerLockPermissionRequest : public Runnable,
                                        public nsIContentPermissionRequest
 {
 public:
@@ -12278,7 +12306,7 @@ protected:
 };
 
 NS_IMPL_ISUPPORTS_INHERITED(nsPointerLockPermissionRequest,
-                            nsRunnable,
+                            Runnable,
                             nsIContentPermissionRequest)
 
 NS_IMETHODIMP
@@ -12433,11 +12461,18 @@ nsDocument::Observe(nsISupports *aSubject,
       OnAppThemeChanged();
     }
   } else if (strcmp("service-worker-get-client", aTopic) == 0) {
-    nsAutoString clientId;
-    GetOrCreateId(clientId);
+    // No need to generate the ID if it doesn't exist here.  The ID being
+    // requested must already be generated in order to passed in as
+    // aSubject.
+    nsString clientId = GetId();
     if (!clientId.IsEmpty() && clientId.Equals(aData)) {
       nsCOMPtr<nsISupportsInterfacePointer> ifptr = do_QueryInterface(aSubject);
       if (ifptr) {
+#ifdef DEBUG
+        nsCOMPtr<nsISupports> value;
+        MOZ_ALWAYS_SUCCEEDS(ifptr->GetData(getter_AddRefs(value)));
+        MOZ_ASSERT(!value);
+#endif
         ifptr->SetData(static_cast<nsIDocument*>(this));
         ifptr->SetDataIID(&NS_GET_IID(nsIDocument));
       }
@@ -13318,7 +13353,9 @@ nsIDocument::GetOrCreateId(nsAString& aId)
 void
 nsIDocument::SetId(const nsAString& aId)
 {
-  MOZ_ASSERT(mId.IsEmpty(), "Cannot set the document ID after we have one");
+  // The ID should only be set one time, but we may get the same value
+  // more than once if the document is controlled coming out of bfcache.
+  MOZ_ASSERT_IF(mId != aId, mId.IsEmpty());
   mId = aId;
 }
 

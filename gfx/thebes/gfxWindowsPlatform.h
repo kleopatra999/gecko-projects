@@ -137,8 +137,7 @@ public:
         RENDER_MODE_MAX
     };
 
-    RenderMode GetRenderMode() { return mRenderMode; }
-    void SetRenderMode(RenderMode rmode) { mRenderMode = rmode; }
+    bool IsDirect2DBackend();
 
     /**
      * Updates render mode with relation to the current preferences and
@@ -161,7 +160,7 @@ public:
     void VerifyD2DDevice(bool aAttemptForce);
 
     virtual void GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
-                                        int32_t aRunScript,
+                                        Script aRunScript,
                                         nsTArray<const char*>& aFontList) override;
 
     gfxFontGroup*

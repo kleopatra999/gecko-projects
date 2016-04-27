@@ -398,7 +398,7 @@ private:
  * so it can be released correctly.
  */
 template<class SuccessCallbackType>
-class ErrorCallbackRunnable : public nsRunnable
+class ErrorCallbackRunnable : public Runnable
 {
 public:
   ErrorCallbackRunnable(
@@ -449,7 +449,7 @@ private:
 };
 
 // Handle removing GetUserMediaCallbackMediaStreamListener from main thread
-class GetUserMediaListenerRemove: public nsRunnable
+class GetUserMediaListenerRemove: public Runnable
 {
 public:
   GetUserMediaListenerRemove(uint64_t aWindowID,
@@ -734,7 +734,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(FakeTrackSourceGetter,
  * GetUserMedia spec does not allow for more than 2 streams to be obtained in
  * one call, to simplify handling of constraints.
  */
-class GetUserMediaStreamRunnable : public nsRunnable
+class GetUserMediaStreamRunnable : public Runnable
 {
 public:
   GetUserMediaStreamRunnable(
@@ -833,7 +833,7 @@ public:
       // not a problem here, we got explicit user content.
       nsCOMPtr<nsIPrincipal> principal = window->GetExtantDoc()->NodePrincipal();
       domStream =
-        DOMMediaStream::CreateAudioCaptureStream(window, principal, msg);
+        DOMMediaStream::CreateAudioCaptureStreamAsInput(window, principal, msg);
 
       stream = msg->CreateSourceStream(nullptr); // Placeholder
       msg->RegisterCaptureStreamForWindow(
@@ -919,8 +919,8 @@ public:
       // avoid us blocking. Pass a simple TrackSourceGetter for potential
       // fake tracks. Apart from them gUM never adds tracks dynamically.
       domStream =
-        DOMLocalMediaStream::CreateSourceStream(window, msg,
-                                                new FakeTrackSourceGetter(principal));
+        DOMLocalMediaStream::CreateSourceStreamAsInput(window, msg,
+                                                       new FakeTrackSourceGetter(principal));
 
       if (mAudioDevice) {
         nsString audioDeviceName;
@@ -1295,7 +1295,7 @@ private:
 };
 
 #if defined(ANDROID) && !defined(MOZ_WIDGET_GONK)
-class GetUserMediaRunnableWrapper : public nsRunnable
+class GetUserMediaRunnableWrapper : public Runnable
 {
 public:
   // This object must take ownership of task
@@ -1416,6 +1416,8 @@ MediaManager::MediaManager()
   mPrefs.mAecOn        = false;
   mPrefs.mAgcOn        = false;
   mPrefs.mNoiseOn      = false;
+  mPrefs.mExtendedFilter = true;
+  mPrefs.mDelayAgnostic = true;
 #ifdef MOZ_WEBRTC
   mPrefs.mAec          = webrtc::kEcUnchanged;
   mPrefs.mAgc          = webrtc::kAgcUnchanged;
@@ -1437,10 +1439,12 @@ MediaManager::MediaManager()
   }
   LOG(("%s: default prefs: %dx%d @%dfps (min %d), %dHz test tones, aec: %s,"
        "agc: %s, noise: %s, aec level: %d, agc level: %d, noise level: %d,"
-       "playout delay: %d, %sfull_duplex", __FUNCTION__, mPrefs.mWidth, mPrefs.mHeight,
+       "playout delay: %d, %sfull_duplex, extended aec %s, delay_agnostic %s",
+       __FUNCTION__, mPrefs.mWidth, mPrefs.mHeight,
        mPrefs.mFPS, mPrefs.mMinFPS, mPrefs.mFreq, mPrefs.mAecOn ? "on" : "off",
        mPrefs.mAgcOn ? "on": "off", mPrefs.mNoiseOn ? "on": "off", mPrefs.mAec,
-       mPrefs.mAgc, mPrefs.mNoise, mPrefs.mPlayoutDelay, mPrefs.mFullDuplex ? "" : "not "));
+       mPrefs.mAgc, mPrefs.mNoise, mPrefs.mPlayoutDelay, mPrefs.mFullDuplex ? "" : "not ",
+       mPrefs.mExtendedFilter ? "on" : "off", mPrefs.mDelayAgnostic ? "on" : "off"));
 }
 
 NS_IMPL_ISUPPORTS(MediaManager, nsIMediaManagerService, nsIObserver)
@@ -2559,6 +2563,8 @@ MediaManager::GetPrefs(nsIPrefBranch *aBranch, const char *aData)
   GetPref(aBranch, "media.getusermedia.agc", aData, &mPrefs.mAgc);
   GetPref(aBranch, "media.getusermedia.noise", aData, &mPrefs.mNoise);
   GetPref(aBranch, "media.getusermedia.playout_delay", aData, &mPrefs.mPlayoutDelay);
+  GetPrefBool(aBranch, "media.getusermedia.aec_extended_filter", aData, &mPrefs.mExtendedFilter);
+  GetPrefBool(aBranch, "media.getusermedia.aec_aec_delay_agnostic", aData, &mPrefs.mDelayAgnostic);
 #endif
   GetPrefBool(aBranch, "media.navigator.audio.full_duplex", aData, &mPrefs.mFullDuplex);
 }
@@ -2614,7 +2620,7 @@ MediaManager::Shutdown()
   {
   public:
     ShutdownTask(MediaManager* aManager,
-                 nsRunnable* aReply)
+                 Runnable* aReply)
       : mManager(aManager)
       , mReply(aReply) {}
   private:
@@ -2638,7 +2644,7 @@ MediaManager::Shutdown()
       }
     }
     RefPtr<MediaManager> mManager;
-    RefPtr<nsRunnable> mReply;
+    RefPtr<Runnable> mReply;
   };
 
   // Post ShutdownTask to execute on mMediaThread and pass in a lambda

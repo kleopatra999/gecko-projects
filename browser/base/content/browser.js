@@ -2497,9 +2497,11 @@ function PageProxyClickHandler(aEvent)
 
 var gMenuButtonBadgeManager = {
   BADGEID_APPUPDATE: "update",
+  BADGEID_DOWNLOAD: "download",
   BADGEID_FXA: "fxa",
 
   fxaBadge: null,
+  downloadBadge: null,
   appUpdateBadge: null,
 
   init: function () {
@@ -2517,7 +2519,7 @@ var gMenuButtonBadgeManager = {
   },
 
   _showBadge: function () {
-    let badgeToShow = this.appUpdateBadge || this.fxaBadge;
+    let badgeToShow = this.downloadBadge || this.appUpdateBadge || this.fxaBadge;
 
     if (badgeToShow) {
       PanelUI.menuButton.setAttribute("badge-status", badgeToShow);
@@ -2529,10 +2531,12 @@ var gMenuButtonBadgeManager = {
   _changeBadge: function (badgeId, badgeStatus = null) {
     if (badgeId == this.BADGEID_APPUPDATE) {
       this.appUpdateBadge = badgeStatus;
+    } else if (badgeId == this.BADGEID_DOWNLOAD) {
+      this.downloadBadge = badgeStatus;
     } else if (badgeId == this.BADGEID_FXA) {
       this.fxaBadge = badgeStatus;
     } else {
-      Cu.reportError("This badge ID is unknown!");
+      Cu.reportError("The badge ID '" + badgeId + "' is unknown!");
     }
     this._showBadge();
   },
@@ -2551,6 +2555,7 @@ var gMenuButtonBadgeManager = {
 
   clearBadges: function () {
     this.appUpdateBadge = null;
+    this.downloadBadge = null;
     this.fxaBadge = null;
     this._showBadge();
   }
@@ -6507,10 +6512,13 @@ var gIdentityHandler = {
     delete this._identityBox;
     return this._identityBox = document.getElementById("identity-box");
   },
-  get _identityPopupContentHost () {
-    delete this._identityPopupContentHost;
-    return this._identityPopupContentHost =
-      document.getElementById("identity-popup-content-host");
+  get _identityPopupContentHosts () {
+    delete this._identityPopupContentHosts;
+    return this._identityPopupContentHosts = [...document.querySelectorAll(".identity-popup-headline.host")];
+  },
+  get _identityPopupContentHostless () {
+    delete this._identityPopupContentHostless;
+    return this._identityPopupContentHostless = [...document.querySelectorAll(".identity-popup-headline.hostless")];
   },
   get _identityPopupContentOwner () {
     delete this._identityPopupContentOwner;
@@ -6953,7 +6961,7 @@ var gIdentityHandler = {
     let verifier = "";
     let host = "";
     let owner = "";
-    let crop = "start";
+    let hostless = false;
 
     try {
       host = this.getEffectiveHost();
@@ -6966,7 +6974,7 @@ var gIdentityHandler = {
       host = this._uri.specIgnoringRef;
       // Special URIs without a host (eg, about:) should crop the end so
       // the protocol can be seen.
-      crop = "end";
+      hostless = true;
     }
 
     // Fill in the CA name if we have a valid TLS certificate.
@@ -6976,8 +6984,6 @@ var gIdentityHandler = {
 
     // Fill in organization information if we have a valid EV certificate.
     if (this._isEV) {
-      crop = "end";
-
       let iData = this.getIdentityData();
       host = owner = iData.subjectOrg;
       verifier = this._identityBox.tooltipText;
@@ -6994,11 +7000,15 @@ var gIdentityHandler = {
         supplemental += iData.country;
     }
 
-    // Push the appropriate strings out to the UI. Need to use |value| for the
-    // host as it's a <label> that will be cropped if too long. Using
-    // |textContent| would simply wrap the value.
-    this._identityPopupContentHost.setAttribute("crop", crop);
-    this._identityPopupContentHost.setAttribute("value", host);
+    // Push the appropriate strings out to the UI.
+    this._identityPopupContentHosts.forEach((el) => {
+      el.textContent = host;
+      el.hidden = hostless;
+    });
+    this._identityPopupContentHostless.forEach((el) => {
+      el.setAttribute("value", host);
+      el.hidden = !hostless;
+    });
     this._identityPopupContentOwner.textContent = owner;
     this._identityPopupContentSupp.textContent = supplemental;
     this._identityPopupContentVerif.textContent = verifier;

@@ -73,7 +73,8 @@ GetFeatureStatus(int32_t aFeature)
 {
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
   int32_t status = nsIGfxInfo::FEATURE_STATUS_UNKNOWN;
-  if (!gfxInfo || NS_FAILED(gfxInfo->GetFeatureStatus(aFeature, &status))) {
+  nsCString discardFailureId;
+  if (!gfxInfo || NS_FAILED(gfxInfo->GetFeatureStatus(aFeature, discardFailureId, &status))) {
     return false;
   }
   return status == nsIGfxInfo::FEATURE_STATUS_OK;
@@ -242,7 +243,8 @@ public:
 };
 
 bool
-AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType) const
+AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType,
+                                       DecoderDoctorDiagnostics* aDiagnostics) const
 {
   if (!AndroidBridge::Bridge() ||
       AndroidBridge::Bridge()->GetAPIVersion() < 16) {
@@ -280,7 +282,8 @@ already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateVideoDecoder(
     const VideoInfo& aConfig, layers::LayersBackend aLayersBackend,
     layers::ImageContainer* aImageContainer, FlushableTaskQueue* aVideoTaskQueue,
-    MediaDataDecoderCallback* aCallback)
+    MediaDataDecoderCallback* aCallback,
+    DecoderDoctorDiagnostics* aDiagnostics)
 {
   MediaFormat::LocalRef format;
 
@@ -299,7 +302,8 @@ AndroidDecoderModule::CreateVideoDecoder(
 already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateAudioDecoder(
     const AudioInfo& aConfig, FlushableTaskQueue* aAudioTaskQueue,
-    MediaDataDecoderCallback* aCallback)
+    MediaDataDecoderCallback* aCallback,
+    DecoderDoctorDiagnostics* aDiagnostics)
 {
   MOZ_ASSERT(aConfig.mBitDepth == 16, "We only handle 16-bit audio!");
 

@@ -614,7 +614,7 @@ nsPIDOMWindow<T>::nsPIDOMWindow(nsPIDOMWindowOuter *aOuterWindow)
   mMayHavePointerEnterLeaveEventListener(false),
   mInnerObjectsFreed(false),
   mIsModalContentWindow(false),
-  mIsActive(false), mIsBackground(false),
+  mIsActive(false), mIsBackground(false), mMediaSuspended(false),
   mAudioMuted(false), mAudioVolume(1.0), mAudioCaptured(false),
   mDesktopModeViewport(false), mInnerWindow(nullptr),
   mOuterWindow(aOuterWindow),
@@ -3113,8 +3113,8 @@ nsGlobalWindow::PreHandleEvent(EventChainPreVisitor& aVisitor)
       //let's only take the lowest half of the point structure.
       int16_t myCoord[2];
 
-      myCoord[0] = aVisitor.mEvent->refPoint.x;
-      myCoord[1] = aVisitor.mEvent->refPoint.y;
+      myCoord[0] = aVisitor.mEvent->mRefPoint.x;
+      myCoord[1] = aVisitor.mEvent->mRefPoint.y;
       gEntropyCollector->RandomUpdate((void*)myCoord, sizeof(myCoord));
       gEntropyCollector->RandomUpdate((void*)&(aVisitor.mEvent->mTime),
                                       sizeof(uint32_t));
@@ -3123,7 +3123,7 @@ nsGlobalWindow::PreHandleEvent(EventChainPreVisitor& aVisitor)
     // QIing to window so that we can keep the old behavior also in case
     // a child window is handling resize.
     nsCOMPtr<nsPIDOMWindowInner> window =
-      do_QueryInterface(aVisitor.mEvent->originalTarget);
+      do_QueryInterface(aVisitor.mEvent->mOriginalTarget);
     if (window) {
       mIsHandlingResizeEvent = true;
     }
@@ -3674,6 +3674,32 @@ nsPIDOMWindowInner::CreatePerformanceObjectIfNeeded()
 }
 
 bool
+nsPIDOMWindowOuter::GetMediaSuspended() const
+{
+  if (IsInnerWindow()) {
+    return mOuterWindow->GetMediaSuspended();
+  }
+
+  return mMediaSuspended;
+}
+
+void
+nsPIDOMWindowOuter::SetMediaSuspended(bool aSuspended)
+{
+  if (IsInnerWindow()) {
+    mOuterWindow->SetMediaSuspended(aSuspended);
+    return;
+  }
+
+  if (mMediaSuspended == aSuspended) {
+    return;
+  }
+
+  mMediaSuspended = aSuspended;
+  RefreshMediaElements();
+}
+
+bool
 nsPIDOMWindowOuter::GetAudioMuted() const
 {
   if (IsInnerWindow()) {
@@ -3736,6 +3762,28 @@ nsPIDOMWindowOuter::RefreshMediaElements()
   if (service) {
     service->RefreshAgentsVolume(GetOuterWindow());
   }
+}
+
+void
+nsPIDOMWindowOuter::SetServiceWorkersTestingEnabled(bool aEnabled)
+{
+  // Devtools should only be setting this on the top level window.  Its
+  // ok if devtools clears the flag on clean up of nested windows, though.
+  // It will have no affect.
+#ifdef DEBUG
+  nsCOMPtr<nsPIDOMWindowOuter> topWindow = GetScriptableTop();
+  MOZ_ASSERT_IF(aEnabled, this == topWindow);
+#endif
+  mServiceWorkersTestingEnabled = aEnabled;
+}
+
+bool
+nsPIDOMWindowOuter::GetServiceWorkersTestingEnabled()
+{
+  // Automatically get this setting from the top level window so that nested
+  // iframes get the correct devtools setting.
+  nsCOMPtr<nsPIDOMWindowOuter> topWindow = GetScriptableTop();
+  return topWindow->mServiceWorkersTestingEnabled;
 }
 
 bool
@@ -5864,7 +5912,7 @@ GetFullscreenTransitionDuration(bool aEnterFullscreen,
   }
 }
 
-class FullscreenTransitionTask : public nsRunnable
+class FullscreenTransitionTask : public Runnable
 {
 public:
   FullscreenTransitionTask(const FullscreenTransitionDuration& aDuration,
@@ -8100,7 +8148,7 @@ nsGlobalWindow::PostMessageMoz(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   PostMessageMoz(aCx, aMessage, aTargetOrigin, transferArray, aError);
 }
 
-class nsCloseEvent : public nsRunnable {
+class nsCloseEvent : public Runnable {
 
   RefPtr<nsGlobalWindow> mWindow;
   bool mIndirect;
@@ -8481,7 +8529,7 @@ nsGlobalWindow::RunPendingTimeoutsRecursive(nsGlobalWindow *aTopWindow,
   }
 }
 
-class nsPendingTimeoutRunner : public nsRunnable
+class nsPendingTimeoutRunner : public Runnable
 {
 public:
   explicit nsPendingTimeoutRunner(nsGlobalWindow* aWindow)
@@ -8581,7 +8629,7 @@ struct BrowserCompartmentMatcher : public js::CompartmentFilter {
 };
 
 
-class WindowDestroyedEvent : public nsRunnable
+class WindowDestroyedEvent : public Runnable
 {
 public:
   WindowDestroyedEvent(nsIDOMWindow* aWindow, uint64_t aID,
@@ -9012,7 +9060,7 @@ nsGlobalWindow::ShowModalDialog(JSContext* aCx, const nsAString& aUrl,
   }
 }
 
-class ChildCommandDispatcher : public nsRunnable
+class ChildCommandDispatcher : public Runnable
 {
 public:
   ChildCommandDispatcher(nsGlobalWindow* aWindow,
@@ -9042,7 +9090,7 @@ private:
   nsString                             mAction;
 };
 
-class CommandDispatcher : public nsRunnable
+class CommandDispatcher : public Runnable
 {
 public:
   CommandDispatcher(nsIDOMXULCommandDispatcher* aDispatcher,
@@ -9308,7 +9356,7 @@ nsGlobalWindow::AddEventListener(const nsAString& aType,
 void
 nsGlobalWindow::AddEventListener(const nsAString& aType,
                                  EventListener* aListener,
-                                 bool aUseCapture,
+                                 const AddEventListenerOptionsOrBoolean& aOptions,
                                  const Nullable<bool>& aWantsUntrusted,
                                  ErrorResult& aRv)
 {
@@ -9330,7 +9378,8 @@ nsGlobalWindow::AddEventListener(const nsAString& aType,
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return;
   }
-  manager->AddEventListener(aType, aListener, aUseCapture, wantsUntrusted);
+
+  manager->AddEventListener(aType, aListener, aOptions, wantsUntrusted);
 }
 
 NS_IMETHODIMP
@@ -9842,7 +9891,7 @@ nsGlobalWindow::PageHidden()
   mNeedsFocus = true;
 }
 
-class HashchangeCallback : public nsRunnable
+class HashchangeCallback : public Runnable
 {
 public:
   HashchangeCallback(const nsAString &aOldURL,
@@ -10449,7 +10498,7 @@ nsGlobalWindow::FireOfflineStatusEventIfChanged()
   nsContentUtils::DispatchTrustedEvent(mDoc, eventTarget, name, true, false);
 }
 
-class NotifyIdleObserverRunnable : public nsRunnable
+class NotifyIdleObserverRunnable : public Runnable
 {
 public:
   NotifyIdleObserverRunnable(nsIIdleObserver* aIdleObserver,

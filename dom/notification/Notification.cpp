@@ -200,7 +200,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(NotificationStorageCallback)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-class NotificationGetRunnable final : public nsRunnable
+class NotificationGetRunnable final : public Runnable
 {
   const nsString mOrigin;
   const nsString mTag;
@@ -310,7 +310,7 @@ public:
   }
 };
 
-class FocusWindowRunnable final : public nsRunnable
+class FocusWindowRunnable final : public Runnable
 {
   nsMainThreadPtrHandle<nsPIDOMWindowInner> mWindow;
 public:
@@ -520,7 +520,7 @@ public:
   }
 };
 
-class NotificationTask : public nsRunnable
+class NotificationTask : public Runnable
 {
 public:
   enum NotificationAction {
@@ -543,7 +543,8 @@ protected:
 
 uint32_t Notification::sCount = 0;
 
-NS_IMPL_CYCLE_COLLECTION(NotificationPermissionRequest, mWindow, mPromise)
+NS_IMPL_CYCLE_COLLECTION(NotificationPermissionRequest, mWindow, mPromise,
+                                                        mCallback)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(NotificationPermissionRequest)
   NS_INTERFACE_MAP_ENTRY(nsIContentPermissionRequest)
@@ -614,7 +615,11 @@ NotificationPermissionRequest::GetElement(nsIDOMElement** aElement)
 NS_IMETHODIMP
 NotificationPermissionRequest::Cancel()
 {
-  mPermission = NotificationPermission::Denied;
+  // `Cancel` is called if the user denied permission or dismissed the
+  // permission request. To distinguish between the two, we set the
+  // permission to "default" and query the permission manager in
+  // `ResolvePromise`.
+  mPermission = NotificationPermission::Default;
   return DispatchResolvePromise();
 }
 
@@ -649,6 +654,11 @@ nsresult
 NotificationPermissionRequest::ResolvePromise()
 {
   nsresult rv = NS_OK;
+  if (mPermission == NotificationPermission::Default) {
+    // This will still be "default" if the user dismissed the doorhanger,
+    // or "denied" otherwise.
+    mPermission = Notification::TestPermission(mPrincipal);
+  }
   if (mCallback) {
     ErrorResult error;
     mCallback->Call(mPermission, error);
@@ -1947,10 +1957,21 @@ Notification::GetPermissionInternal(nsIPrincipal* aPrincipal,
     }
   }
 
+  return TestPermission(aPrincipal);
+}
+
+/* static */ NotificationPermission
+Notification::TestPermission(nsIPrincipal* aPrincipal)
+{
+  AssertIsOnMainThread();
+
   uint32_t permission = nsIPermissionManager::UNKNOWN_ACTION;
 
   nsCOMPtr<nsIPermissionManager> permissionManager =
     services::GetPermissionManager();
+  if (!permissionManager) {
+    return NotificationPermission::Default;
+  }
 
   permissionManager->TestExactPermissionFromPrincipal(aPrincipal,
                                                       "desktop-notification",
@@ -2165,7 +2186,7 @@ private:
 
 NS_IMPL_ISUPPORTS(WorkerGetCallback, nsINotificationStorageCallback)
 
-class WorkerGetRunnable final : public nsRunnable
+class WorkerGetRunnable final : public Runnable
 {
   RefPtr<PromiseWorkerProxy> mPromiseProxy;
   const nsString mTag;

@@ -4875,25 +4875,6 @@ function logical_box_prop_get_computed(cs, property)
   return cs.getPropertyValue(property);
 }
 
-// Helper to get computed style of "-webkit-box-orient" from "flex-direction"
-// and the "writing-mode".
-function webkit_orient_get_computed(cs, property)
-{
-  var writingMode = cs.getPropertyValue("writing-mode") || "horizontal-tb";
-
-  var mapping; // map from flex-direction values to -webkit-box-orient values.
-  if (writingMode == "horizontal-tb") {
-    // Horizontal writing-mode
-    mapping = { "row" : "horizontal", "column" : "vertical"};
-  } else {
-    // Vertical writing-mode
-    mapping = { "row" : "vertical",   "column" : "horizontal"};
-  }
-
-  var flexDirection = cs.getPropertyValue("flex-direction");
-  return mapping[flexDirection];
-}
-
 // Get the computed value for a property.  For shorthands, return the
 // computed values of all the subproperties, delimited by " ; ".
 function get_computed_value(cs, property)
@@ -5445,11 +5426,15 @@ if (IsCSSPropertyPrefEnabled("layout.css.text-combine-upright.enabled")) {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "none" ],
-    other_values: [ "all", "digits", "digits 2", "digits 3", "digits 4", "digits     3" ],
+    other_values: [ "all" ],
     invalid_values: [ "auto", "all 2", "none all", "digits -3", "digits 0",
                       "digits 12", "none 3", "digits 3.1415", "digits3", "digits 1",
                       "digits 3 all", "digits foo", "digits all", "digits 3.0" ]
   };
+  if (IsCSSPropertyPrefEnabled("layout.css.text-combine-upright-digits.enabled")) {
+    gCSSProperties["text-combine-upright"].other_values.push(
+      "digits", "digits 2", "digits 3", "digits 4", "digits     3");
+  }
 }
 
 if (IsCSSPropertyPrefEnabled("layout.css.masking.enabled")) {
@@ -6011,7 +5996,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
       "[a] calc(1%) [b] repeat(auto-fit,[a b] minmax(1mm, 1%) [c]) [c]",
       "repeat(auto-fill,minmax(1%,auto))",
       "repeat(auto-fill,minmax(1em,min-content)) minmax(min-content,0)",
-      "repeat(auto-fill,minmax(1fr,1em)) [a] minmax(0, max-content)",
       "repeat(auto-fill,minmax(max-content,1mm))",
     ],
     invalid_values: [
@@ -6066,6 +6050,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
       "repeat(auto-fit,minmax(auto,auto))",
       "repeat(auto-fit,minmax(min-content,1fr))",
       "repeat(auto-fit,minmax(1fr,auto))",
+      "repeat(auto-fill,minmax(1fr,1em))",
       "repeat(auto-fill, 10px) auto",
       "auto repeat(auto-fit, 10px)",
       "minmax(min-content,max-content) repeat(auto-fit, 0)",
@@ -6147,6 +6132,59 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
     ]
   };
 
+  gCSSProperties["grid-template"] = {
+    domProp: "gridTemplate",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [
+      "grid-template-areas",
+      "grid-template-rows",
+      "grid-template-columns",
+    ],
+    initial_values: [
+      "none",
+      "none / none",
+    ],
+    other_values: [
+      // <'grid-template-rows'> / <'grid-template-columns'>
+      "40px / 100px",
+      "[foo] 40px [bar] / [baz] 100px [fizz]",
+      " none/100px",
+      "40px/none",
+      // [ <track-list> / ]? [ <line-names>? <string> <track-size>? <line-names>? ]+
+      "'fizz'",
+      "[bar] 'fizz'",
+      "'fizz' / [foo] 40px",
+      "[bar] 'fizz' / [foo] 40px",
+      "'fizz' 100px / [foo] 40px",
+      "[bar] 'fizz' 100px / [foo] 40px",
+      "[bar] 'fizz' 100px [buzz] / [foo] 40px",
+      "[bar] 'fizz' 100px [buzz] \n [a] '.' 200px [b] / [foo] 40px",
+    ],
+    invalid_values: [
+      "[foo] [bar] 40px / 100px",
+      "[fizz] [buzz] 100px / 40px",
+      "[fizz] [buzz] 'foo' / 40px",
+      "'foo' / none"
+    ]
+  };
+  if (isGridTemplateSubgridValueEnabled) {
+    gCSSProperties["grid-template"].other_values.push(
+      "subgrid",
+      "subgrid/40px 20px",
+      "subgrid [foo] [] [bar baz] / 40px 20px",
+      "40px 20px/subgrid",
+      "40px 20px/subgrid  [foo] [] repeat(3, [a] [b]) [bar baz]",
+      "subgrid/subgrid",
+      "subgrid [foo] [] [bar baz]/subgrid [foo] [] [bar baz]"
+    );
+    gCSSProperties["grid-template"].invalid_values.push(
+      "subgrid []",
+      "subgrid [] / 'fizz'",
+      "subgrid / 'fizz'"
+    );
+  }
+
   gCSSProperties["grid"] = {
     domProp: "grid",
     inherited: false,
@@ -6170,21 +6208,8 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
       "column dense auto",
       "dense row minmax(min-content, 2fr)",
       "row 40px / 100px",
-      // <'grid-template-rows'> / <'grid-template-columns'>
-      "40px / 100px",
-      "[foo] 40px [bar] / [baz] 100px [fizz]",
-      " none/100px",
-      "40px/none",
-      // [ <track-list> / ]? [ <line-names>? <string> <track-size>? <line-names>? ]+
-      "'fizz'",
-      "[bar] 'fizz'",
-      "'fizz' / [foo] 40px",
-      "[bar] 'fizz' / [foo] 40px",
-      "'fizz' 100px / [foo] 40px",
-      "[bar] 'fizz' 100px / [foo] 40px",
-      "[bar] 'fizz' 100px [buzz] / [foo] 40px",
-      "[bar] 'fizz' 100px [buzz] \n [a] '.' 200px [b] / [foo] 40px",
     ].concat(
+      gCSSProperties["grid-template"].other_values,
       gCSSProperties["grid-auto-flow"].other_values
     ),
     invalid_values: [
@@ -6192,31 +6217,12 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
       "row -20px",
       "row 200ms",
       "row 40px 100px",
-      "[foo] [bar] 40px / 100px",
-      "[fizz] [buzz] 100px / 40px",
-      "[fizz] [buzz] 'foo' / 40px",
-      "'foo' / none"
     ].concat(
+      gCSSProperties["grid-template"].invalid_values,
       gCSSProperties["grid-auto-flow"].invalid_values
         .filter((v) => v != 'none')
     )
   };
-  if (isGridTemplateSubgridValueEnabled) {
-    gCSSProperties["grid"].other_values.push(
-      "subgrid",
-      "subgrid/40px 20px",
-      "subgrid [foo] [] [bar baz] / 40px 20px",
-      "40px 20px/subgrid",
-      "40px 20px/subgrid  [foo] [] repeat(3, [a] [b]) [bar baz]",
-      "subgrid/subgrid",
-      "subgrid [foo] [] [bar baz]/subgrid [foo] [] [bar baz]"
-    );
-    gCSSProperties["grid"].invalid_values.push(
-      "subgrid []",
-      "subgrid [] / 'fizz'",
-      "subgrid / 'fizz'"
-    );
-  }
 
   var gridLineOtherValues = [
     "foo",
@@ -7034,6 +7040,33 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     other_values: [ "red", "rgba(255,255,255,0.5)", "transparent" ],
     invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000", "ff00ff", "rgb(255,xxx,255)" ]
   };
+  gCSSProperties["-webkit-text-stroke"] = {
+    domProp: "webkitTextStroke",
+    inherited: true,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    prerequisites: { "color": "black" },
+    subproperties: [ "-webkit-text-stroke-width", "-webkit-text-stroke-color" ],
+    initial_values: [ "0 currentColor", "currentColor 0px", "0", "currentColor", "0px black" ],
+    other_values: [ "thin black", "#f00 medium", "thick rgba(0,0,255,0.5)", "calc(4px - 8px) green", "2px", "green 0", "currentColor 4em", "currentColor calc(5px - 1px)" ],
+    invalid_values: [ "-3px black", "calc(50%+ 2px) #000", "30% #f00" ]
+  };
+  gCSSProperties["-webkit-text-stroke-color"] = {
+    domProp: "webkitTextStrokeColor",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    prerequisites: { "color": "black" },
+    initial_values: [ "currentColor", "black", "#000", "#000000", "rgb(0,0,0)" ],
+    other_values: [ "red", "rgba(255,255,255,0.5)", "transparent" ],
+    invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000", "ff00ff", "rgb(255,xxx,255)" ]
+  };
+  gCSSProperties["-webkit-text-stroke-width"] = {
+    domProp: "webkitTextStrokeWidth",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "0", "0px", "0em", "0ex", "calc(0pt)", "calc(4px - 8px)" ],
+    other_values: [ "thin", "medium", "thick", "17px", "0.2em", "calc(3*25px + 5em)", "calc(5px - 1px)" ],
+    invalid_values: [ "5%", "1px calc(nonsense)", "1px red", "-0.1px", "-3px", "30%" ]
+  },
   gCSSProperties["-webkit-text-size-adjust"] = {
     domProp: "webkitTextSizeAdjust",
     inherited: true,
@@ -7209,20 +7242,19 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     alias_for: "-moz-box-ordinal-group",
     subproperties: [ "-moz-box-ordinal-group" ],
   };
-  /* This one is not an alias - it's implemented as a logical property: */
   gCSSProperties["-webkit-box-orient"] = {
     domProp: "webkitBoxOrient",
     inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    logical: true,
-    get_computed: webkit_orient_get_computed,
-    initial_values: [ "horizontal" ],
-    other_values: [ "vertical" ],
-    invalid_values: [
-      "0", "0px", "auto",
-      /* Flex-direction values: */
-      "row", "column", "row-reverse", "column-reverse",
-    ],
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "-moz-box-orient",
+    subproperties: [ "-moz-box-orient" ],
+  };
+  gCSSProperties["-webkit-box-direction"] = {
+    domProp: "webkitBoxDirection",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "-moz-box-direction",
+    subproperties: [ "-moz-box-direction" ],
   };
   gCSSProperties["-webkit-box-align"] = {
     domProp: "webkitBoxAlign",

@@ -5,10 +5,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsWindow.h"
+
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/RefPtr.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TimeStamp.h"
@@ -100,7 +103,6 @@ using namespace mozilla::widget;
 #include "nsGfxCIID.h"
 #include "nsImageToPixbuf.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsAutoPtr.h"
 #include "ClientLayerManager.h"
 
 #include "gfxPlatformGtk.h"
@@ -121,7 +123,6 @@ using namespace mozilla::widget;
 #include "nsIDOMWheelEvent.h"
 
 #include "NativeKeyBindings.h"
-#include "nsWindow.h"
 
 #include <dlfcn.h>
 
@@ -2505,7 +2506,7 @@ nsWindow::OnEnterNotifyEvent(GdkEventCrossing *aEvent)
     WidgetMouseEvent event(true, eMouseEnterIntoWidget, this,
                            WidgetMouseEvent::eReal);
 
-    event.refPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
+    event.mRefPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
     event.AssignEventTime(GetWidgetEventTime(aEvent->time));
 
     LOG(("OnEnterNotify: %p\n", (void *)this));
@@ -2545,7 +2546,7 @@ nsWindow::OnLeaveNotifyEvent(GdkEventCrossing *aEvent)
     WidgetMouseEvent event(true, eMouseExitFromWidget, this,
                            WidgetMouseEvent::eReal);
 
-    event.refPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
+    event.mRefPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
     event.AssignEventTime(GetWidgetEventTime(aEvent->time));
 
     event.exit = is_top_level_mouse_exit(mGdkWindow, aEvent)
@@ -2615,21 +2616,21 @@ nsWindow::OnMotionNotifyEvent(GdkEventMotion *aEvent)
     guint modifierState;
     if (synthEvent) {
 #ifdef MOZ_X11
-        event.refPoint.x = nscoord(xevent.xmotion.x);
-        event.refPoint.y = nscoord(xevent.xmotion.y);
+        event.mRefPoint.x = nscoord(xevent.xmotion.x);
+        event.mRefPoint.y = nscoord(xevent.xmotion.y);
 
         modifierState = xevent.xmotion.state;
 
         event.AssignEventTime(GetWidgetEventTime(xevent.xmotion.time));
 #else
-        event.refPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
+        event.mRefPoint = GdkEventCoordsToDevicePixels(aEvent->x, aEvent->y);
 
         modifierState = aEvent->state;
 
         event.AssignEventTime(GetWidgetEventTime(aEvent->time));
 #endif /* MOZ_X11 */
     } else {
-        event.refPoint = GetRefPoint(this, aEvent);
+        event.mRefPoint = GetRefPoint(this, aEvent);
 
         modifierState = aEvent->state;
 
@@ -2697,7 +2698,7 @@ void
 nsWindow::InitButtonEvent(WidgetMouseEvent& aEvent,
                           GdkEventButton* aGdkEvent)
 {
-    aEvent.refPoint = GetRefPoint(this, aGdkEvent);
+    aEvent.mRefPoint = GetRefPoint(this, aGdkEvent);
 
     guint modifierState = aGdkEvent->state;
     // aEvent's state includes the button state from immediately before this
@@ -3020,9 +3021,9 @@ mozilla::CurrentX11TimeGetter*
 nsWindow::GetCurrentTimeGetter() {
     MOZ_ASSERT(mGdkWindow, "Expected mGdkWindow to be set");
     if (MOZ_UNLIKELY(!mCurrentTimeGetter)) {
-        mCurrentTimeGetter = new CurrentX11TimeGetter(mGdkWindow);
+        mCurrentTimeGetter = MakeUnique<CurrentX11TimeGetter>(mGdkWindow);
     }
-    return mCurrentTimeGetter;
+    return mCurrentTimeGetter.get();
 }
 
 gboolean
@@ -3115,7 +3116,7 @@ nsWindow::OnKeyPressEvent(GdkEventKey *aEvent)
                                           WidgetMouseEvent::eReal,
                                           WidgetMouseEvent::eContextMenuKey);
 
-        contextMenuEvent.refPoint = LayoutDeviceIntPoint(0, 0);
+        contextMenuEvent.mRefPoint = LayoutDeviceIntPoint(0, 0);
         contextMenuEvent.AssignEventTime(GetWidgetEventTime(aEvent->time));
         contextMenuEvent.clickCount = 1;
         KeymapWrapper::InitInputEvent(contextMenuEvent, aEvent->state);
@@ -3222,7 +3223,7 @@ nsWindow::OnScrollEvent(GdkEventScroll *aEvent)
         break;
     }
 
-    wheelEvent.refPoint = GetRefPoint(this, aEvent);
+    wheelEvent.mRefPoint = GetRefPoint(this, aEvent);
 
     KeymapWrapper::InitInputEvent(wheelEvent, aEvent->state);
 
@@ -3380,7 +3381,7 @@ nsWindow::DispatchDragEvent(EventMessage aMsg, const LayoutDeviceIntPoint& aRefP
         InitDragEvent(event);
     }
 
-    event.refPoint = aRefPoint;
+    event.mRefPoint = aRefPoint;
     event.AssignEventTime(GetWidgetEventTime(aTime));
 
     DispatchInputEvent(&event);
@@ -6570,8 +6571,8 @@ nsWindow::GetDragInfo(WidgetMouseEvent* aMouseEvent,
     // that the mouse has moved, which is why we use the mouse position
     // from the event.)
     LayoutDeviceIntPoint offset = aMouseEvent->mWidget->WidgetToScreenOffset();
-    *aRootX = aMouseEvent->refPoint.x + offset.x;
-    *aRootY = aMouseEvent->refPoint.y + offset.y;
+    *aRootX = aMouseEvent->mRefPoint.x + offset.x;
+    *aRootY = aMouseEvent->mRefPoint.y + offset.y;
 
     return true;
 }

@@ -190,7 +190,7 @@ PopulateRegistrationData(nsIPrincipal* aPrincipal,
   return NS_OK;
 }
 
-class TeardownRunnable final : public nsRunnable
+class TeardownRunnable final : public Runnable
 {
 public:
   explicit TeardownRunnable(ServiceWorkerManagerChild* aActor)
@@ -405,7 +405,7 @@ GetRequiredScopeStringPrefix(nsIURI* aScriptURI, nsACString& aPrefix,
   return NS_OK;
 }
 
-class PropagateSoftUpdateRunnable final : public nsRunnable
+class PropagateSoftUpdateRunnable final : public Runnable
 {
 public:
   PropagateSoftUpdateRunnable(const PrincipalOriginAttributes& aOriginAttributes,
@@ -433,7 +433,7 @@ private:
   const nsString mScope;
 };
 
-class PropagateUnregisterRunnable final : public nsRunnable
+class PropagateUnregisterRunnable final : public Runnable
 {
 public:
   PropagateUnregisterRunnable(nsIPrincipal* aPrincipal,
@@ -470,7 +470,7 @@ private:
   const nsString mScope;
 };
 
-class RemoveRunnable final : public nsRunnable
+class RemoveRunnable final : public Runnable
 {
 public:
   explicit RemoveRunnable(const nsACString& aHost)
@@ -494,7 +494,7 @@ private:
   const nsCString mHost;
 };
 
-class PropagateRemoveRunnable final : public nsRunnable
+class PropagateRemoveRunnable final : public Runnable
 {
 public:
   explicit PropagateRemoveRunnable(const nsACString& aHost)
@@ -518,7 +518,7 @@ private:
   const nsCString mHost;
 };
 
-class PropagateRemoveAllRunnable final : public nsRunnable
+class PropagateRemoveAllRunnable final : public Runnable
 {
 public:
   PropagateRemoveAllRunnable()
@@ -739,7 +739,7 @@ ServiceWorkerManager::AppendPendingOperation(nsIRunnable* aRunnable)
 /*
  * Implements the async aspects of the getRegistrations algorithm.
  */
-class GetRegistrationsRunnable final : public nsRunnable
+class GetRegistrationsRunnable final : public Runnable
 {
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
   RefPtr<Promise> mPromise;
@@ -854,7 +854,7 @@ ServiceWorkerManager::GetRegistrations(mozIDOMWindow* aWindow,
 /*
  * Implements the async aspects of the getRegistration algorithm.
  */
-class GetRegistrationRunnable final : public nsRunnable
+class GetRegistrationRunnable final : public Runnable
 {
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
   RefPtr<Promise> mPromise;
@@ -956,7 +956,7 @@ ServiceWorkerManager::GetRegistration(mozIDOMWindow* aWindow,
   return NS_DispatchToCurrentThread(runnable);
 }
 
-class GetReadyPromiseRunnable final : public nsRunnable
+class GetReadyPromiseRunnable final : public Runnable
 {
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
   RefPtr<Promise> mPromise;
@@ -1946,12 +1946,7 @@ ServiceWorkerManager::MaybeStartControlling(nsIDocument* aDoc,
                                             const nsAString& aDocumentId)
 {
   AssertIsOnMainThread();
-
-  // We keep a set of documents that service workers may choose to start
-  // controlling using claim().
-  MOZ_ASSERT(!mAllDocuments.Contains(aDoc));
-  mAllDocuments.PutEntry(aDoc);
-
+  MOZ_ASSERT(aDoc);
   RefPtr<ServiceWorkerRegistrationInfo> registration =
     GetServiceWorkerRegistrationInfo(aDoc);
   if (registration) {
@@ -1963,6 +1958,7 @@ ServiceWorkerManager::MaybeStartControlling(nsIDocument* aDoc,
 void
 ServiceWorkerManager::MaybeStopControlling(nsIDocument* aDoc)
 {
+  AssertIsOnMainThread();
   MOZ_ASSERT(aDoc);
   RefPtr<ServiceWorkerRegistrationInfo> registration;
   mControlledDocuments.Remove(aDoc, getter_AddRefs(registration));
@@ -1972,8 +1968,6 @@ ServiceWorkerManager::MaybeStopControlling(nsIDocument* aDoc)
   if (registration) {
     StopControllingADocument(registration);
   }
-
-  mAllDocuments.RemoveEntry(aDoc);
 }
 
 void
@@ -2180,7 +2174,7 @@ ServiceWorkerManager::GetServiceWorkerForScope(nsPIDOMWindowInner* aWindow,
 
 namespace {
 
-class ContinueDispatchFetchEventRunnable : public nsRunnable
+class ContinueDispatchFetchEventRunnable : public Runnable
 {
   RefPtr<ServiceWorkerPrivate> mServiceWorkerPrivate;
   nsCOMPtr<nsIInterceptedChannel> mChannel;
@@ -2750,7 +2744,10 @@ ServiceWorkerManager::GetAllClients(nsIPrincipal* aPrincipal,
       return;
     }
 
-    if (!Preferences::GetBool("dom.serviceWorkers.testing.enabled") &&
+    // Treat http windows with devtools opened as secure if the correct devtools
+    // setting is enabled.
+    if (!aDoc->GetWindow()->GetServiceWorkersTestingEnabled() &&
+        !Preferences::GetBool("dom.serviceWorkers.testing.enabled") &&
         !IsFromAuthenticatedOrigin(aDoc)) {
       return;
     }
@@ -2784,6 +2781,10 @@ ServiceWorkerManager::GetAllClients(nsIPrincipal* aPrincipal,
       }
 
       nsCOMPtr<nsIDocument> doc = do_QueryInterface(iter.Key());
+
+      // All controlled documents must have an outer window.
+      MOZ_ASSERT(doc->GetWindow());
+
       ProcessDocument(aPrincipal, doc);
     }
   }
@@ -2835,10 +2836,28 @@ ServiceWorkerManager::ClaimClients(nsIPrincipal* aPrincipal,
     return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  for (auto iter = mAllDocuments.Iter(); !iter.Done(); iter.Next()) {
-    nsCOMPtr<nsIDocument> document = do_QueryInterface(iter.Get()->GetKey());
-    swm->MaybeClaimClient(document, registration);
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (NS_WARN_IF(!obs)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsISimpleEnumerator> enumerator;
+  nsresult rv = obs->EnumerateObservers("service-worker-get-client",
+                                        getter_AddRefs(enumerator));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  bool loop = true;
+  while (NS_SUCCEEDED(enumerator->HasMoreElements(&loop)) && loop) {
+    nsCOMPtr<nsISupports> ptr;
+    rv = enumerator->GetNext(getter_AddRefs(ptr));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      continue;
+    }
+
+    nsCOMPtr<nsIDocument> doc = do_QueryInterface(ptr);
+    MaybeClaimClient(doc, registration);
   }
 
   return NS_OK;

@@ -251,15 +251,20 @@ var AboutReaderListener = {
     addEventListener("DOMContentLoaded", this, false);
     addEventListener("pageshow", this, false);
     addEventListener("pagehide", this, false);
-    addMessageListener("Reader:ParseDocument", this);
+    addMessageListener("Reader:ToggleReaderMode", this);
     addMessageListener("Reader:PushState", this);
   },
 
   receiveMessage: function(message) {
     switch (message.name) {
-      case "Reader:ParseDocument":
-        this._articlePromise = ReaderMode.parseDocument(content.document).catch(Cu.reportError);
-        content.document.location = "about:reader?url=" + encodeURIComponent(message.data.url);
+      case "Reader:ToggleReaderMode":
+        let url = content.document.location.href;
+        if (!this.isAboutReader) {
+          this._articlePromise = ReaderMode.parseDocument(content.document).catch(Cu.reportError);
+          ReaderMode.enterReaderMode(docShell, content);
+        } else {
+          ReaderMode.leaveReaderMode(docShell, content);
+        }
         break;
 
       case "Reader:PushState":
@@ -615,9 +620,11 @@ var DOMFullscreenHandler = {
   },
 
   receiveMessage: function(aMessage) {
+    let windowUtils = this._windowUtils;
     switch(aMessage.name) {
       case "DOMFullscreen:Entered": {
-        if (!this._windowUtils.handleFullscreenRequests() &&
+        this._lastTransactionId = windowUtils.lastTransactionId;
+        if (!windowUtils.handleFullscreenRequests() &&
             !content.document.fullscreenElement) {
           // If we don't actually have any pending fullscreen request
           // to handle, neither we have been in fullscreen, tell the
@@ -627,8 +634,9 @@ var DOMFullscreenHandler = {
         break;
       }
       case "DOMFullscreen:CleanUp": {
-        if (this._windowUtils) {
-          this._windowUtils.exitFullscreen();
+        if (windowUtils) {
+          this._lastTransactionId = windowUtils.lastTransactionId;
+          windowUtils.exitFullscreen();
         }
         this._fullscreenDoc = null;
         break;
@@ -665,8 +673,12 @@ var DOMFullscreenHandler = {
         break;
       }
       case "MozAfterPaint": {
-        removeEventListener("MozAfterPaint", this);
-        sendAsyncMessage("DOMFullscreen:Painted");
+        // Only send Painted signal after we actually finish painting
+        // the transition for the fullscreen change.
+        if (aEvent.transactionId > this._lastTransactionId) {
+          removeEventListener("MozAfterPaint", this);
+          sendAsyncMessage("DOMFullscreen:Painted");
+        }
         break;
       }
     }

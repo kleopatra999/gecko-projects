@@ -3091,10 +3091,6 @@ class MNewArray
         return convertDoubleElements_;
     }
 
-    // Returns true if the code generator should call through to the
-    // VM rather than the fast path.
-    bool shouldUseVM() const;
-
     // NewArray is marked as non-effectful because all our allocations are
     // either lazy when we are using "new Array(length)" or bounded by the
     // script or the stack size when we are using "new Array(...)" or "[...]"
@@ -3213,7 +3209,7 @@ class MNewObject
         initialHeap_(initialHeap),
         mode_(mode)
     {
-        MOZ_ASSERT_IF(mode != ObjectLiteral, !shouldUseVM());
+        MOZ_ASSERT_IF(mode != ObjectLiteral, templateObject());
         setResultType(MIRType_Object);
 
         if (JSObject* obj = templateObject())
@@ -3237,10 +3233,6 @@ class MNewObject
     {
         return new(alloc) MNewObject(constraints, templateConst, initialHeap, mode);
     }
-
-    // Returns true if the code generator should call through to the
-    // VM rather than the fast path.
-    bool shouldUseVM() const;
 
     Mode mode() const {
         return mode_;
@@ -6421,6 +6413,8 @@ class MPow
         return false;
     }
 
+    MDefinition* foldsTo(TempAllocator& alloc) override;
+
     ALLOW_CLONE(MPow)
 };
 
@@ -7609,6 +7603,24 @@ class MUnarySharedStub
     }
 };
 
+class MNullarySharedStub
+  : public MNullaryInstruction
+{
+    explicit MNullarySharedStub()
+      : MNullaryInstruction()
+    {
+        setResultType(MIRType_Value);
+    }
+
+  public:
+    INSTRUCTION_HEADER(NullarySharedStub)
+
+    static MNullarySharedStub* New(TempAllocator& alloc)
+    {
+        return new(alloc) MNullarySharedStub();
+    }
+};
+
 // Check the current frame for over-recursion past the global stack limit.
 class MCheckOverRecursed
   : public MNullaryInstruction
@@ -7889,22 +7901,19 @@ class MRegExp : public MNullaryInstruction
 };
 
 class MRegExpMatcher
-  : public MAryInstruction<4>,
-    public Mix4Policy<ObjectPolicy<0>,
+  : public MAryInstruction<3>,
+    public Mix3Policy<ObjectPolicy<0>,
                       StringPolicy<1>,
-                      IntPolicy<2>,
-                      BooleanPolicy<3> >::Data
+                      IntPolicy<2> >::Data
 {
   private:
 
-    MRegExpMatcher(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex,
-                   MDefinition* sticky)
-      : MAryInstruction<4>()
+    MRegExpMatcher(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex)
+      : MAryInstruction<3>()
     {
         initOperand(0, regexp);
         initOperand(1, string);
         initOperand(2, lastIndex);
-        initOperand(3, sticky);
 
         setMovable();
         // May be object or null.
@@ -7915,9 +7924,9 @@ class MRegExpMatcher
     INSTRUCTION_HEADER(RegExpMatcher)
 
     static MRegExpMatcher* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string,
-                               MDefinition* lastIndex, MDefinition* sticky)
+                               MDefinition* lastIndex)
     {
-        return new(alloc) MRegExpMatcher(regexp, string, lastIndex, sticky);
+        return new(alloc) MRegExpMatcher(regexp, string, lastIndex);
     }
 
     MDefinition* regexp() const {
@@ -7928,9 +7937,6 @@ class MRegExpMatcher
     }
     MDefinition* lastIndex() const {
         return getOperand(2);
-    }
-    MDefinition* sticky() const {
-        return getOperand(3);
     }
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
@@ -7945,22 +7951,19 @@ class MRegExpMatcher
 };
 
 class MRegExpSearcher
-  : public MAryInstruction<4>,
-    public Mix4Policy<ObjectPolicy<0>,
+  : public MAryInstruction<3>,
+    public Mix3Policy<ObjectPolicy<0>,
                       StringPolicy<1>,
-                      IntPolicy<2>,
-                      BooleanPolicy<3> >::Data
+                      IntPolicy<2> >::Data
 {
   private:
 
-    MRegExpSearcher(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex,
-                    MDefinition* sticky)
-      : MAryInstruction<4>()
+    MRegExpSearcher(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex)
+      : MAryInstruction<3>()
     {
         initOperand(0, regexp);
         initOperand(1, string);
         initOperand(2, lastIndex);
-        initOperand(3, sticky);
 
         setMovable();
         setResultType(MIRType_Int32);
@@ -7970,9 +7973,9 @@ class MRegExpSearcher
     INSTRUCTION_HEADER(RegExpSearcher)
 
     static MRegExpSearcher* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string,
-                                MDefinition* lastIndex, MDefinition* sticky)
+                                MDefinition* lastIndex)
     {
-        return new(alloc) MRegExpSearcher(regexp, string, lastIndex, sticky);
+        return new(alloc) MRegExpSearcher(regexp, string, lastIndex);
     }
 
     MDefinition* regexp() const {
@@ -7983,9 +7986,6 @@ class MRegExpSearcher
     }
     MDefinition* lastIndex() const {
         return getOperand(2);
-    }
-    MDefinition* sticky() const {
-        return getOperand(3);
     }
 
     bool writeRecoverData(CompactBufferWriter& writer) const override;
@@ -8000,22 +8000,19 @@ class MRegExpSearcher
 };
 
 class MRegExpTester
-  : public MAryInstruction<4>,
-    public Mix4Policy<ObjectPolicy<0>,
+  : public MAryInstruction<3>,
+    public Mix3Policy<ObjectPolicy<0>,
                       StringPolicy<1>,
-                      IntPolicy<2>,
-                      BooleanPolicy<3> >::Data
+                      IntPolicy<2> >::Data
 {
   private:
 
-    MRegExpTester(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex,
-                  MDefinition* sticky)
-      : MAryInstruction<4>()
+    MRegExpTester(MDefinition* regexp, MDefinition* string, MDefinition* lastIndex)
+      : MAryInstruction<3>()
     {
         initOperand(0, regexp);
         initOperand(1, string);
         initOperand(2, lastIndex);
-        initOperand(3, sticky);
 
         setMovable();
         setResultType(MIRType_Int32);
@@ -8025,9 +8022,9 @@ class MRegExpTester
     INSTRUCTION_HEADER(RegExpTester)
 
     static MRegExpTester* New(TempAllocator& alloc, MDefinition* regexp, MDefinition* string,
-                              MDefinition* lastIndex, MDefinition* sticky)
+                              MDefinition* lastIndex)
     {
-        return new(alloc) MRegExpTester(regexp, string, lastIndex, sticky);
+        return new(alloc) MRegExpTester(regexp, string, lastIndex);
     }
 
     MDefinition* regexp() const {
@@ -8038,9 +8035,6 @@ class MRegExpTester
     }
     MDefinition* lastIndex() const {
         return getOperand(2);
-    }
-    MDefinition* sticky() const {
-        return getOperand(3);
     }
 
     bool possiblyCalls() const override {
@@ -8103,6 +8097,33 @@ class MRegExpInstanceOptimizable
     AliasSet getAliasSet() const override {
         return AliasSet::None();
     }
+};
+
+class MGetFirstDollarIndex
+  : public MUnaryInstruction,
+    public StringPolicy<0>::Data
+{
+    explicit MGetFirstDollarIndex(MDefinition* str)
+      : MUnaryInstruction(str)
+    {
+        setResultType(MIRType_Int32);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(GetFirstDollarIndex)
+
+    static MGetFirstDollarIndex* New(TempAllocator& alloc, MDefinition* str) {
+        return new(alloc) MGetFirstDollarIndex(str);
+    }
+    MDefinition* str() const {
+        return getOperand(0);
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
+
+    MDefinition* foldsTo(TempAllocator& alloc) override;
 };
 
 class MStringReplace

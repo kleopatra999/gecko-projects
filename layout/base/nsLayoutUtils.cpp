@@ -167,6 +167,7 @@ typedef nsStyleTransformMatrix::TransformReferenceBox TransformReferenceBox;
 /* static */ bool nsLayoutUtils::sCSSVariablesEnabled;
 /* static */ bool nsLayoutUtils::sInterruptibleReflowEnabled;
 /* static */ bool nsLayoutUtils::sSVGTransformBoxEnabled;
+/* static */ bool nsLayoutUtils::sTextCombineUprightDigitsEnabled;
 
 static ViewID sScrollIdCounter = FrameMetrics::START_SCROLL_ID;
 
@@ -2169,7 +2170,7 @@ nsLayoutUtils::GetEventCoordinatesRelativeTo(const WidgetEvent* aEvent,
     return nsPoint(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE);
 
   return GetEventCoordinatesRelativeTo(aEvent,
-           aEvent->AsGUIEvent()->refPoint,
+           aEvent->AsGUIEvent()->mRefPoint,
            aFrame);
 }
 
@@ -2815,7 +2816,8 @@ nsLayoutUtils::GetLayerTransformForFrame(nsIFrame* aFrame,
     return true;
   }
 
-  nsDisplayListBuilder builder(root, nsDisplayListBuilder::TRANSFORM_COMPUTATION,
+  nsDisplayListBuilder builder(root,
+                               nsDisplayListBuilderMode::TRANSFORM_COMPUTATION,
                                false/*don't build caret*/);
   nsDisplayList list;
   nsDisplayTransform* item =
@@ -3069,7 +3071,8 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
   PROFILER_LABEL("nsLayoutUtils", "GetFramesForArea",
     js::ProfileEntry::Category::GRAPHICS);
 
-  nsDisplayListBuilder builder(aFrame, nsDisplayListBuilder::EVENT_DELIVERY,
+  nsDisplayListBuilder builder(aFrame,
+                               nsDisplayListBuilderMode::EVENT_DELIVERY,
                                false);
   nsDisplayList list;
 
@@ -3293,6 +3296,7 @@ nsLayoutUtils::ExpireDisplayPortOnAsyncScrollableAncestor(nsIFrame* aFrame)
 nsresult
 nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFrame,
                           const nsRegion& aDirtyRegion, nscolor aBackstop,
+                          nsDisplayListBuilderMode aBuilderMode,
                           uint32_t aFlags)
 {
   PROFILER_LABEL("nsLayoutUtils", "PaintFrame",
@@ -3325,8 +3329,8 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   }
 
   TimeStamp startBuildDisplayList = TimeStamp::Now();
-  nsDisplayListBuilder builder(aFrame, nsDisplayListBuilder::PAINTING,
-                           !(aFlags & PAINT_HIDE_CARET));
+  nsDisplayListBuilder builder(aFrame, aBuilderMode,
+                               !(aFlags & PAINT_HIDE_CARET));
   if (aFlags & PAINT_IN_TRANSFORM) {
     builder.SetInTransform(true);
   }
@@ -3438,6 +3442,20 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
       js::ProfileEntry::Category::GRAPHICS);
 
     aFrame->BuildDisplayListForStackingContext(&builder, dirtyRect, &list);
+#ifdef DEBUG
+    if (builder.IsForGenerateGlyphPath()) {
+      // PaintFrame is called to generate text glyph by
+      // nsDisplayBackgroundImage::Paint or nsDisplayBackgroundColor::Paint.
+      //
+      // Assert that we do not generate and put nsDisplayBackgroundImage or
+      // nsDisplayBackgroundColor into the list again, which would lead to
+      // infinite recursion.
+      for (nsDisplayItem* i = list.GetBottom(); i; i = i->GetAbove()) {
+        MOZ_ASSERT(nsDisplayItem::TYPE_BACKGROUND != i->GetType() &&
+                   nsDisplayItem::TYPE_BACKGROUND_COLOR != i->GetType());
+      }
+    }
+#endif
   }
 
   nsIAtom* frameType = aFrame->GetType();
@@ -3553,6 +3571,32 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     list.PaintRoot(&builder, aRenderingContext, flags);
   Telemetry::AccumulateTimeDelta(Telemetry::PAINT_RASTERIZE_TIME,
                                  paintStart);
+
+  if (gfxPrefs::GfxLoggingPaintedPixelCountEnabled()) {
+    TimeStamp now = TimeStamp::Now();
+    float rasterizeTime = (now - paintStart).ToMilliseconds();
+    uint32_t pixelCount = layerManager->GetAndClearPaintedPixelCount();
+    static std::vector<std::pair<TimeStamp, uint32_t>> history;
+    if (pixelCount) {
+      history.push_back(std::make_pair(now, pixelCount));
+    }
+    uint32_t paintedInLastSecond = 0;
+    for (auto i = history.begin(); i != history.end(); i++) {
+      if ((now - i->first).ToMilliseconds() > 1000.0f) {
+        // more than 1000ms ago, don't count it
+        continue;
+      }
+      if (paintedInLastSecond == 0) {
+        // This is the first one in the last 1000ms, so drop everything earlier
+        history.erase(history.begin(), i);
+        i = history.begin();
+      }
+      paintedInLastSecond += i->second;
+      MOZ_ASSERT(paintedInLastSecond); // all historical pixel counts are > 0
+    }
+    printf_stderr("Painted %u pixels in %fms (%u in the last 1000ms)\n",
+        pixelCount, rasterizeTime, paintedInLastSecond);
+  }
 
   if (consoleNeedsDisplayList || profilerNeedsDisplayList) {
     *ss << "Painting --- after optimization:\n";
@@ -4141,12 +4185,27 @@ nsLayoutUtils::ComputeObjectDestRect(const nsRect& aConstraintRect,
 already_AddRefed<nsFontMetrics>
 nsLayoutUtils::GetFontMetricsForFrame(const nsIFrame* aFrame, float aInflation)
 {
-  return GetFontMetricsForStyleContext(aFrame->StyleContext(), aInflation);
+  nsStyleContext* styleContext = aFrame->StyleContext();
+  uint8_t variantWidth = NS_FONT_VARIANT_WIDTH_NORMAL;
+  if (styleContext->IsTextCombined()) {
+    MOZ_ASSERT(aFrame->GetType() == nsGkAtoms::textFrame);
+    auto textFrame = static_cast<const nsTextFrame*>(aFrame);
+    auto clusters = textFrame->CountGraphemeClusters();
+    if (clusters == 2) {
+      variantWidth = NS_FONT_VARIANT_WIDTH_HALF;
+    } else if (clusters == 3) {
+      variantWidth = NS_FONT_VARIANT_WIDTH_THIRD;
+    } else if (clusters == 4) {
+      variantWidth = NS_FONT_VARIANT_WIDTH_QUARTER;
+    }
+  }
+  return GetFontMetricsForStyleContext(styleContext, aInflation, variantWidth);
 }
 
 already_AddRefed<nsFontMetrics>
 nsLayoutUtils::GetFontMetricsForStyleContext(nsStyleContext* aStyleContext,
-                                             float aInflation)
+                                             float aInflation,
+                                             uint8_t aVariantWidth)
 {
   nsPresContext* pc = aStyleContext->PresContext();
 
@@ -4163,16 +4222,18 @@ nsLayoutUtils::GetFontMetricsForStyleContext(nsStyleContext* aStyleContext,
   params.userFontSet = pc->GetUserFontSet();
   params.textPerf = pc->GetTextPerfMetrics();
 
-  // When aInflation is 1.0, avoid making a local copy of the nsFont.
+  // When aInflation is 1.0 and we don't require width variant, avoid
+  // making a local copy of the nsFont.
   // This also avoids running font.size through floats when it is large,
   // which would be lossy.  Fortunately, in such cases, aInflation is
   // guaranteed to be 1.0f.
-  if (aInflation == 1.0f) {
+  if (aInflation == 1.0f && aVariantWidth == NS_FONT_VARIANT_WIDTH_NORMAL) {
     return pc->DeviceContext()->GetMetricsFor(styleFont->mFont, params);
   }
 
   nsFont font = styleFont->mFont;
   font.size = NSToCoordRound(font.size * aInflation);
+  font.variantWidth = aVariantWidth;
   return pc->DeviceContext()->GetMetricsFor(font, params);
 }
 
@@ -7690,6 +7751,8 @@ nsLayoutUtils::Initialize()
                                "layout.interruptible-reflow.enabled");
   Preferences::AddBoolVarCache(&sSVGTransformBoxEnabled,
                                "svg.transform-box.enabled");
+  Preferences::AddBoolVarCache(&sTextCombineUprightDigitsEnabled,
+                               "layout.css.text-combine-upright-digits.enabled");
 
   for (auto& callback : kPrefCallbacks) {
     Preferences::RegisterCallbackAndCall(callback.func, callback.name);
@@ -9144,3 +9207,15 @@ nsLayoutUtils::UpdateDisplayPortMarginsFromPendingMessages() {
       });
   }
 }
+
+/* static */ bool
+nsLayoutUtils::IsTransformed(nsIFrame* aForFrame, nsIFrame* aTopFrame)
+{
+  for (nsIFrame* f = aForFrame; f != aTopFrame; f = f->GetParent()) {
+    if (f->IsTransformed()) {
+      return true;
+    }
+  }
+  return false;
+}
+

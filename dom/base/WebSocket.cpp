@@ -389,7 +389,7 @@ WebSocketImpl::PrintErrorOnConsole(const char *aBundleURI,
 
 namespace {
 
-class CancelWebSocketRunnable final : public nsRunnable
+class CancelWebSocketRunnable final : public Runnable
 {
 public:
   CancelWebSocketRunnable(nsIWebSocketChannel* aChannel, uint16_t aReasonCode,
@@ -437,7 +437,7 @@ private:
   WebSocketImpl* mImpl;
 };
 
-class CloseConnectionRunnable final : public nsRunnable
+class CloseConnectionRunnable final : public Runnable
 {
 public:
   CloseConnectionRunnable(WebSocketImpl* aImpl,
@@ -466,9 +466,9 @@ WebSocketImpl::CloseConnection(uint16_t aReasonCode,
                                const nsACString& aReasonString)
 {
   if (!IsTargetThread()) {
-    RefPtr<nsRunnable> runnable =
+    nsCOMPtr<nsIRunnable> runnable =
       new CloseConnectionRunnable(this, aReasonCode, aReasonString);
-    return Dispatch(runnable, NS_DISPATCH_NORMAL);
+    return Dispatch(runnable.forget(), NS_DISPATCH_NORMAL);
   }
 
   AssertIsOnTargetThread();
@@ -893,19 +893,17 @@ WebSocketImpl::GetInterface(const nsIID& aIID, void** aResult)
 
   if (aIID.Equals(NS_GET_IID(nsIAuthPrompt)) ||
       aIID.Equals(NS_GET_IID(nsIAuthPrompt2))) {
-    nsresult rv;
-    nsIScriptContext* sc = mWebSocket->GetContextForEventHandlers(&rv);
-    nsCOMPtr<nsIDocument> doc =
-      nsContentUtils::GetDocumentFromScriptContext(sc);
-    if (!doc) {
+    nsCOMPtr<nsPIDOMWindowInner> win = mWebSocket->GetWindowIfCurrent();
+    if (!win) {
       return NS_ERROR_NOT_AVAILABLE;
     }
 
+    nsresult rv;
     nsCOMPtr<nsIPromptFactory> wwatch =
       do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsPIDOMWindowOuter> outerWindow = doc->GetWindow();
+    nsCOMPtr<nsPIDOMWindowOuter> outerWindow = win->GetOuterWindow();
     return wwatch->GetPrompt(outerWindow, aIID, aResult);
   }
 
@@ -1494,16 +1492,6 @@ WebSocketImpl::Init(JSContext* aCx,
     return;
   }
 
-  nsIScriptContext* sc = nullptr;
-  {
-    nsresult rv;
-    sc = mWebSocket->GetContextForEventHandlers(&rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      aRv.Throw(rv);
-      return;
-    }
-  }
-
   nsCOMPtr<nsIURI> uri;
   {
     nsresult rv = NS_NewURI(getter_AddRefs(uri), mURI);
@@ -1517,7 +1505,15 @@ WebSocketImpl::Init(JSContext* aCx,
 
   // Check content policy.
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  nsCOMPtr<nsIDocument> originDoc = nsContentUtils::GetDocumentFromScriptContext(sc);
+  nsCOMPtr<nsIDocument> originDoc = mWebSocket->GetDocumentIfCurrent();
+  if (!originDoc) {
+    nsresult rv = mWebSocket->CheckInnerWindowCorrectness();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aRv.Throw(rv);
+      return;
+    }
+  }
+
   mOriginDocument = do_GetWeakReference(originDoc);
   aRv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_WEBSOCKET,
                                   uri,
@@ -2656,11 +2652,7 @@ WebSocketImpl::GetLoadGroup(nsILoadGroup** aLoadGroup)
   *aLoadGroup = nullptr;
 
   if (mIsMainThread) {
-    nsresult rv;
-    nsIScriptContext* sc = mWebSocket->GetContextForEventHandlers(&rv);
-    nsCOMPtr<nsIDocument> doc =
-      nsContentUtils::GetDocumentFromScriptContext(sc);
-
+    nsCOMPtr<nsIDocument> doc = mWebSocket->GetDocumentIfCurrent();
     if (doc) {
       *aLoadGroup = doc->GetDocumentLoadGroup().take();
     }

@@ -447,7 +447,7 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
 
   nsCOMPtr<nsIScriptError> scriptError = do_QueryInterface(aMessage);
   if (scriptError) {
-    nsString msg, sourceName, sourceLine;
+    nsAutoString msg, sourceName, sourceLine;
     nsXPIDLCString category;
     uint32_t lineNum, colNum, flags;
 
@@ -3222,6 +3222,9 @@ ContentChild::RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
           if (item.data().type() == IPCDataTransferData::TnsString) {
             const nsString& data = item.data().get_nsString();
             variant->SetAsAString(data);
+          } else if (item.data().type() == IPCDataTransferData::TnsCString) {
+            const nsCString& data = item.data().get_nsCString();
+            variant->SetAsACString(data);
           } else if (item.data().type() == IPCDataTransferData::TPBlobChild) {
             BlobChild* blob = static_cast<BlobChild*>(item.data().get_PBlobChild());
             RefPtr<BlobImpl> blobImpl = blob->GetBlobImpl();
@@ -3229,9 +3232,9 @@ ContentChild::RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
           } else {
             continue;
           }
-          dataTransfer->SetDataWithPrincipal(NS_ConvertUTF8toUTF16(item.flavor()),
-                                             variant, i,
-                                             nsContentUtils::GetSystemPrincipal());
+          dataTransfer->SetDataWithPrincipalFromOtherProcess(
+            NS_ConvertUTF8toUTF16(item.flavor()), variant, i,
+            nsContentUtils::GetSystemPrincipal());
         }
       }
       session->SetDataTransfer(dataTransfer);

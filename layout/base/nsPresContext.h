@@ -642,6 +642,9 @@ public:
   { return NSAppUnitsToIntPixels(aAppUnits,
              float(AppUnitsPerDevPixel())); }
 
+  float AppUnitsToFloatDevPixels(nscoord aAppUnits)
+  { return aAppUnits / float(AppUnitsPerDevPixel()); }
+
   int32_t CSSPixelsToDevPixels(int32_t aPixels)
   { return AppUnitsToDevPixels(CSSPixelsToAppUnits(aPixels)); }
 
@@ -1514,7 +1517,7 @@ protected:
    */
   void CancelApplyPluginGeometryTimer();
 
-  class RunWillPaintObservers : public nsRunnable {
+  class RunWillPaintObservers : public mozilla::Runnable {
   public:
     explicit RunWillPaintObservers(nsRootPresContext* aPresContext) : mPresContext(aPresContext) {}
     void Revoke() { mPresContext = nullptr; }

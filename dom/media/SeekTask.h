@@ -48,8 +48,7 @@ public:
   static already_AddRefed<SeekTask>
   CreateSeekTask(const void* aDecoderID,
                  AbstractThread* aThread,
-                 MediaDecoderReader* aReader,
-                 MediaDecoderReaderWrapper* aReaderWrapper,
+                 MediaDecoderReaderWrapper* aReader,
                  SeekJob&& aSeekJob,
                  const MediaInfo& aInfo,
                  const media::TimeUnit& aDuration,
@@ -68,8 +67,7 @@ public:
 protected:
   SeekTask(const void* aDecoderID,
            AbstractThread* aThread,
-           MediaDecoderReader* aReader,
-           MediaDecoderReaderWrapper* aReaderWrapper,
+           MediaDecoderReaderWrapper* aReader,
            SeekJob&& aSeekJob,
            const MediaInfo& aInfo,
            const media::TimeUnit& aDuration,
@@ -134,8 +132,7 @@ protected:
    */
   const void* mDecoderID; // For logging.
   const RefPtr<AbstractThread> mOwnerThread;
-  const RefPtr<MediaDecoderReader> mReader;
-  const RefPtr<MediaDecoderReaderWrapper> mReaderWrapper;
+  const RefPtr<MediaDecoderReaderWrapper> mReader;
 
   /*
    * Internal state.
@@ -160,8 +157,8 @@ protected:
    * Track the current seek promise made by the reader.
    */
   MozPromiseRequestHolder<MediaDecoderReader::SeekPromise> mSeekRequest;
-  MozPromiseRequestHolder<MediaDecoderReader::AudioDataPromise> mAudioDataRequest;
-  MozPromiseRequestHolder<MediaDecoderReader::VideoDataPromise> mVideoDataRequest;
+  MozPromiseRequestHolder<MediaDecoderReader::MediaDataPromise> mAudioDataRequest;
+  MozPromiseRequestHolder<MediaDecoderReader::MediaDataPromise> mVideoDataRequest;
   MozPromiseRequestHolder<MediaDecoderReader::WaitForDataPromise> mAudioWaitRequest;
   MozPromiseRequestHolder<MediaDecoderReader::WaitForDataPromise> mVideoWaitRequest;
 

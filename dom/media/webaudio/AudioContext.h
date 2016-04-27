@@ -91,7 +91,7 @@ private:
 
 /* This runnable allows the MSG to notify the main thread when audio is actually
  * flowing */
-class StateChangeTask final : public nsRunnable
+class StateChangeTask final : public Runnable
 {
 public:
   /* This constructor should be used when this event is sent from the main
@@ -266,6 +266,7 @@ public:
   // OfflineAudioContext methods
   already_AddRefed<Promise> StartRendering(ErrorResult& aRv);
   IMPL_EVENT_HANDLER(complete)
+  unsigned long Length();
 
   bool IsOffline() const { return mIsOffline; }
 

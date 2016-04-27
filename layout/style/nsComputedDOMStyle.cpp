@@ -3165,15 +3165,10 @@ nsComputedDOMStyle::DoGetOutlineWidth()
 
   nscoord width;
   if (outline->GetOutlineStyle() == NS_STYLE_BORDER_STYLE_NONE) {
-    NS_ASSERTION(outline->GetOutlineWidth(width) && width == 0,
-                 "unexpected width");
+    NS_ASSERTION(outline->GetOutlineWidth() == 0, "unexpected width");
     width = 0;
   } else {
-#ifdef DEBUG
-    bool res =
-#endif
-      outline->GetOutlineWidth(width);
-    NS_ASSERTION(res, "percent outline doesn't exist");
+    width = outline->GetOutlineWidth();
   }
   val->SetAppUnits(width);
 
@@ -3632,7 +3627,7 @@ nsComputedDOMStyle::DoGetTextDecorationColor()
   bool isForeground;
   StyleTextReset()->GetDecorationColor(color, isForeground);
   if (isForeground) {
-    color = StyleColor()->mColor;
+    color = mStyleContext->GetTextFillColor();
   }
 
   SetToRGBAColor(val, color);
@@ -3929,6 +3924,22 @@ nsComputedDOMStyle::DoGetWebkitTextFillColor()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
   SetToRGBAColor(val, mStyleContext->GetTextFillColor());
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetWebkitTextStrokeColor()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  SetToRGBAColor(val, mStyleContext->GetTextStrokeColor());
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetWebkitTextStrokeWidth()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  val->SetAppUnits(StyleText()->mWebkitTextStrokeWidth.GetCoordValue());
   return val.forget();
 }
 

@@ -25,6 +25,7 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/EventTargetBinding.h"
 #include "mozilla/TimelineConsumers.h"
 #include "mozilla/EventTimelineMarker.h"
 
@@ -674,9 +675,9 @@ EventListenerManager::ListenerCanHandle(const Listener* aListener,
   }
   if (aEvent->mMessage == eUnidentifiedEvent) {
     if (mIsMainThreadELM) {
-      return aListener->mTypeAtom == aEvent->userType;
+      return aListener->mTypeAtom == aEvent->mSpecifiedEventType;
     }
-    return aListener->mTypeString.Equals(aEvent->typeString);
+    return aListener->mTypeString.Equals(aEvent->mSpecifiedEventTypeString);
   }
   MOZ_ASSERT(mIsMainThreadELM);
   return aListener->mEventMessage == aEventMessage;
@@ -1225,16 +1226,16 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
           if (!*aDOMEvent) {
             // This is tiny bit slow, but happens only once per event.
             nsCOMPtr<EventTarget> et =
-              do_QueryInterface(aEvent->originalTarget);
+              do_QueryInterface(aEvent->mOriginalTarget);
             RefPtr<Event> event = EventDispatcher::CreateEvent(et, aPresContext,
                                                                aEvent,
                                                                EmptyString());
             event.forget(aDOMEvent);
           }
           if (*aDOMEvent) {
-            if (!aEvent->currentTarget) {
-              aEvent->currentTarget = aCurrentTarget->GetTargetForDOMEvent();
-              if (!aEvent->currentTarget) {
+            if (!aEvent->mCurrentTarget) {
+              aEvent->mCurrentTarget = aCurrentTarget->GetTargetForDOMEvent();
+              if (!aEvent->mCurrentTarget) {
                 break;
               }
             }
@@ -1300,11 +1301,11 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
     usingLegacyMessage = true;
   }
 
-  aEvent->currentTarget = nullptr;
+  aEvent->mCurrentTarget = nullptr;
 
   if (mIsMainThreadELM && !hasListener) {
     mNoListenerForEvent = aEvent->mMessage;
-    mNoListenerForEventAtom = aEvent->userType;
+    mNoListenerForEventAtom = aEvent->mSpecifiedEventType;
   }
 
   if (aEvent->DefaultPrevented()) {
@@ -1333,6 +1334,21 @@ EventListenerManager::AddEventListener(
 }
 
 void
+EventListenerManager::AddEventListener(
+                        const nsAString& aType,
+                        const EventListenerHolder& aListenerHolder,
+                        const dom::AddEventListenerOptionsOrBoolean& aOptions,
+                        bool aWantsUntrusted)
+{
+  EventListenerFlags flags;
+  flags.mCapture =
+    aOptions.IsBoolean() ? aOptions.GetAsBoolean()
+                         : aOptions.GetAsAddEventListenerOptions().mCapture;
+  flags.mAllowUntrustedEvents = aWantsUntrusted;
+  return AddEventListenerByType(aListenerHolder, aType, flags);
+}
+
+void
 EventListenerManager::RemoveEventListener(
                         const nsAString& aType,
                         const EventListenerHolder& aListenerHolder,
@@ -1340,6 +1356,19 @@ EventListenerManager::RemoveEventListener(
 {
   EventListenerFlags flags;
   flags.mCapture = aUseCapture;
+  RemoveEventListenerByType(aListenerHolder, aType, flags);
+}
+
+void
+EventListenerManager::RemoveEventListener(
+                        const nsAString& aType,
+                        const EventListenerHolder& aListenerHolder,
+                        const dom::EventListenerOptionsOrBoolean& aOptions)
+{
+  EventListenerFlags flags;
+  flags.mCapture =
+    aOptions.IsBoolean() ? aOptions.GetAsBoolean()
+                         : aOptions.GetAsEventListenerOptions().mCapture;
   RemoveEventListenerByType(aListenerHolder, aType, flags);
 }
 

@@ -122,10 +122,12 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitOutOfLineRegExpPrototypeOptimizable(OutOfLineRegExpPrototypeOptimizable* ool);
     void visitRegExpInstanceOptimizable(LRegExpInstanceOptimizable* lir);
     void visitOutOfLineRegExpInstanceOptimizable(OutOfLineRegExpInstanceOptimizable* ool);
+    void visitGetFirstDollarIndex(LGetFirstDollarIndex* lir);
     void visitStringReplace(LStringReplace* lir);
     void emitSharedStub(ICStub::Kind kind, LInstruction* lir);
     void visitBinarySharedStub(LBinarySharedStub* lir);
     void visitUnarySharedStub(LUnarySharedStub* lir);
+    void visitNullarySharedStub(LNullarySharedStub* lir);
     void visitLambda(LLambda* lir);
     void visitOutOfLineLambdaArrow(OutOfLineLambdaArrow* ool);
     void visitLambdaArrow(LLambdaArrow* lir);

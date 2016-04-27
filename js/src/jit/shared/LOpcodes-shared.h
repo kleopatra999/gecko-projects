@@ -211,10 +211,12 @@
     _(RegExpTester)                 \
     _(RegExpPrototypeOptimizable)   \
     _(RegExpInstanceOptimizable)    \
+    _(GetFirstDollarIndex)          \
     _(StringReplace)                \
     _(Substr)                       \
     _(BinarySharedStub)             \
     _(UnarySharedStub)              \
+    _(NullarySharedStub)            \
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \

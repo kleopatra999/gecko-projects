@@ -39,9 +39,6 @@ class Layer;
 namespace layout {
 class ScrollbarActivity;
 } // namespace layout
-} // namespace mozilla
-
-namespace mozilla {
 
 class ScrollFrameHelper : public nsIReflowCallback {
 public:
@@ -137,7 +134,7 @@ public:
     RefPtr<nsRefreshDriver> mDriver;
   };
 
-  class AsyncScrollPortEvent : public nsRunnable {
+  class AsyncScrollPortEvent : public Runnable {
   public:
     NS_DECL_NSIRUNNABLE
     explicit AsyncScrollPortEvent(ScrollFrameHelper *helper) : mHelper(helper) {}
@@ -146,7 +143,7 @@ public:
     ScrollFrameHelper *mHelper;
   };
 
-  class ScrolledAreaEvent : public nsRunnable {
+  class ScrolledAreaEvent : public Runnable {
   public:
     NS_DECL_NSIRUNNABLE
     explicit ScrolledAreaEvent(ScrollFrameHelper *helper) : mHelper(helper) {}
@@ -699,8 +696,8 @@ public:
 
   virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
   virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-  virtual nsresult GetPadding(nsMargin& aPadding) override;
-  virtual bool IsCollapsed() override;
+  virtual nsresult GetXULPadding(nsMargin& aPadding) override;
+  virtual bool IsXULCollapsed() override;
   
   virtual void Reflow(nsPresContext*           aPresContext,
                       nsHTMLReflowMetrics&     aDesiredSize,
@@ -1124,20 +1121,20 @@ public:
   virtual void AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
                                         uint32_t aFilter) override;
 
-  virtual nsSize GetMinSize(nsBoxLayoutState& aBoxLayoutState) override;
-  virtual nsSize GetPrefSize(nsBoxLayoutState& aBoxLayoutState) override;
-  virtual nsSize GetMaxSize(nsBoxLayoutState& aBoxLayoutState) override;
-  virtual nscoord GetBoxAscent(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsSize GetXULMinSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsSize GetXULPrefSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsSize GetXULMaxSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nscoord GetXULBoxAscent(nsBoxLayoutState& aBoxLayoutState) override;
 
-  NS_IMETHOD DoLayout(nsBoxLayoutState& aBoxLayoutState) override;
-  virtual nsresult GetPadding(nsMargin& aPadding) override;
+  NS_IMETHOD DoXULLayout(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsresult GetXULPadding(nsMargin& aPadding) override;
 
   virtual bool GetBorderRadii(const nsSize& aFrameSize, const nsSize& aBorderArea,
                               Sides aSkipSides, nscoord aRadii[8]) const override {
     return mHelper.GetBorderRadii(aFrameSize, aBorderArea, aSkipSides, aRadii);
   }
 
-  nsresult Layout(nsBoxLayoutState& aState);
+  nsresult XULLayout(nsBoxLayoutState& aState);
   void LayoutScrollArea(nsBoxLayoutState& aState, const nsPoint& aScrollPosition);
 
   static bool AddRemoveScrollbar(bool& aHasScrollbar, 
@@ -1445,7 +1442,7 @@ protected:
     if (!mHelper.IsLTR()) {
       aRect.x = mHelper.mScrollPort.XMost() - aScrollPosition.x - aRect.width;
     }
-    mHelper.mScrolledFrame->SetBounds(aState, aRect, aRemoveOverflowAreas);
+    mHelper.mScrolledFrame->SetXULBounds(aState, aRect, aRemoveOverflowAreas);
   }
 
 private:

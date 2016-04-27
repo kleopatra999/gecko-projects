@@ -32,6 +32,7 @@
 #include "vm/Debugger-inl.h"
 
 using namespace js;
+using namespace js::jit;
 using namespace js::wasm;
 
 using mozilla::CheckedInt;
@@ -1235,7 +1236,7 @@ DecodeExportName(JSContext* cx, Decoder& d, CStringSet* dupSet)
     if (!fieldBytes.append(0))
         return nullptr;
 
-    UniqueChars fieldName((char*)fieldBytes.extractRawBuffer());
+    UniqueChars fieldName((char*)fieldBytes.extractOrCopyRawBuffer());
     if (!fieldName)
         return nullptr;
 

@@ -111,7 +111,6 @@
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "SVGContentUtils.h"
-#include "SVGImageContext.h"
 #include "nsIScreenManager.h"
 #include "nsFilterInstance.h"
 #include "nsSVGLength2.h"
@@ -1617,18 +1616,16 @@ CanvasRenderingContext2D::ReturnTarget()
 }
 
 NS_IMETHODIMP
-CanvasRenderingContext2D::InitializeWithSurface(nsIDocShell* aShell,
-                                                gfxASurface* aSurface,
-                                                int32_t aWidth,
-                                                int32_t aHeight)
+CanvasRenderingContext2D::InitializeWithDrawTarget(nsIDocShell* aShell,
+                                                   gfx::DrawTarget* aTarget)
 {
   RemovePostRefreshObserver();
   mDocShell = aShell;
   AddPostRefreshObserverIfNecessary();
 
-  SetDimensions(aWidth, aHeight);
-  mTarget = gfxPlatform::GetPlatform()->
-    CreateDrawTargetForSurface(aSurface, IntSize(aWidth, aHeight));
+  IntSize size = aTarget->GetSize();
+  SetDimensions(size.width, size.height);
+  mTarget = aTarget;
 
   if (!mTarget) {
     EnsureErrorTarget();
@@ -3773,7 +3770,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
   }
 
   // current text run
-  nsAutoPtr<gfxTextRun> mTextRun;
+  UniquePtr<gfxTextRun> mTextRun;
 
   // pointer to a screen reference context used to measure text and such
   RefPtr<DrawTarget> mDrawTarget;

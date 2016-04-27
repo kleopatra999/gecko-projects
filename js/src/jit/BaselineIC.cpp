@@ -267,6 +267,9 @@ static bool
 DoTypeUpdateFallback(JSContext* cx, BaselineFrame* frame, ICUpdatedStub* stub, HandleValue objval,
                      HandleValue value)
 {
+    // This can get called from optimized stubs. Therefore it is not allowed to gc.
+    JS::AutoCheckCannotGC nogc;
+
     FallbackICSpew(cx, stub->getChainFallback(), "TypeUpdate(%s)",
                    ICStub::KindString(stub->kind()));
 
@@ -432,159 +435,6 @@ ICTypeUpdate_ObjectGroup::Compiler::generateStubCode(MacroAssembler& masm)
 typedef bool (*DoCallNativeGetterFn)(JSContext*, HandleFunction, HandleObject, MutableHandleValue);
 static const VMFunction DoCallNativeGetterInfo =
     FunctionInfo<DoCallNativeGetterFn>(DoCallNativeGetter);
-
-//
-// NewArray_Fallback
-//
-
-static bool
-DoNewArray(JSContext* cx, BaselineFrame* frame, ICNewArray_Fallback* stub, uint32_t length,
-           MutableHandleValue res)
-{
-    FallbackICSpew(cx, stub, "NewArray");
-
-    RootedObject obj(cx);
-    if (stub->templateObject()) {
-        RootedObject templateObject(cx, stub->templateObject());
-        obj = NewArrayOperationWithTemplate(cx, templateObject);
-        if (!obj)
-            return false;
-    } else {
-        RootedScript script(cx, frame->script());
-        jsbytecode* pc = stub->icEntry()->pc(script);
-        obj = NewArrayOperation(cx, script, pc, length);
-        if (!obj)
-            return false;
-
-        if (obj && !obj->isSingleton() && !obj->group()->maybePreliminaryObjects()) {
-            JSObject* templateObject = NewArrayOperation(cx, script, pc, length, TenuredObject);
-            if (!templateObject)
-                return false;
-            stub->setTemplateObject(templateObject);
-        }
-    }
-
-    res.setObject(*obj);
-    return true;
-}
-
-typedef bool(*DoNewArrayFn)(JSContext*, BaselineFrame*, ICNewArray_Fallback*, uint32_t,
-                            MutableHandleValue);
-static const VMFunction DoNewArrayInfo = FunctionInfo<DoNewArrayFn>(DoNewArray, TailCall);
-
-bool
-ICNewArray_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
-{
-    MOZ_ASSERT(engine_ == Engine::Baseline);
-
-    EmitRestoreTailCallReg(masm);
-
-    masm.push(R0.scratchReg()); // length
-    masm.push(ICStubReg); // stub.
-    pushStubPayload(masm, R0.scratchReg());
-
-    return tailCallVM(DoNewArrayInfo, masm);
-}
-
-//
-// NewObject_Fallback
-//
-
-// Unlike typical baseline IC stubs, the code for NewObject_WithTemplate is
-// specialized for the template object being allocated.
-static JitCode*
-GenerateNewObjectWithTemplateCode(JSContext* cx, JSObject* templateObject)
-{
-    JitContext jctx(cx, nullptr);
-    MacroAssembler masm;
-#ifdef JS_CODEGEN_ARM
-    masm.setSecondScratchReg(BaselineSecondScratchReg);
-#endif
-
-    Label failure;
-    Register objReg = R0.scratchReg();
-    Register tempReg = R1.scratchReg();
-    masm.movePtr(ImmGCPtr(templateObject->group()), tempReg);
-    masm.branchTest32(Assembler::NonZero, Address(tempReg, ObjectGroup::offsetOfFlags()),
-                      Imm32(OBJECT_FLAG_PRE_TENURE), &failure);
-    masm.branchPtr(Assembler::NotEqual, AbsoluteAddress(cx->compartment()->addressOfMetadataBuilder()),
-                   ImmWord(0), &failure);
-    masm.createGCObject(objReg, tempReg, templateObject, gc::DefaultHeap, &failure);
-    masm.tagValue(JSVAL_TYPE_OBJECT, objReg, R0);
-
-    EmitReturnFromIC(masm);
-    masm.bind(&failure);
-    EmitStubGuardFailure(masm);
-
-    Linker linker(masm);
-    AutoFlushICache afc("GenerateNewObjectWithTemplateCode");
-    return linker.newCode<CanGC>(cx, BASELINE_CODE);
-}
-
-static bool
-DoNewObject(JSContext* cx, BaselineFrame* frame, ICNewObject_Fallback* stub, MutableHandleValue res)
-{
-    FallbackICSpew(cx, stub, "NewObject");
-
-    RootedObject obj(cx);
-
-    RootedObject templateObject(cx, stub->templateObject());
-    if (templateObject) {
-        MOZ_ASSERT(!templateObject->group()->maybePreliminaryObjects());
-        obj = NewObjectOperationWithTemplate(cx, templateObject);
-    } else {
-        RootedScript script(cx, frame->script());
-        jsbytecode* pc = stub->icEntry()->pc(script);
-        obj = NewObjectOperation(cx, script, pc);
-
-        if (obj && !obj->isSingleton() && !obj->group()->maybePreliminaryObjects()) {
-            JSObject* templateObject = NewObjectOperation(cx, script, pc, TenuredObject);
-            if (!templateObject)
-                return false;
-
-            if (templateObject->is<UnboxedPlainObject>() ||
-                !templateObject->as<PlainObject>().hasDynamicSlots())
-            {
-                JitCode* code = GenerateNewObjectWithTemplateCode(cx, templateObject);
-                if (!code)
-                    return false;
-
-                ICStubSpace* space =
-                    ICStubCompiler::StubSpaceForKind(ICStub::NewObject_WithTemplate, script,
-                                                     ICStubCompiler::Engine::Baseline);
-                ICStub* templateStub = ICStub::New<ICNewObject_WithTemplate>(cx, space, code);
-                if (!templateStub)
-                    return false;
-
-                stub->addNewStub(templateStub);
-            }
-
-            stub->setTemplateObject(templateObject);
-        }
-    }
-
-    if (!obj)
-        return false;
-
-    res.setObject(*obj);
-    return true;
-}
-
-typedef bool(*DoNewObjectFn)(JSContext*, BaselineFrame*, ICNewObject_Fallback*, MutableHandleValue);
-static const VMFunction DoNewObjectInfo = FunctionInfo<DoNewObjectFn>(DoNewObject, TailCall);
-
-bool
-ICNewObject_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
-{
-    MOZ_ASSERT(engine_ == Engine::Baseline);
-
-    EmitRestoreTailCallReg(masm);
-
-    masm.push(ICStubReg); // stub.
-    pushStubPayload(masm, R0.scratchReg());
-
-    return tailCallVM(DoNewObjectInfo, masm);
-}
 
 //
 // ToBool_Fallback
@@ -1552,7 +1402,9 @@ TryAttachGetElemStub(JSContext* cx, JSScript* script, jsbytecode* pc, ICGetElem_
     RootedObject obj(cx, &lhs.toObject());
 
     // Check for ArgumentsObj[int] accesses
-    if (obj->is<ArgumentsObject>() && rhs.isInt32()) {
+    if (obj->is<ArgumentsObject>() && rhs.isInt32() &&
+        !obj->as<ArgumentsObject>().hasOverriddenElement())
+    {
         ICGetElem_Arguments::Which which = ICGetElem_Arguments::Mapped;
         if (obj->is<UnmappedArgumentsObject>())
             which = ICGetElem_Arguments::Unmapped;
@@ -2422,10 +2274,11 @@ ICGetElem_Arguments::Compiler::generateStubCode(MacroAssembler& masm)
     // Get initial ArgsObj length value.
     masm.unboxInt32(Address(objReg, ArgumentsObject::getInitialLengthSlotOffset()), scratchReg);
 
-    // Test if length has been overridden.
+    // Test if length or any element have been overridden.
     masm.branchTest32(Assembler::NonZero,
                       scratchReg,
-                      Imm32(ArgumentsObject::LENGTH_OVERRIDDEN_BIT),
+                      Imm32(ArgumentsObject::LENGTH_OVERRIDDEN_BIT |
+                            ArgumentsObject::ELEMENT_OVERRIDDEN_BIT),
                       &failure);
 
     // Length has not been overridden, ensure that R1 is an integer and is <= length.
@@ -5619,7 +5472,7 @@ GetTemplateObjectForNative(JSContext* cx, JSFunction* target, const CallArgs& ar
     // Check for natives to which template objects can be attached. This is
     // done to provide templates to Ion for inlining these natives later on.
 
-    if (native == ArrayConstructor) {
+    if (native == ArrayConstructor || native == array_construct) {
         // Note: the template array won't be used if its length is inaccurately
         // computed here.  (We allocate here because compilation may occur on a
         // separate thread where allocation is impossible.)

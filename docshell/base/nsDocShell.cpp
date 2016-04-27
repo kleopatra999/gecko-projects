@@ -5057,6 +5057,11 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
         // ServiceWorker intercepted request, but something went wrong.
         error.AssignLiteral("corruptedContentError");
         break;
+      case NS_ERROR_NET_INADEQUATE_SECURITY:
+        // Server negotiated bad TLS for HTTP/2.
+        error.AssignLiteral("inadequateSecurityError");
+        addHostPort = true;
+        break;
       default:
         break;
     }
@@ -7796,6 +7801,7 @@ nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
                aStatus == NS_ERROR_UNSAFE_CONTENT_TYPE ||
                aStatus == NS_ERROR_REMOTE_XUL ||
                aStatus == NS_ERROR_INTERCEPTION_FAILED ||
+               aStatus == NS_ERROR_NET_INADEQUATE_SECURITY ||
                NS_ERROR_GET_MODULE(aStatus) == NS_ERROR_MODULE_SECURITY) {
       // Errors to be shown for any frame
       DisplayLoadError(aStatus, url, nullptr, aChannel);
@@ -9455,7 +9461,7 @@ nsDocShell::CopyFavicon(nsIURI* aOldURI,
 #endif
 }
 
-class InternalLoadEvent : public nsRunnable
+class InternalLoadEvent : public Runnable
 {
 public:
   InternalLoadEvent(nsDocShell* aDocShell, nsIURI* aURI,
@@ -13226,7 +13232,7 @@ nsDocShell::SetBaseUrlForWyciwyg(nsIContentViewer* aContentViewer)
   if (baseURI) {
     nsIDocument* document = aContentViewer->GetDocument();
     if (document) {
-      rv = document->SetBaseURI(baseURI);
+      document->SetBaseURI(baseURI);
     }
   }
   return rv;
@@ -13518,7 +13524,7 @@ nsDocShell::SelectNone(void)
 
 // link handling
 
-class OnLinkClickEvent : public nsRunnable
+class OnLinkClickEvent : public Runnable
 {
 public:
   OnLinkClickEvent(nsDocShell* aHandler, nsIContent* aContent,

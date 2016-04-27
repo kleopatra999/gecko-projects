@@ -127,7 +127,7 @@ private:
  * A runnable to mark glyph positions as needing to be recomputed
  * and to invalid the bounds of the SVGTextFrame frame.
  */
-class GlyphMetricsUpdater : public nsRunnable {
+class GlyphMetricsUpdater : public Runnable {
 public:
   NS_DECL_NSIRUNNABLE
   explicit GlyphMetricsUpdater(SVGTextFrame* aFrame) : mFrame(aFrame) { }
@@ -607,12 +607,6 @@ private:
   already_AddRefed<Path> GetTextPath(nsIFrame* aTextPathFrame);
   gfxFloat GetOffsetScale(nsIFrame* aTextPathFrame);
   gfxFloat GetStartOffset(nsIFrame* aTextPathFrame);
-
-  DrawMode SetupContextPaint(const DrawTarget* aDrawTarget,
-                             const gfxMatrix& aContextMatrix,
-                             nsIFrame* aFrame,
-                             gfxTextContextPaint* aOuterContextPaint,
-                             SVGTextContextPaint* aThisContextPaint);
 
   /**
    * The MutationObserver we have registered for the <text> element subtree.

@@ -509,16 +509,20 @@ gfxWindowsPlatform::UpdateBackendPrefs()
   uint32_t contentMask = BackendTypeBit(SOFTWARE_BACKEND);
   BackendType defaultBackend = SOFTWARE_BACKEND;
   if (GetD2D1Status() == FeatureStatus::Available) {
-    mRenderMode = RENDER_DIRECT2D;
     contentMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
     canvasMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
     defaultBackend = BackendType::DIRECT2D1_1;
   } else {
-    mRenderMode = RENDER_GDI;
     canvasMask |= BackendTypeBit(BackendType::SKIA);
   }
   contentMask |= BackendTypeBit(BackendType::SKIA);
   InitBackendPrefs(canvasMask, defaultBackend, contentMask, defaultBackend);
+}
+
+bool
+gfxWindowsPlatform::IsDirect2DBackend()
+{
+  return GetDefaultContentBackend() == BackendType::DIRECT2D1_1;
 }
 
 void
@@ -703,7 +707,7 @@ static const char kFontYuGothic[] = "Yu Gothic";
 
 void
 gfxWindowsPlatform::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
-                                           int32_t aRunScript,
+                                           Script aRunScript,
                                            nsTArray<const char*>& aFontList)
 {
     if (aNextCh == 0xfe0fu) {
@@ -1799,7 +1803,7 @@ bool DoesD3D11TextureSharingWorkInternal(ID3D11Device *device, DXGI_FORMAT forma
   //     get a crash on Intel 8.5.10.[18xx-1994] drivers.
   //     We can work around this issue by doing UpdateSubresource.
   if (!TryCreateTexture2D(device, &desc, nullptr, texture)) {
-    gfxCriticalError() << "DoesD3D11TextureSharingWork_TryCreateTextureFailure";
+    gfxCriticalNote << "DoesD3D11TextureSharingWork_TryCreateTextureFailure";
     return false;
   }
 
@@ -1966,7 +1970,8 @@ gfxWindowsPlatform::CheckD3D11Support(bool* aCanUseHardware)
 
   if (nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo()) {
     int32_t status;
-    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, &status))) {
+    nsCString discardFailureId;
+    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, discardFailureId, &status))) {
       if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
         if (CanUseWARP()) {
           *aCanUseHardware = false;
@@ -2445,7 +2450,8 @@ IsD2DBlacklisted()
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
   if (gfxInfo) {
     int32_t status;
-    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT2D, &status))) {
+    nsCString discardFailureId;
+    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT2D, discardFailureId, &status))) {
       if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
         return true;
       }
@@ -2884,16 +2890,18 @@ gfxWindowsPlatform::GetAcceleratedCompositorBackends(nsTArray<LayersBackend>& aB
     aBackends.AppendElement(LayersBackend::LAYERS_OPENGL);
   }
 
+  bool allowTryingD3D9 = false;
   if (!gfxPrefs::LayersPreferD3D9()) {
     if (gfxPlatform::CanUseDirect3D11() && mD3D11Device) {
       aBackends.AppendElement(LayersBackend::LAYERS_D3D11);
     } else {
+      allowTryingD3D9 = gfxPrefs::LayersAllowD3D9Fallback();
       NS_WARNING("Direct3D 11-accelerated layers are not supported on this system.");
     }
   }
 
-  if (gfxPrefs::LayersPreferD3D9() || !IsVistaOrLater()) {
-    // We don't want D3D9 except on Windows XP
+  if (gfxPrefs::LayersPreferD3D9() || !IsVistaOrLater() || allowTryingD3D9) {
+    // We don't want D3D9 except on Windows XP, unless we failed to get D3D11
     if (gfxPlatform::CanUseDirect3D9()) {
       aBackends.AppendElement(LayersBackend::LAYERS_D3D9);
     } else {

@@ -67,6 +67,7 @@
 #endif
 #include "GeckoProfiler.h"
 #include "mozilla/ipc/ProtocolTypes.h"
+#include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/unused.h"
 #include "mozilla/Hal.h"
 #include "mozilla/HalTypes.h"
@@ -897,19 +898,19 @@ CompositorBridgeParent::RecvStopFrameTimeRecording(const uint32_t& aStartIndex,
 }
 
 bool
-CompositorBridgeParent::RecvClearApproximatelyVisibleRegions(const uint64_t& aLayersId,
-                                                            const uint32_t& aPresShellId)
+CompositorBridgeParent::RecvClearVisibleRegions(const uint64_t& aLayersId,
+                                                const uint32_t& aPresShellId)
 {
-  ClearApproximatelyVisibleRegions(aLayersId, Some(aPresShellId));
+  ClearVisibleRegions(aLayersId, Some(aPresShellId));
   return true;
 }
 
 void
-CompositorBridgeParent::ClearApproximatelyVisibleRegions(const uint64_t& aLayersId,
-                                                         const Maybe<uint32_t>& aPresShellId)
+CompositorBridgeParent::ClearVisibleRegions(const uint64_t& aLayersId,
+                                            const Maybe<uint32_t>& aPresShellId)
 {
   if (mLayerManager) {
-    mLayerManager->ClearApproximatelyVisibleRegions(aLayersId, aPresShellId);
+    mLayerManager->ClearVisibleRegions(aLayersId, aPresShellId);
 
     // We need to recomposite to update the minimap.
     ScheduleComposition();
@@ -917,16 +918,25 @@ CompositorBridgeParent::ClearApproximatelyVisibleRegions(const uint64_t& aLayers
 }
 
 bool
-CompositorBridgeParent::RecvNotifyApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
-                                                             const CSSIntRegion& aRegion)
+CompositorBridgeParent::RecvUpdateVisibleRegion(const VisibilityCounter& aCounter,
+                                                const ScrollableLayerGuid& aGuid,
+                                                const CSSIntRegion& aRegion)
+{
+  UpdateVisibleRegion(aCounter, aGuid, aRegion);
+  return true;
+}
+
+void
+CompositorBridgeParent::UpdateVisibleRegion(const VisibilityCounter& aCounter,
+                                            const ScrollableLayerGuid& aGuid,
+                                            const CSSIntRegion& aRegion)
 {
   if (mLayerManager) {
-    mLayerManager->UpdateApproximatelyVisibleRegion(aGuid, aRegion);
+    mLayerManager->UpdateVisibleRegion(aCounter, aGuid, aRegion);
 
     // We need to recomposite to update the minimap.
     ScheduleComposition();
   }
-  return true;
 }
 
 void
@@ -943,10 +953,11 @@ CompositorBridgeParent::ActorDestroy(ActorDestroyReason why)
   if (mLayerManager) {
     mLayerManager->Destroy();
     mLayerManager = nullptr;
-    { // scope lock
-      MonitorAutoLock lock(*sIndirectLayerTreesLock);
-      sIndirectLayerTrees.erase(mRootLayerTreeID);
-    }
+  }
+
+  { // scope lock
+    MonitorAutoLock lock(*sIndirectLayerTreesLock);
+    sIndirectLayerTrees.erase(mRootLayerTreeID);
   }
 
   if (mCompositor) {
@@ -1747,7 +1758,7 @@ EraseLayerState(uint64_t aId)
   if (iter != sIndirectLayerTrees.end()) {
     CompositorBridgeParent* parent = iter->second.mParent;
     if (parent) {
-      parent->ClearApproximatelyVisibleRegions(aId, Nothing());
+      parent->ClearVisibleRegions(aId, Nothing());
     }
 
     sIndirectLayerTrees.erase(iter);
@@ -1897,6 +1908,7 @@ class CrossProcessCompositorBridgeParent final : public PCompositorBridgeParent,
 public:
   explicit CrossProcessCompositorBridgeParent(Transport* aTransport)
     : mTransport(aTransport)
+    , mSubprocess(nullptr)
     , mNotifyAfterRemotePaint(false)
     , mDestroyCalled(false)
   {
@@ -1929,31 +1941,38 @@ public:
   virtual bool RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex) override { return true; }
   virtual bool RecvStopFrameTimeRecording(const uint32_t& aStartIndex, InfallibleTArray<float>* intervals) override  { return true; }
 
-  virtual bool RecvClearApproximatelyVisibleRegions(const uint64_t& aLayersId,
-                                                    const uint32_t& aPresShellId) override
+  virtual bool RecvClearVisibleRegions(const uint64_t& aLayersId,
+                                       const uint32_t& aPresShellId) override
   {
     CompositorBridgeParent* parent;
     { // scope lock
       MonitorAutoLock lock(*sIndirectLayerTreesLock);
       parent = sIndirectLayerTrees[aLayersId].mParent;
     }
-    if (parent) {
-      parent->ClearApproximatelyVisibleRegions(aLayersId, Some(aPresShellId));
+
+    if (!parent) {
+      return false;
     }
+
+    parent->ClearVisibleRegions(aLayersId, Some(aPresShellId));
     return true;
   }
 
-  virtual bool RecvNotifyApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
-                                                    const CSSIntRegion& aRegion) override
+  virtual bool RecvUpdateVisibleRegion(const VisibilityCounter& aCounter,
+                                       const ScrollableLayerGuid& aGuid,
+                                       const CSSIntRegion& aRegion) override
   {
     CompositorBridgeParent* parent;
     { // scope lock
       MonitorAutoLock lock(*sIndirectLayerTreesLock);
       parent = sIndirectLayerTrees[aGuid.mLayersId].mParent;
     }
-    if (parent) {
-      return parent->RecvNotifyApproximatelyVisibleRegion(aGuid, aRegion);
+
+    if (!parent) {
+      return false;
     }
+
+    parent->UpdateVisibleRegion(aCounter, aGuid, aRegion);
     return true;
   }
 
@@ -2029,6 +2048,7 @@ private:
   // ourself.  This is released (deferred) in ActorDestroy().
   RefPtr<CrossProcessCompositorBridgeParent> mSelfRef;
   Transport* mTransport;
+  ipc::GeckoChildProcessHost* mSubprocess;
 
   RefPtr<CompositorThreadHolder> mCompositorThreadHolder;
   // If true, we should send a RemotePaintIsReady message when the layer transaction
@@ -2187,12 +2207,17 @@ OpenCompositor(CrossProcessCompositorBridgeParent* aCompositor,
 }
 
 /*static*/ PCompositorBridgeParent*
-CompositorBridgeParent::Create(Transport* aTransport, ProcessId aOtherPid)
+CompositorBridgeParent::Create(Transport* aTransport, ProcessId aOtherPid, GeckoChildProcessHost* aProcessHost)
 {
   gfxPlatform::InitLayersIPC();
 
   RefPtr<CrossProcessCompositorBridgeParent> cpcp =
     new CrossProcessCompositorBridgeParent(aTransport);
+
+  if (aProcessHost) {
+    cpcp->mSubprocess = aProcessHost;
+    aProcessHost->AssociateActor();
+  }
 
   cpcp->mSelfRef = cpcp;
   CompositorLoop()->PostTask(
@@ -2251,6 +2276,12 @@ CrossProcessCompositorBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   RefPtr<CompositorLRU> lru = CompositorLRU::GetSingleton();
   lru->Remove(this);
+
+  if (mSubprocess) {
+    mSubprocess->DissociateActor();
+    mSubprocess = nullptr;
+  }
+
   // We must keep this object alive untill the code handling message
   // reception is finished on this thread.
   MessageLoop::current()->PostTask(FROM_HERE,
@@ -2726,7 +2757,7 @@ CrossProcessCompositorBridgeParent::CloneToplevel(
       Transport* transport = OpenDescriptor(aFds[i].fd(),
                                             Transport::MODE_SERVER);
       PCompositorBridgeParent* compositor =
-        CompositorBridgeParent::Create(transport, base::GetProcId(aPeerProcess));
+        CompositorBridgeParent::Create(transport, base::GetProcId(aPeerProcess), mSubprocess);
       compositor->CloneManagees(this, aCtx);
       compositor->IToplevelProtocol::SetTransport(transport);
       // The reference to the compositor thread is held in OnChannelConnected().

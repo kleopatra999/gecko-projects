@@ -580,7 +580,6 @@ nsStyleOutline::nsStyleOutline(StyleStructContext aContext)
   mOutlineStyle = NS_STYLE_BORDER_STYLE_NONE;
   mOutlineColor = NS_RGB(0, 0, 0);
 
-  mHasCachedOutline = false;
   mTwipsPerPixel = aContext.DevPixelsToAppUnits(1);
 
   SetOutlineInitialColor();
@@ -592,7 +591,6 @@ nsStyleOutline::nsStyleOutline(const nsStyleOutline& aSrc)
   , mOutlineOffset(aSrc.mOutlineOffset)
   , mCachedOutlineWidth(aSrc.mCachedOutlineWidth)
   , mOutlineColor(aSrc.mOutlineColor)
-  , mHasCachedOutline(aSrc.mHasCachedOutline)
   , mOutlineStyle(aSrc.mOutlineStyle)
   , mTwipsPerPixel(aSrc.mTwipsPerPixel)
 {
@@ -604,17 +602,14 @@ nsStyleOutline::RecalcData(nsPresContext* aContext)
 {
   if (NS_STYLE_BORDER_STYLE_NONE == GetOutlineStyle()) {
     mCachedOutlineWidth = 0;
-    mHasCachedOutline = true;
-  } else if (IsFixedUnit(mOutlineWidth, true)) {
+  } else {
+    MOZ_ASSERT(IsFixedUnit(mOutlineWidth, true));
     // Clamp negative calc() to 0.
     mCachedOutlineWidth =
       std::max(CalcCoord(mOutlineWidth, aContext->GetBorderWidthTable(), 3), 0);
     mCachedOutlineWidth =
       NS_ROUND_BORDER_TO_PIXELS(mCachedOutlineWidth, mTwipsPerPixel);
-    mHasCachedOutline = true;
   }
-  else
-    mHasCachedOutline = false;
 }
 
 nsChangeHint nsStyleOutline::CalcDifference(const nsStyleOutline& aOther) const
@@ -641,9 +636,7 @@ nsChangeHint nsStyleOutline::CalcDifference(const nsStyleOutline& aOther) const
   if (mOutlineWidth != aOther.mOutlineWidth ||
       mOutlineOffset != aOther.mOutlineOffset ||
       mTwipsPerPixel != aOther.mTwipsPerPixel ||
-      mHasCachedOutline != aOther.mHasCachedOutline ||
-      (mHasCachedOutline &&
-       (mCachedOutlineWidth != aOther.mCachedOutlineWidth))) {
+      mCachedOutlineWidth != aOther.mCachedOutlineWidth) {
     return nsChangeHint_NeutralChange;
   }
 
@@ -2691,12 +2684,13 @@ nsChangeHint nsStyleBackground::CalcDifference(const nsStyleBackground& aOther) 
   return hint;
 }
 
-bool nsStyleBackground::HasFixedBackground() const
+bool nsStyleBackground::HasFixedBackground(nsIFrame* aFrame) const
 {
   NS_FOR_VISIBLE_IMAGE_LAYERS_BACK_TO_FRONT(i, mImage) {
     const nsStyleImageLayers::Layer &layer = mImage.mLayers[i];
     if (layer.mAttachment == NS_STYLE_IMAGELAYER_ATTACHMENT_FIXED &&
-        !layer.mImage.IsEmpty()) {
+        !layer.mImage.IsEmpty() &&
+        !nsLayoutUtils::IsTransformed(aFrame)) {
       return true;
     }
   }
@@ -3580,6 +3574,7 @@ nsStyleText::nsStyleText(StyleStructContext aContext)
   mTextAlignLastTrue = false;
   mTextEmphasisColorForeground = true;
   mWebkitTextFillColorForeground = true;
+  mWebkitTextStrokeColorForeground = true;
   mTextTransform = NS_STYLE_TEXT_TRANSFORM_NONE;
   mWhiteSpace = NS_STYLE_WHITESPACE_NORMAL;
   mWordBreak = NS_STYLE_WORDBREAK_NORMAL;
@@ -3598,12 +3593,14 @@ nsStyleText::nsStyleText(StyleStructContext aContext)
     NS_STYLE_TEXT_EMPHASIS_POSITION_DEFAULT;
   mTextEmphasisColor = aContext.DefaultColor();
   mWebkitTextFillColor = aContext.DefaultColor();
+  mWebkitTextStrokeColor = aContext.DefaultColor();
   mControlCharacterVisibility = nsCSSParser::ControlCharVisibilityDefault();
 
   mWordSpacing.SetCoordValue(0);
   mLetterSpacing.SetNormalValue();
   mLineHeight.SetNormalValue();
   mTextIndent.SetCoordValue(0);
+  mWebkitTextStrokeWidth.SetCoordValue(0);
 
   mTextShadow = nullptr;
   mTabSize = NS_STYLE_TABSIZE_INITIAL;
@@ -3616,6 +3613,7 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
     mTextAlignLastTrue(false),
     mTextEmphasisColorForeground(aSource.mTextEmphasisColorForeground),
     mWebkitTextFillColorForeground(aSource.mWebkitTextFillColorForeground),
+    mWebkitTextStrokeColorForeground(aSource.mWebkitTextStrokeColorForeground),
     mTextTransform(aSource.mTextTransform),
     mWhiteSpace(aSource.mWhiteSpace),
     mWordBreak(aSource.mWordBreak),
@@ -3632,10 +3630,12 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
     mTabSize(aSource.mTabSize),
     mTextEmphasisColor(aSource.mTextEmphasisColor),
     mWebkitTextFillColor(aSource.mWebkitTextFillColor),
+    mWebkitTextStrokeColor(aSource.mWebkitTextStrokeColor),
     mWordSpacing(aSource.mWordSpacing),
     mLetterSpacing(aSource.mLetterSpacing),
     mLineHeight(aSource.mLineHeight),
     mTextIndent(aSource.mTextIndent),
+    mWebkitTextStrokeWidth(aSource.mWebkitTextStrokeWidth),
     mTextShadow(aSource.mTextShadow),
     mTextEmphasisStyleString(aSource.mTextEmphasisStyleString)
 {
@@ -3699,7 +3699,8 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
 
   if (!AreShadowArraysEqual(mTextShadow, aOther.mTextShadow) ||
       mTextEmphasisStyle != aOther.mTextEmphasisStyle ||
-      mTextEmphasisStyleString != aOther.mTextEmphasisStyleString) {
+      mTextEmphasisStyleString != aOther.mTextEmphasisStyleString ||
+      mWebkitTextStrokeWidth != aOther.mWebkitTextStrokeWidth) {
     hint |= nsChangeHint_UpdateSubtreeOverflow |
             nsChangeHint_SchedulePaint |
             nsChangeHint_RepaintFrame;
@@ -3716,7 +3717,9 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
   if (mTextEmphasisColorForeground != aOther.mTextEmphasisColorForeground ||
       mTextEmphasisColor != aOther.mTextEmphasisColor ||
       mWebkitTextFillColorForeground != aOther.mWebkitTextFillColorForeground ||
-      mWebkitTextFillColor != aOther.mWebkitTextFillColor) {
+      mWebkitTextFillColor != aOther.mWebkitTextFillColor ||
+      mWebkitTextStrokeColorForeground != aOther.mWebkitTextStrokeColorForeground ||
+      mWebkitTextStrokeColor != aOther.mWebkitTextStrokeColor) {
     NS_UpdateHint(hint, nsChangeHint_SchedulePaint);
     NS_UpdateHint(hint, nsChangeHint_RepaintFrame);
   }
