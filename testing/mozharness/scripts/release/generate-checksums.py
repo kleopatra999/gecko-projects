@@ -62,6 +62,13 @@ class ChecksumsGenerator(BaseScript, VirtualenvMixin, SigningMixin, VCSMixin, Bu
             "dest": "credentials",
             "help": "File containing access key and secret access key for S3",
         }],
+        [["--checksums-suffix"], {
+             "dest": "checksums_suffixes",
+             "action": "append",
+             "default": [".checksums"],
+             "help": "List of suffixes of checksums files",
+        }],
+
     ] + virtualenv_config_options
 
     def __init__(self):
@@ -123,13 +130,13 @@ class ChecksumsGenerator(BaseScript, VirtualenvMixin, SigningMixin, VCSMixin, Bu
 
         if not self.config.get("includes"):
             self.config["includes"] = [
-                "^.*\.tar\.bz2$",
-                "^.*\.tar\.xz$",
-                "^.*\.dmg$",
-                "^.*\.bundle$",
-                "^.*\.mar$",
-                "^.*Setup.*\.exe$",
-                "^.*\.xpi$",
+                r"^.*\.tar\.bz2$",
+                r"^.*\.tar\.xz$",
+                r"^.*\.dmg$",
+                r"^.*\.bundle$",
+                r"^.*\.mar$",
+                r"^.*Setup.*\.exe$",
+                r"^.*\.xpi$",
             ]
 
     def _get_bucket_name(self):
@@ -182,7 +189,7 @@ class ChecksumsGenerator(BaseScript, VirtualenvMixin, SigningMixin, VCSMixin, Bu
         def find_checksums_files():
             self.info("Getting key names from bucket")
             for key in bucket.list(prefix=self.file_prefix):
-                if key.key.endswith(".checksums"):
+                if any([key.key.endswith(s) for s in self.config["checksums_suffixes"]]):
                     self.debug("Found checksums file: {}".format(key.key))
                     yield key.key
                 else:
