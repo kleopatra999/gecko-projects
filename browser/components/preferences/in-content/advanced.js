@@ -707,8 +707,7 @@ var gAdvancedPane = {
   },
 
   /**
-   * Sets the pref values based on the selected item of the radiogroup,
-   * and sets the disabled state of the warnIncompatible checkbox accordingly.
+   * Sets the pref values based on the selected item of the radiogroup.
    */
   updateWritePrefs: function ()
   {
