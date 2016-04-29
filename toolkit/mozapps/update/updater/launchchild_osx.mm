@@ -13,9 +13,25 @@
 #include <SystemConfiguration/SystemConfiguration.h>
 #include "readstrings.h"
 
+class MacAutoreleasePool {
+public:
+  MacAutoreleasePool()
+  {
+    mPool = [[NSAutoreleasePool alloc] init];
+  }
+  ~MacAutoreleasePool()
+  {
+    [mPool release];
+  }
+
+private:
+  NSAutoreleasePool* mPool;
+};
+
 void LaunchChild(int argc, const char** argv)
 {
-  NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+  MacAutoreleasePool pool;
+
   @try {
     NSString* launchPath = [NSString stringWithUTF8String:argv[0]];
     NSMutableArray* arguments = [NSMutableArray arrayWithCapacity:argc];
@@ -27,16 +43,15 @@ void LaunchChild(int argc, const char** argv)
   } @catch (NSException* e) {
     // Ignore any exception.
   }
-  [pool release];
 }
 
 void
 LaunchMacPostProcess(const char* aAppBundle)
 {
+  MacAutoreleasePool pool;
+
   // Launch helper to perform post processing for the update; this is the Mac
   // analogue of LaunchWinPostProcess (PostUpdateWin).
-  NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
-
   NSString* iniPath = [NSString stringWithUTF8String:aAppBundle];
   iniPath =
     [iniPath stringByAppendingPathComponent:@"Contents/Resources/updater.ini"];
@@ -44,7 +59,6 @@ LaunchMacPostProcess(const char* aAppBundle)
   NSFileManager* fileManager = [NSFileManager defaultManager];
   if (![fileManager fileExistsAtPath:iniPath]) {
     // the file does not exist; there is nothing to run
-    [pool release];
     return;
   }
 
@@ -56,14 +70,12 @@ LaunchMacPostProcess(const char* aAppBundle)
                            values,
                            "PostUpdateMac");
   if (readResult) {
-    [pool release];
     return;
   }
 
   NSString *exeRelPath = [NSString stringWithUTF8String:values[0]];
   NSString *exeArg = [NSString stringWithUTF8String:values[1]];
   if (!exeArg || !exeRelPath) {
-    [pool release];
     return;
   }
 
@@ -89,13 +101,11 @@ LaunchMacPostProcess(const char* aAppBundle)
   }
   // ignore the return value of the task, there's nothing we can do with it
   [task release];
-
-  [pool release];
 }
 
 void CleanupElevatedMacUpdate(bool aFailureOccurred)
 {
-  NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+  MacAutoreleasePool pool;
 
   id updateServer = nil;
   @try {
@@ -127,13 +137,13 @@ void CleanupElevatedMacUpdate(bool aFailureOccurred)
   // The following call will terminate the current process due to the "remove"
   // argument in launchctlArgs.
   LaunchChild(3, launchctlArgs);
-
-  [pool release];
 }
 
 // Note: Caller is responsible for freeing argv.
 bool ObtainUpdaterArguments(int* argc, char*** argv)
 {
+  MacAutoreleasePool pool;
+
   id updateServer = nil;
   @try {
     updateServer = (id)[NSConnection
@@ -252,6 +262,8 @@ bool ObtainUpdaterArguments(int* argc, char*** argv)
 
 bool ServeElevatedUpdate(int argc, const char** argv)
 {
+  MacAutoreleasePool pool;
+
   NSMutableArray* updaterArguments = [NSMutableArray arrayWithCapacity:argc];
   for (int i = 0; i < argc; i++) {
     [updaterArguments addObject:[NSString stringWithUTF8String:argv[i]]];
@@ -267,7 +279,7 @@ bool ServeElevatedUpdate(int argc, const char** argv)
 
 bool IsOwnedByGroupAdmin(const char* aAppBundle)
 {
-  NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+  MacAutoreleasePool pool;
 
   NSString* appDir = [NSString stringWithUTF8String:aAppBundle];
   NSFileManager* fileManager = [NSFileManager defaultManager];
@@ -279,14 +291,12 @@ bool IsOwnedByGroupAdmin(const char* aAppBundle)
       [[attributes valueForKey:NSFileGroupOwnerAccountID] intValue] == 80) {
     isOwnedByAdmin = true;
   }
-
-  [pool drain];
   return isOwnedByAdmin;
 }
 
 void SetGroupOwnershipAndPermissions(const char* aAppBundle)
 {
-  NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+  MacAutoreleasePool pool;
 
   NSString* appDir = [NSString stringWithUTF8String:aAppBundle];
   NSFileManager* fileManager = [NSFileManager defaultManager];
@@ -295,7 +305,6 @@ void SetGroupOwnershipAndPermissions(const char* aAppBundle)
     [fileManager subpathsOfDirectoryAtPath:appDir
                                      error:&error];
   if (error) {
-    [pool drain];
     return;
   }
 
@@ -305,7 +314,6 @@ void SetGroupOwnershipAndPermissions(const char* aAppBundle)
                                      NSFilePosixPermissions: @(0775) }
                      ofItemAtPath:appDir
                             error:&error] || error) {
-    [pool drain];
     return;
   }
 
@@ -320,7 +328,6 @@ void SetGroupOwnershipAndPermissions(const char* aAppBundle)
       [fileManager attributesOfItemAtPath:child
                                     error:&error];
     if (error) {
-      [pool drain];
       return;
     }
     // Skip symlinks, since they could be pointing to files outside of the .app
@@ -340,10 +347,7 @@ void SetGroupOwnershipAndPermissions(const char* aAppBundle)
     if (![fileManager setAttributes:attributes
                        ofItemAtPath:child
                               error:&error] || error) {
-      [pool drain];
       return;
     }
   }
-
-  [pool drain];
 }
