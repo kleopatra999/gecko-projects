@@ -323,6 +323,11 @@ void SetGroupOwnershipAndPermissions(const char* aAppBundle)
       [pool drain];
       return;
     }
+    // Skip symlinks, since they could be pointing to files outside of the .app
+    // bundle.
+    if ([oldAttributes fileType] == NSFileTypeSymbolicLink) {
+      continue;
+    }
     NSNumber* oldPerms =
       (NSNumber*)[oldAttributes valueForKey:NSFilePosixPermissions];
     NSArray* permObjects =

@@ -29,7 +29,19 @@ bool IsRecursivelyWritable(const char* aPath)
 
   for (NSString* currPath in paths) {
     NSString* child = [rootPath stringByAppendingPathComponent:currPath];
-    if ([fileManager isWritableFileAtPath:child] == NO) {
+
+    NSDictionary* attributes =
+      [fileManager attributesOfItemAtPath:child
+                                    error:&error];
+    if (error) {
+      [pool drain];
+      return false;
+    }
+
+    // Don't check for writability of files pointed to by symlinks, as they may
+    // not be descendants of the root path.
+    if ([attributes fileType] != NSFileTypeSymbolicLink &&
+        [fileManager isWritableFileAtPath:child] == NO) {
       [pool drain];
       return false;
     }
