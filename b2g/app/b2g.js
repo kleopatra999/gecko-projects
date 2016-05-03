@@ -885,13 +885,6 @@ pref("network.sntp.pools", // Servers separated by ';'.
 pref("network.sntp.port", 123);
 pref("network.sntp.timeout", 30); // In seconds.
 
-// Enable dataStore
-pref("dom.datastore.enabled", true);
-// When an entry is changed, use two timers to fire system messages in a more
-// moderate pattern.
-pref("dom.datastore.sysMsgOnChangeShortTimeoutSec", 10);
-pref("dom.datastore.sysMsgOnChangeLongTimeoutSec", 60);
-
 // DOM Inter-App Communication API.
 pref("dom.inter-app-communication-api.enabled", true);
 
@@ -1006,6 +999,9 @@ pref("layout.accessiblecaret.enabled", true);
 // by the spec in bug 921965.
 pref("layout.accessiblecaret.bar.enabled", true);
 
+// Hide the caret in cursor mode after 3 seconds.
+pref("layout.accessiblecaret.timeout_ms", 3000);
+
 // APZ on real devices supports long tap events.
 #ifdef MOZ_WIDGET_GONK
 pref("layout.accessiblecaret.use_long_tap_injector", false);
@@ -1058,9 +1054,6 @@ pref("dom.mozSettings.SettingsService.verbose.enabled", false);
 // IndexedDB transactions to be opened as readonly or keep everything as
 // readwrite.
 pref("dom.mozSettings.allowForceReadOnly", false);
-
-// RequestSync API is enabled by default on B2G.
-pref("dom.requestSync.enabled", true);
 
 // Comma separated list of activity names that can only be provided by
 // the system app in dev mode.

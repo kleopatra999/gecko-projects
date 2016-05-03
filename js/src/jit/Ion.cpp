@@ -24,6 +24,7 @@
 #include "jit/EagerSimdUnbox.h"
 #include "jit/EdgeCaseAnalysis.h"
 #include "jit/EffectiveAddressAnalysis.h"
+#include "jit/FlowAliasAnalysis.h"
 #include "jit/InstructionReordering.h"
 #include "jit/IonAnalysis.h"
 #include "jit/IonBuilder.h"
@@ -1613,15 +1614,24 @@ OptimizeMIR(MIRGenerator* mir)
     if (mir->optimizationInfo().licmEnabled() ||
         mir->optimizationInfo().gvnEnabled())
     {
-        AutoTraceLog log(logger, TraceLogger_AliasAnalysis);
-        AliasAnalysis analysis(mir, graph);
-        if (!analysis.analyze())
-            return false;
-        gs.spewPass("Alias analysis");
-        AssertExtendedGraphCoherency(graph);
+        {
+            AutoTraceLog log(logger, TraceLogger_AliasAnalysis);
+            if (JitOptions.disableFlowAA) {
+                AliasAnalysis analysis(mir, graph);
+                if (!analysis.analyze())
+                    return false;
+            } else {
+                FlowAliasAnalysis analysis(mir, graph);
+                if (!analysis.analyze())
+                    return false;
+            }
 
-        if (mir->shouldCancel("Alias analysis"))
-            return false;
+            gs.spewPass("Alias analysis");
+            AssertExtendedGraphCoherency(graph);
+
+            if (mir->shouldCancel("Alias analysis"))
+                return false;
+        }
 
         if (!mir->compilingAsmJS()) {
             // Eliminating dead resume point operands requires basic block
@@ -2775,7 +2785,8 @@ EnterIon(JSContext* cx, EnterJitData& data)
 }
 
 bool
-jit::SetEnterJitData(JSContext* cx, EnterJitData& data, RunState& state, AutoValueVector& vals)
+jit::SetEnterJitData(JSContext* cx, EnterJitData& data, RunState& state,
+                     MutableHandle<GCVector<Value>> vals)
 {
     data.osrFrame = nullptr;
 
@@ -2845,8 +2856,8 @@ jit::IonCannon(JSContext* cx, RunState& state)
     EnterJitData data(cx);
     data.jitcode = ion->method()->raw();
 
-    AutoValueVector vals(cx);
-    if (!SetEnterJitData(cx, data, state, vals))
+    Rooted<GCVector<Value>> vals(cx, GCVector<Value>(cx));
+    if (!SetEnterJitData(cx, data, state, &vals))
         return JitExec_Error;
 
     JitExecStatus status = EnterIon(cx, data);

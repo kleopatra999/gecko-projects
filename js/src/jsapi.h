@@ -219,9 +219,9 @@ typedef AutoVectorRooter<Value> AutoValueVector;
 typedef AutoVectorRooter<jsid> AutoIdVector;
 typedef AutoVectorRooter<JSObject*> AutoObjectVector;
 
-using ValueVector = js::GCVector<JS::Value>;
-using IdVector = js::GCVector<jsid>;
-using ScriptVector = js::GCVector<JSScript*>;
+using ValueVector = JS::GCVector<JS::Value>;
+using IdVector = JS::GCVector<jsid>;
+using ScriptVector = JS::GCVector<JSScript*>;
 
 template<class Key, class Value>
 class MOZ_RAII AutoHashMapRooter : protected AutoGCRooter
@@ -2216,7 +2216,8 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         preserveJitCode_(false),
         cloneSingletons_(false),
         experimentalDateTimeFormatFormatToPartsEnabled_(false),
-        sharedMemoryAndAtomics_(false)
+        sharedMemoryAndAtomics_(false),
+        secureContext_(false)
     {
         zone_.spec = JS::FreshZone;
     }
@@ -2299,6 +2300,16 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     bool getSharedMemoryAndAtomicsEnabled() const;
     CompartmentCreationOptions& setSharedMemoryAndAtomicsEnabled(bool flag);
 
+    // This flag doesn't affect JS engine behavior.  It is used by Gecko to
+    // mark whether content windows and workers are "Secure Context"s. See
+    // https://w3c.github.io/webappsec-secure-contexts/
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1162772#c34
+    bool secureContext() const { return secureContext_; }
+    CompartmentCreationOptions& setSecureContext(bool flag) {
+        secureContext_ = flag;
+        return *this;
+    }
+
   private:
     JSAddonId* addonId_;
     JSTraceOp traceGlobal_;
@@ -2312,6 +2323,7 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     bool cloneSingletons_;
     bool experimentalDateTimeFormatFormatToPartsEnabled_;
     bool sharedMemoryAndAtomics_;
+    bool secureContext_;
 };
 
 /**

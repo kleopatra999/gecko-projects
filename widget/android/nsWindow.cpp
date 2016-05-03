@@ -1783,6 +1783,9 @@ nsWindow::CreateLayerManager(int aCompositorWidth, int aCompositorHeight)
         return;
     }
 
+    // Ensure that gfxPlatform is initialized first.
+    gfxPlatform::GetPlatform();
+
     if (ShouldUseOffMainThreadCompositing()) {
         CreateCompositor(aCompositorWidth, aCompositorHeight);
         if (mLayerManager) {
@@ -3547,7 +3550,14 @@ nsWindow::NeedsPaint()
 CompositorBridgeParent*
 nsWindow::NewCompositorBridgeParent(int aSurfaceWidth, int aSurfaceHeight)
 {
-    return new CompositorBridgeParent(this, true, aSurfaceWidth, aSurfaceHeight);
+    if (!mCompositorWidgetProxy) {
+      mCompositorWidgetProxy = NewCompositorWidgetProxy();
+    }
+    return new CompositorBridgeParent(mCompositorWidgetProxy,
+                                      GetDefaultScale(),
+                                      UseAPZ(),
+                                      true,
+                                      aSurfaceWidth, aSurfaceHeight);
 }
 
 void

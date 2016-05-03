@@ -1340,6 +1340,12 @@ PresShell::MakeZombie()
   CancelAllPendingReflows();
 }
 
+nsRefreshDriver*
+nsIPresShell::GetRefreshDriver() const
+{
+  return mPresContext ? mPresContext->RefreshDriver() : nullptr;
+}
+
 void
 nsIPresShell::SetAuthorStyleDisabled(bool aStyleDisabled)
 {
@@ -2411,6 +2417,7 @@ PresShell::RestoreRootScrollPosition()
 {
   nsIScrollableFrame* scrollableFrame = GetRootScrollFrameAsScrollable();
   if (scrollableFrame) {
+    scrollableFrame->SetRestoringHistoryScrollPosition(true);
     scrollableFrame->ScrollToRestoredPosition();
   }
 }
@@ -2468,6 +2475,11 @@ PresShell::EndLoad(nsIDocument *aDocument)
 void
 PresShell::LoadComplete()
 {
+  nsIScrollableFrame* scrollableFrame = GetRootScrollFrameAsScrollable();
+  if (scrollableFrame) {
+    scrollableFrame->SetRestoringHistoryScrollPosition(false);
+  }
+
   gfxTextPerfMetrics *tp = nullptr;
   if (mPresContext) {
     tp = mPresContext->GetTextPerfMetrics();
@@ -6441,7 +6453,8 @@ nsIPresShell::SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aConte
 {
   PointerCaptureInfo* pointerCaptureInfo = nullptr;
   gPointerCaptureList->Get(aPointerId, &pointerCaptureInfo);
-  nsIContent* content = pointerCaptureInfo ? pointerCaptureInfo->mOverrideContent : nullptr;
+  nsIContent* content = pointerCaptureInfo ?
+    pointerCaptureInfo->mOverrideContent.get() : nullptr;
 
   if (!content && (nsIDOMMouseEvent::MOZ_SOURCE_MOUSE == GetPointerType(aPointerId))) {
     SetCapturingContent(aContent, CAPTURE_PREVENTDRAG);
@@ -11286,22 +11299,4 @@ nsIPresShell::HasRuleProcessorUsedByMultipleStyleSets(uint32_t aSheetType,
     *aRetVal = styleSet->HasRuleProcessorUsedByMultipleStyleSets(type);
   }
   return NS_OK;
-}
-
-void
-nsIPresShell::SetIsInFullscreenChange(bool aValue)
-{
-  if (mIsInFullscreenChange == aValue) {
-    NS_WARNING(aValue ? "Pres shell has been in fullscreen change?" :
-               "Pres shell is not in fullscreen change?");
-    return;
-  }
-  mIsInFullscreenChange = aValue;
-  if (nsRefreshDriver* rd = mPresContext->RefreshDriver()) {
-    if (aValue) {
-      rd->Freeze();
-    } else {
-      rd->Thaw();
-    }
-  }
 }

@@ -73,15 +73,23 @@ void Servo_ReleaseStyleSheet(RawServoStyleSheet* sheet);
 void Servo_AppendStyleSheet(RawServoStyleSheet* sheet, RawServoStyleSet* set);
 void Servo_PrependStyleSheet(RawServoStyleSheet* sheet, RawServoStyleSet* set);
 void Servo_RemoveStyleSheet(RawServoStyleSheet* sheet, RawServoStyleSet* set);
+void Servo_InsertStyleSheetBefore(RawServoStyleSheet* sheet,
+                                  RawServoStyleSheet* reference,
+                                  RawServoStyleSet* set);
 bool Servo_StyleSheetHasRules(RawServoStyleSheet* sheet);
 RawServoStyleSet* Servo_InitStyleSet();
 void Servo_DropStyleSet(RawServoStyleSet* set);
 
 // Computed style data.
-ServoComputedValues* Servo_GetComputedValues(RawGeckoElement* element);
+ServoComputedValues* Servo_GetComputedValues(RawGeckoNode* node);
 ServoComputedValues* Servo_GetComputedValuesForAnonymousBox(ServoComputedValues* parentStyleOrNull,
                                                             nsIAtom* pseudoTag,
                                                             RawServoStyleSet* set);
+ServoComputedValues* Servo_GetComputedValuesForPseudoElement(ServoComputedValues* parent_style,
+                                                             RawGeckoElement* match_element,
+                                                             nsIAtom* pseudo_tag,
+                                                             RawServoStyleSet* set,
+                                                             bool is_probe);
 void Servo_AddRefComputedValues(ServoComputedValues*);
 void Servo_ReleaseComputedValues(ServoComputedValues*);
 

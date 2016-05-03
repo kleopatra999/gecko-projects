@@ -465,7 +465,10 @@ public:
     inline nsIXPCFunctionThisTranslator* Find(REFNSIID iid)
     {
         auto entry = static_cast<Entry*>(mTable.Search(&iid));
-        return entry ? entry->value : nullptr;
+        if (!entry) {
+            return nullptr;
+        }
+        return entry->value;
     }
 
     inline nsIXPCFunctionThisTranslator* Add(REFNSIID iid,
@@ -569,7 +572,7 @@ private:
 
 class JSObject2JSObjectMap
 {
-    using Map = js::GCHashMap<JS::Heap<JSObject*>,
+    using Map = JS::GCHashMap<JS::Heap<JSObject*>,
                               JS::Heap<JSObject*>,
                               js::MovableCellHasher<JS::Heap<JSObject*>>,
                               js::SystemAllocPolicy>;

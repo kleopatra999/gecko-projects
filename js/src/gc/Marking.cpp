@@ -2021,7 +2021,7 @@ template <typename S>
 struct TenuringTraversalFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, TenuringTracer* trc) {
         trc->traverse(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 
@@ -2091,6 +2091,9 @@ js::gc::StoreBuffer::WholeCellEdges::trace(TenuringTracer& mover) const
     JS::TraceKind kind = edge->getTraceKind();
     if (kind == JS::TraceKind::Object) {
         JSObject *object = static_cast<JSObject*>(edge);
+        if (object->is<NativeObject>())
+            object->as<NativeObject>().clearInWholeCellBuffer();
+
         mover.traceObject(object);
 
         // Additionally trace the expando object attached to any unboxed plain
@@ -2424,7 +2427,7 @@ template <typename S>
 struct IsMarkedFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, bool* rv) {
         *rv = IsMarkedInternal(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 
@@ -2483,7 +2486,7 @@ template <typename S>
 struct IsAboutToBeFinalizedFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, bool* rv) {
         *rv = IsAboutToBeFinalizedInternal(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 

@@ -299,7 +299,7 @@ JSGCThingParticipant::Traverse(void* aPtr,
     reinterpret_cast<char*>(this) - offsetof(CycleCollectedJSRuntime,
                                              mGCThingCycleCollectorGlobal));
 
-  JS::GCCellPtr cellPtr(aPtr, js::GCThingTraceKind(aPtr));
+  JS::GCCellPtr cellPtr(aPtr, JS::GCThingTraceKind(aPtr));
   runtime->TraverseGCThing(CycleCollectedJSRuntime::TRAVERSE_FULL, cellPtr, aCb);
   return NS_OK;
 }
@@ -467,6 +467,9 @@ CycleCollectedJSRuntime::~CycleCollectedJSRuntime()
 
   // Clear mPendingException first, since it might be cycle collected.
   mPendingException = nullptr;
+
+  MOZ_ASSERT(mDebuggerPromiseMicroTaskQueue.empty());
+  MOZ_ASSERT(mPromiseMicroTaskQueue.empty());
 
   JS_DestroyRuntime(mJSRuntime);
   mJSRuntime = nullptr;

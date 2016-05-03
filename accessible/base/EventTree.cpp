@@ -153,6 +153,7 @@ TreeMutation::Done()
 
   for (uint32_t idx = mStartIdx; idx < length; idx++) {
     mParent->mChildren[idx]->mIndexInParent = idx;
+    mParent->mChildren[idx]->mInt.mIndexOfEmbeddedChild = -1;
     mParent->mChildren[idx]->mStateFlags |= Accessible::eGroupInfoDirty;
   }
 
@@ -183,13 +184,12 @@ TreeMutation::Done()
 void
 EventTree::Process()
 {
-  EventTree* node = mFirst;
-  while (node) {
+  while (mFirst) {
     // Skip a node and its subtree if its container is not in the document.
-    if (node->mContainer->IsInDocument()) {
-      node->Process();
+    if (mFirst->mContainer->IsInDocument()) {
+      mFirst->Process();
     }
-    node = node->mNext;
+    mFirst = mFirst->mNext.forget();
   }
 
   MOZ_ASSERT(mContainer || mDependentEvents.IsEmpty(),
