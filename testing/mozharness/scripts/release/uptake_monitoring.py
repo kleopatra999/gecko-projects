@@ -123,27 +123,9 @@ class UptakeMonitoring(BaseScript, VirtualenvMixin, BuildbotMixin):
         dl = []
 
         for product, info in self.config["products"].iteritems():
-            product_template = info["product-name"]
-            related_product = product_template % {"version": version}
-
-            enUS_platforms = set(self.config["platforms"])
-            paths_platforms = set(info["paths"].keys())
-            platforms = enUS_platforms.intersection(paths_platforms)
-
-            for platform in platforms:
-                bouncer_platform = info["paths"].get(platform).get('bouncer-platform')
-                dl.append(self._get_product_uptake(tuxedo_server_url, auth,
-                                                   related_product, bouncer_platform))
-        # handle the partials as well
-        prev_versions = self.config["partial_versions"]
-        for product, info in self.config["partials"].iteritems():
-            product_template = info["product-name"]
-            for prev_version in prev_versions:
-                subs = {
-                    "version": version,
-                    "prev_version": prev_version
-                }
-                related_product = product_template % subs
+            if info.get("check_uptake"):
+                product_template = info["product-name"]
+                related_product = product_template % {"version": version}
 
                 enUS_platforms = set(self.config["platforms"])
                 paths_platforms = set(info["paths"].keys())
@@ -153,6 +135,26 @@ class UptakeMonitoring(BaseScript, VirtualenvMixin, BuildbotMixin):
                     bouncer_platform = info["paths"].get(platform).get('bouncer-platform')
                     dl.append(self._get_product_uptake(tuxedo_server_url, auth,
                                                        related_product, bouncer_platform))
+        # handle the partials as well
+        prev_versions = self.config["partial_versions"]
+        for product, info in self.config["partials"].iteritems():
+            if info.get("check_uptake"):
+                product_template = info["product-name"]
+                for prev_version in prev_versions:
+                    subs = {
+                        "version": version,
+                        "prev_version": prev_version
+                    }
+                    related_product = product_template % subs
+
+                    enUS_platforms = set(self.config["platforms"])
+                    paths_platforms = set(info["paths"].keys())
+                    platforms = enUS_platforms.intersection(paths_platforms)
+
+                    for platform in platforms:
+                        bouncer_platform = info["paths"].get(platform).get('bouncer-platform')
+                        dl.append(self._get_product_uptake(tuxedo_server_url, auth,
+                                                           related_product, bouncer_platform))
         return min(dl)
 
     def monitor_uptake(self):
@@ -178,7 +180,7 @@ class UptakeMonitoring(BaseScript, VirtualenvMixin, BuildbotMixin):
                 break
             else:
                 self.info("Mirrors not yet updated, sleeping for a bit ...")
-                time.sleep(self.config("poll_interval"))
+                time.sleep(self.config["poll_interval"])
 
 
 if __name__ == '__main__':
