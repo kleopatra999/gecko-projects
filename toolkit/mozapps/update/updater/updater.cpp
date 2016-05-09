@@ -84,6 +84,11 @@ void LaunchMacPostProcess(const char* aAppBundle);
 bool ObtainUpdaterArguments(int* argc, char*** argv);
 bool ServeElevatedUpdate(int argc, const char** argv);
 void SetGroupOwnershipAndPermissions(const char* aAppBundle);
+struct UpdateServerThreadArgs
+{
+  int argc;
+  const NS_tchar** argv;
+};
 #endif
 
 #ifndef _O_BINARY
@@ -2498,6 +2503,17 @@ UpdateThreadFunc(void *param)
 }
 
 #ifdef XP_MACOSX
+static void
+ServeElevatedUpdateThreadFunc(void* param)
+{
+  UpdateServerThreadArgs* threadArgs = (UpdateServerThreadArgs*)param;
+  gSucceeded = ServeElevatedUpdate(threadArgs->argc, threadArgs->argv);
+  if (!gSucceeded) {
+    WriteStatusFile(ELEVATION_CANCELED);
+  }
+  QuitProgressUI();
+}
+
 void freeArguments(int argc, char** argv)
 {
   for (int i = 0; i < argc; i++) {
@@ -2667,20 +2683,28 @@ int NS_main(int argc, NS_tchar **argv)
   // The directory containing the update information.
   gPatchDirPath = argv[1];
 
+  InitProgressUI(&argc, &argv);
+
 #ifdef XP_MACOSX
   if (!isElevated && !IsRecursivelyWritable(argv[2])) {
     // If the app directory isn't recursively writeable, an elevated update is
     // required.
-    gSucceeded = ServeElevatedUpdate(argc, (const char**)argv);
-    if (!gSucceeded) {
-      WriteStatusFile(ELEVATION_CANCELED);
+    UpdateServerThreadArgs threadArgs;
+    threadArgs.argc = argc;
+    threadArgs.argv = const_cast<const NS_tchar**>(argv);
+
+    Thread t1;
+    if (t1.Run(ServeElevatedUpdateThreadFunc, &threadArgs) == 0) {
+      // Show an indeterminate progress bar while an elevated update is in
+      // progress.
+      ShowProgressUI(true);
     }
+    t1.Join();
+
     LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false);
     return gSucceeded ? 0 : 1;
   }
 #endif
-
-  InitProgressUI(&argc, &argv);
 
   // To process an update the updater command line must at a minimum have the
   // directory path containing the updater.mar file to process as the first
