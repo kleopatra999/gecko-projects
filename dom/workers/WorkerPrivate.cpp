@@ -59,6 +59,7 @@
 #include "mozilla/dom/PMessagePort.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseDebugging.h"
+#include "mozilla/dom/SimpleGlobalObject.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/TabChild.h"
@@ -1058,6 +1059,11 @@ public:
 
       // Now fire an event at the global object, but don't do that if the error
       // code is too much recursion and this is the same script threw the error.
+      // XXXbz the interaction of this with worker errors seems kinda broken.
+      // An overrecursion in the debugger or debugger sandbox will get turned
+      // into an error event on our parent worker!
+      // https://bugzilla.mozilla.org/show_bug.cgi?id=1271441 tracks making this
+      // better.
       if (aFireAtScope && (aTarget || aErrorNumber != JSMSG_OVER_RECURSED)) {
         JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
         NS_ASSERTION(global, "This should never be null!");
@@ -1074,10 +1080,19 @@ public:
             UNWRAP_OBJECT(WorkerDebuggerGlobalScope, global, globalScope);
 
             MOZ_ASSERT_IF(globalScope, globalScope->GetWrapperPreserveColor() == global);
-            MOZ_ASSERT_IF(!globalScope, IsDebuggerSandbox(global));
+            if (globalScope || IsDebuggerSandbox(global)) {
+              aWorkerPrivate->ReportErrorToDebugger(aFilename, aLineNumber,
+                                                    aMessage);
+              return;
+            }
 
-            aWorkerPrivate->ReportErrorToDebugger(aFilename, aLineNumber,
-                                                  aMessage);
+            MOZ_ASSERT(SimpleGlobalObject::SimpleGlobalType(global) ==
+                         SimpleGlobalObject::GlobalType::BindingDetail);
+            // XXXbz We should really log this to console, but unwinding out of
+            // this stuff without ending up firing any events is ... hard.  Just
+            // return for now.
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=1271441 tracks
+            // making this better.
             return;
           }
 
@@ -4426,10 +4441,14 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
     MOZ_ASSERT(NS_LoadGroupMatchesPrincipal(loadInfo.mLoadGroup,
                                             loadInfo.mPrincipal));
 
+    // Top level workers' main script use the document charset for the script
+    // uri encoding.
+    bool useDefaultEncoding = false;
     rv = ChannelFromScriptURLMainThread(loadInfo.mPrincipal, loadInfo.mBaseURI,
                                         document, loadInfo.mLoadGroup,
                                         aScriptURL,
                                         ContentPolicyType(aWorkerType),
+                                        useDefaultEncoding,
                                         getter_AddRefs(loadInfo.mChannel));
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -4508,7 +4527,15 @@ WorkerPrivate::DoRunLoop(JSContext* aCx)
         WaitForWorkerEvents();
       }
 
-      ProcessAllControlRunnablesLocked();
+      auto result = ProcessAllControlRunnablesLocked();
+      if (result != ProcessAllControlRunnablesResult::Nothing) {
+        // NB: There's no JS on the stack here, so Abort vs MayContinue is
+        // irrelevant
+
+        // The state of the world may have changed, recheck it.
+        normalRunnablesPending = NS_HasPendingEvents(mThread);
+        // The debugger queue doesn't get cleared, so we can ignore that.
+      }
 
       currentStatus = mStatus;
     }
@@ -4634,7 +4661,9 @@ WorkerPrivate::OnProcessNextEvent()
   // runnables here.
   if (recursionDepth > 1 &&
       mSyncLoopStack.Length() < recursionDepth - 1) {
-    ProcessAllControlRunnables();
+    Unused << ProcessAllControlRunnables();
+    // There's no running JS, and no state to revalidate, so we can ignore the
+    // return value.
   }
 }
 
@@ -4772,7 +4801,10 @@ WorkerPrivate::InterruptCallback(JSContext* aCx)
 
   for (;;) {
     // Run all control events now.
-    mayContinue = ProcessAllControlRunnables();
+    auto result = ProcessAllControlRunnables();
+    if (result == ProcessAllControlRunnablesResult::Abort) {
+      mayContinue = false;
+    }
 
     bool mayFreeze = mFrozen;
     if (mayFreeze) {
@@ -5008,13 +5040,13 @@ WorkerPrivate::WaitForWorkerEvents(PRIntervalTime aInterval)
   mBlockedForMemoryReporter = false;
 }
 
-bool
+WorkerPrivate::ProcessAllControlRunnablesResult
 WorkerPrivate::ProcessAllControlRunnablesLocked()
 {
   AssertIsOnWorkerThread();
   mMutex.AssertCurrentThreadOwns();
 
-  bool result = true;
+  auto result = ProcessAllControlRunnablesResult::Nothing;
 
   for (;;) {
     // Block here if the memory reporter is trying to run.
@@ -5049,9 +5081,13 @@ WorkerPrivate::ProcessAllControlRunnablesLocked()
 
     MOZ_ASSERT(event);
     if (NS_FAILED(static_cast<nsIRunnable*>(event)->Run())) {
-      result = false;
+      result = ProcessAllControlRunnablesResult::Abort;
     }
 
+    if (result == ProcessAllControlRunnablesResult::Nothing) {
+      // We ran at least one thing.
+      result = ProcessAllControlRunnablesResult::MayContinue;
+    }
     event->Release();
   }
 
@@ -5387,11 +5423,25 @@ WorkerPrivate::RunCurrentSyncLoop()
           WaitForWorkerEvents();
         }
 
-        ProcessAllControlRunnablesLocked();
+        auto result = ProcessAllControlRunnablesLocked();
+        if (result != ProcessAllControlRunnablesResult::Nothing) {
+          // XXXkhuey how should we handle Abort here? See Bug 1003730.
 
-        // NB: If we processed a NotifyRunnable, we might have run non-control
-        // runnables, one of which may have shut down the sync loop.
-        if (normalRunnablesPending || loopInfo->mCompleted) {
+          // The state of the world may have changed. Recheck it.
+          normalRunnablesPending = NS_HasPendingEvents(mThread);
+
+          // NB: If we processed a NotifyRunnable, we might have run
+          // non-control runnables, one of which may have shut down the
+          // sync loop.
+          if (loopInfo->mCompleted) {
+            break;
+          }
+        }
+
+        // If we *didn't* run any control runnables, this should be unchanged.
+        MOZ_ASSERT(!loopInfo->mCompleted);
+
+        if (normalRunnablesPending) {
           break;
         }
       }
@@ -5620,6 +5670,8 @@ WorkerPrivate::EnterDebuggerEventLoop()
       }
 
       ProcessAllControlRunnablesLocked();
+
+      // XXXkhuey should we abort JS on the stack here if we got Abort above?
     }
 
     if (debuggerRunnablesPending) {

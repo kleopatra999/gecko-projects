@@ -406,9 +406,14 @@ a {
 .jsterm-input-node,
 .jsterm-complete-node {
   border: none;
-  padding: 0 0 0 16px;
+  padding-inline-start: 20px;
+  margin: 0;
   -moz-appearance: none;
   background-color: transparent;
+}
+
+.jsterm-input-node[focused="true"] {
+  box-shadow: var(--theme-focus-box-shadow-inset-bottom);
 }
 
 .jsterm-complete-node {
@@ -422,6 +427,7 @@ a {
   background-image: var(--command-line-image);
   background-repeat: no-repeat;
   background-size: 16px 16px;
+  background-position: 4px 50%;
   color: var(--theme-content-color1);
 }
 
@@ -434,6 +440,10 @@ a {
 :-moz-any(.jsterm-input-node,
           .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
   overflow-x: hidden;
+  /* Set padding for console input on textbox to make sure it is inlcuded in
+     scrollHeight that is used when resizing JSTerminal's input. Note: textbox
+     default style has important already */
+  padding: 4px 0 !important;
 }
 
 .inlined-variables-view .message-body {

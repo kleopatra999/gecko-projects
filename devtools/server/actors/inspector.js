@@ -52,7 +52,7 @@
 
 const {Cc, Ci, Cu} = require("chrome");
 const Services = require("Services");
-const protocol = require("devtools/server/protocol");
+const protocol = require("devtools/shared/protocol");
 const {Arg, Option, method, RetVal, types} = protocol;
 const {LongStringActor, ShortLongString} = require("devtools/server/actors/string");
 const promise = require("promise");
@@ -80,6 +80,7 @@ const {getLayoutChangesObserver, releaseLayoutChangesObserver} =
 loader.lazyRequireGetter(this, "CSS", "CSS");
 
 const {EventParsers} = require("devtools/shared/event-parsers");
+const { makeInfallible } = require("devtools/shared/DevToolsUtils");
 
 const FONT_FAMILY_PREVIEW_TEXT = "The quick brown fox jumps over the lazy dog";
 const FONT_FAMILY_PREVIEW_TEXT_SIZE = 20;
@@ -150,19 +151,6 @@ loader.lazyGetter(this, "eventListenerService", function () {
 });
 
 loader.lazyGetter(this, "CssLogic", () => require("devtools/shared/inspector/css-logic").CssLogic);
-
-// XXX: A poor man's makeInfallible until we move it out of transport.js
-// Which should be very soon.
-function makeInfallible(handler) {
-  return function (...args) {
-    try {
-      return handler.apply(this, args);
-    } catch(ex) {
-      console.error(ex);
-    }
-    return undefined;
-  };
-}
 
 // A resolve that hits the main loop first.
 function delayedResolve(value) {
@@ -2245,7 +2233,7 @@ var WalkerActor = protocol.ActorClass({
           sugs.ids.set(node.id, (sugs.ids.get(node.id)|0) + 1);
         }
         for (let [id, count] of sugs.ids) {
-          if (id.startsWith(completing)) {
+          if (id.startsWith(completing) && id !== "") {
             result.push(["#" + CSS.escape(id), count, selectorState]);
           }
         }

@@ -95,8 +95,6 @@ enum eGfxLog {
 // when searching through pref langs, max number of pref langs
 const uint32_t kMaxLenPrefLangList = 32;
 
-extern bool gANGLESupportsD3D11;
-
 #define UNINITIALIZED_VALUE  (-1)
 
 inline const char*
@@ -449,9 +447,7 @@ public:
 
     static bool OffMainThreadCompositingEnabled();
 
-    static bool CanUseDirect3D9();
     virtual bool CanUseHardwareVideoDecoding();
-    static bool CanUseDirect3D11ANGLE();
 
     // Returns a prioritized list of all available compositor backends.
     void GetCompositorBackends(bool useAcceleration, nsTArray<mozilla::layers::LayersBackend>& aBackends);

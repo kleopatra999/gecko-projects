@@ -4451,7 +4451,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
                textAlignValue->GetIntValue()) {
     conditions.SetUncacheable();
     uint8_t parentAlign = parentText->mTextAlign;
-    text->mTextAlign = (NS_STYLE_TEXT_ALIGN_DEFAULT == parentAlign) ?
+    text->mTextAlign = (NS_STYLE_TEXT_ALIGN_START == parentAlign) ?
       NS_STYLE_TEXT_ALIGN_CENTER : parentAlign;
   } else if (eCSSUnit_Enumerated == textAlignValue->GetUnit() &&
              NS_STYLE_TEXT_ALIGN_MATCH_PARENT ==
@@ -4462,7 +4462,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
       uint8_t parentAlign = parentText->mTextAlign;
       uint8_t parentDirection = parent->StyleVisibility()->mDirection;
       switch (parentAlign) {
-        case NS_STYLE_TEXT_ALIGN_DEFAULT:
+        case NS_STYLE_TEXT_ALIGN_START:
           text->mTextAlign = parentDirection == NS_STYLE_DIRECTION_RTL ?
             NS_STYLE_TEXT_ALIGN_RIGHT : NS_STYLE_TEXT_ALIGN_LEFT;
           break;
@@ -4496,7 +4496,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
     SetDiscrete(*textAlignValue, text->mTextAlign, conditions,
                 SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
                 parentText->mTextAlign,
-                NS_STYLE_TEXT_ALIGN_DEFAULT, 0, 0, 0, 0);
+                NS_STYLE_TEXT_ALIGN_START, 0, 0, 0, 0);
   }
 
   // text-align-last: enum, pair(enum), inherit, initial
@@ -5316,6 +5316,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     StyleTransition *transition = &display->mTransitions[i];
 
     if (i >= delay.num) {
+      MOZ_ASSERT(delay.num, "delay.num must be greater than 0");
       transition->SetDelay(display->mTransitions[i % delay.num].GetDelay());
     } else if (delay.unit == eCSSUnit_Inherit) {
       // FIXME (Bug 522599) (for all transition properties): write a test that
@@ -5344,6 +5345,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= duration.num) {
+      MOZ_ASSERT(duration.num, "duration.num must be greater than 0");
       transition->SetDuration(
         display->mTransitions[i % duration.num].GetDuration());
     } else if (duration.unit == eCSSUnit_Inherit) {
@@ -5370,6 +5372,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= property.num) {
+      MOZ_ASSERT(property.num, "property.num must be greater than 0");
       transition->CopyPropertyFrom(display->mTransitions[i % property.num]);
     } else if (property.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mTransitionPropertyCount,
@@ -5390,7 +5393,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
           propertyStr(property.list->mValue.GetStringBufferValue());
         nsCSSProperty prop =
           nsCSSProps::LookupProperty(propertyStr,
-                                     nsCSSProps::eEnabledForAllContent);
+                                     CSSEnabledState::eForAllContent);
         if (prop == eCSSProperty_UNKNOWN ||
             prop == eCSSPropertyExtra_variable) {
           transition->SetUnknownProperty(prop, propertyStr);
@@ -5405,6 +5408,8 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= timingFunction.num) {
+      MOZ_ASSERT(timingFunction.num,
+        "timingFunction.num must be greater than 0");
       transition->SetTimingFunction(
         display->mTransitions[i % timingFunction.num].GetTimingFunction());
     } else if (timingFunction.unit == eCSSUnit_Inherit) {
@@ -5473,6 +5478,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     StyleAnimation *animation = &display->mAnimations[i];
 
     if (i >= animDelay.num) {
+      MOZ_ASSERT(animDelay.num, "animDelay.num must be greater than 0");
       animation->SetDelay(display->mAnimations[i % animDelay.num].GetDelay());
     } else if (animDelay.unit == eCSSUnit_Inherit) {
       // FIXME (Bug 522599) (for all animation properties): write a test that
@@ -5501,6 +5507,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animDuration.num) {
+      MOZ_ASSERT(animDuration.num, "animDuration.num must be greater than 0");
       animation->SetDuration(
         display->mAnimations[i % animDuration.num].GetDuration());
     } else if (animDuration.unit == eCSSUnit_Inherit) {
@@ -5527,6 +5534,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animName.num) {
+      MOZ_ASSERT(animName.num, "animName.num must be greater than 0");
       animation->SetName(display->mAnimations[i % animName.num].GetName());
     } else if (animName.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mAnimationNameCount,
@@ -5555,6 +5563,8 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animTimingFunction.num) {
+      MOZ_ASSERT(animTimingFunction.num,
+        "animTimingFunction.num must be greater than 0");
       animation->SetTimingFunction(
         display->mAnimations[i % animTimingFunction.num].GetTimingFunction());
     } else if (animTimingFunction.unit == eCSSUnit_Inherit) {
@@ -5574,6 +5584,8 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animDirection.num) {
+      MOZ_ASSERT(animDirection.num,
+        "animDirection.num must be greater than 0");
       animation->SetDirection(display->mAnimations[i % animDirection.num].GetDirection());
     } else if (animDirection.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mAnimationDirectionCount,
@@ -5593,6 +5605,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animFillMode.num) {
+      MOZ_ASSERT(animFillMode.num, "animFillMode.num must be greater than 0");
       animation->SetFillMode(display->mAnimations[i % animFillMode.num].GetFillMode());
     } else if (animFillMode.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mAnimationFillModeCount,
@@ -5612,6 +5625,8 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animPlayState.num) {
+      MOZ_ASSERT(animPlayState.num,
+        "animPlayState.num must be greater than 0");
       animation->SetPlayState(display->mAnimations[i % animPlayState.num].GetPlayState());
     } else if (animPlayState.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mAnimationPlayStateCount,
@@ -5630,6 +5645,8 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     }
 
     if (i >= animIterationCount.num) {
+      MOZ_ASSERT(animIterationCount.num,
+        "animIterationCount.num must be greater than 0");
       animation->SetIterationCount(display->mAnimations[i % animIterationCount.num].GetIterationCount());
     } else if (animIterationCount.unit == eCSSUnit_Inherit) {
       MOZ_ASSERT(i < parentDisplay->mAnimationIterationCountCount,
@@ -6180,8 +6197,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
         }
 
         nsCSSProperty prop =
-          nsCSSProps::LookupProperty(buffer,
-                                     nsCSSProps::eEnabledForAllContent);
+          nsCSSProps::LookupProperty(buffer, CSSEnabledState::eForAllContent);
         if (prop != eCSSProperty_UNKNOWN &&
             prop != eCSSPropertyExtra_variable) {
           // If the property given is a shorthand, it indicates the expectation
@@ -7200,7 +7216,6 @@ nsRuleNode::ComputeMarginData(void* aStartStruct,
     }
   }
 
-  margin->RecalcData();
   COMPUTE_END_RESET(Margin, margin)
 }
 
@@ -7622,7 +7637,6 @@ nsRuleNode::ComputePaddingData(void* aStartStruct,
     }
   }
 
-  padding->RecalcData();
   COMPUTE_END_RESET(Padding, padding)
 }
 
@@ -7733,7 +7747,7 @@ nsRuleNode::ComputeOutlineData(void* aStartStruct,
     outline->SetOutlineStyle(parentOutline->GetOutlineStyle());
   }
 
-  outline->RecalcData(mPresContext);
+  outline->RecalcData();
   COMPUTE_END_RESET(Outline, outline)
 }
 
@@ -7794,9 +7808,7 @@ nsRuleNode::ComputeListData(void* aStartStruct,
     case eCSSUnit_Unset:
     case eCSSUnit_Inherit: {
       conditions.SetUncacheable();
-      nsString type;
-      parentList->GetListStyleType(type);
-      list->SetListStyleType(type, parentList->GetCounterStyle());
+      list->SetCounterStyle(parentList->GetCounterStyle());
       break;
     }
     case eCSSUnit_Initial:
@@ -7811,8 +7823,7 @@ nsRuleNode::ComputeListData(void* aStartStruct,
     case eCSSUnit_String: {
       nsString str;
       typeValue->GetStringValue(str);
-      list->SetListStyleType(NS_LITERAL_STRING(""),
-                             new AnonymousCounterStyle(str));
+      list->SetCounterStyle(new AnonymousCounterStyle(str));
       break;
     }
     case eCSSUnit_Enumerated: {
@@ -7842,9 +7853,7 @@ nsRuleNode::ComputeListData(void* aStartStruct,
       break;
     }
     case eCSSUnit_Symbols:
-      list->SetListStyleType(
-        NS_LITERAL_STRING(""),
-        new AnonymousCounterStyle(typeValue->GetArrayValue()));
+      list->SetCounterStyle(new AnonymousCounterStyle(typeValue->GetArrayValue()));
       break;
     case eCSSUnit_Null:
       break;

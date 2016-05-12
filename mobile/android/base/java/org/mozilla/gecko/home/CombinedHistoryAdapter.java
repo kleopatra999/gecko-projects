@@ -103,7 +103,7 @@ public class CombinedHistoryAdapter extends RecyclerView.Adapter<CombinedHistory
 
         switch (itemType) {
             case SYNCED_DEVICES:
-                ((CombinedHistoryItem.SmartFolder) viewHolder).bind(R.drawable.cloud, R.string.home_synced_devices_smartfolder, R.string.home_synced_devices_number, deviceCount);
+                ((CombinedHistoryItem.SmartFolder) viewHolder).bind(R.drawable.cloud, R.string.home_synced_devices_smartfolder, R.string.home_synced_devices_one, R.string.home_synced_devices_number, deviceCount);
                 break;
 
             case SECTION_HEADER:
@@ -132,7 +132,7 @@ public class CombinedHistoryAdapter extends RecyclerView.Adapter<CombinedHistory
     private int transformAdapterPositionForDataStructure(CombinedHistoryItem.ItemType type, int position) {
         if (type == CombinedHistoryItem.ItemType.SECTION_HEADER) {
             return position;
-        } else if (type == CombinedHistoryItem.ItemType.HISTORY){
+        } else if (type == CombinedHistoryItem.ItemType.HISTORY) {
             return position - getHeadersBefore(position) - CombinedHistoryPanel.NUM_SMART_FOLDERS;
         } else {
             return position;
@@ -224,13 +224,14 @@ public class CombinedHistoryAdapter extends RecyclerView.Adapter<CombinedHistory
 
     @Override
     public HomeContextMenuInfo makeContextMenuInfoFromPosition(View view, int position) {
-        if (position == 0) {
-            // No context menu for smartfolders.
-            return null;
+        final CombinedHistoryItem.ItemType itemType = getItemTypeForPosition(position);
+        if (itemType == CombinedHistoryItem.ItemType.HISTORY) {
+            final HomeContextMenuInfo info = new HomeContextMenuInfo(view, position, -1);
+
+            historyCursor.moveToPosition(transformAdapterPositionForDataStructure(CombinedHistoryItem.ItemType.HISTORY, position));
+            return populateHistoryInfoFromCursor(info, historyCursor);
         }
-        HomeContextMenuInfo info = new HomeContextMenuInfo(view, position, -1);
-        historyCursor.moveToPosition(transformAdapterPositionForDataStructure(CombinedHistoryItem.ItemType.HISTORY, position));
-        return populateHistoryInfoFromCursor(info, historyCursor);
+        return null;
     }
 
     protected static HomeContextMenuInfo populateHistoryInfoFromCursor(HomeContextMenuInfo info, Cursor cursor) {

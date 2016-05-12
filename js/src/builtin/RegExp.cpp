@@ -243,7 +243,7 @@ js::RegExpCreate(JSContext* cx, HandleValue patternValue, HandleValue flagsValue
                  MutableHandleValue rval)
 {
     /* Step 1. */
-    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx, nullptr));
+    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
     if (!regexp)
          return false;
 
@@ -485,31 +485,6 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
 
     // Step 8.
     if (!RegExpInitializeIgnoringLastIndex(cx, regexp, P, F))
-        return false;
-    regexp->zeroLastIndex(cx);
-
-    args.rval().setObject(*regexp);
-    return true;
-}
-
-bool
-js::regexp_construct_self_hosting(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    MOZ_ASSERT(args.length() == 1 || args.length() == 2);
-    MOZ_ASSERT(args[0].isString());
-    MOZ_ASSERT_IF(args.length() == 2, args[1].isString());
-    MOZ_ASSERT(!args.isConstructing());
-
-    /* Steps 1-6 are not required since pattern is always string. */
-
-    /* Steps 7-10. */
-    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
-    if (!regexp)
-        return false;
-
-    if (!RegExpInitializeIgnoringLastIndex(cx, regexp, args[0], args.get(1)))
         return false;
     regexp->zeroLastIndex(cx);
 
@@ -1355,6 +1330,28 @@ DoReplace(HandleLinearString matched, HandleLinearString string,
     sb.infallibleAppend(currentChar, replacement->length() - (currentChar - replacementBegin));
 }
 
+static bool
+NeedTwoBytes(HandleLinearString string, HandleLinearString replacement,
+             HandleLinearString matched, Handle<GCVector<Value>> captures)
+{
+    if (string->hasTwoByteChars())
+        return true;
+    if (replacement->hasTwoByteChars())
+        return true;
+    if (matched->hasTwoByteChars())
+        return true;
+
+    for (size_t i = 0, len = captures.length(); i < len; i++) {
+        Value capture = captures[i];
+        if (capture.isUndefined())
+            continue;
+        if (capture.toString()->hasTwoByteChars())
+            return true;
+    }
+
+    return false;
+}
+
 /* ES 2016 draft Mar 25, 2016 21.1.3.14.1. */
 bool
 js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinearString string,
@@ -1421,7 +1418,7 @@ js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinea
     }
 
     StringBuffer result(cx);
-    if (string->hasTwoByteChars() || replacement->hasTwoByteChars()) {
+    if (NeedTwoBytes(string, replacement, matched, captures)) {
         if (!result.ensureTwoByteChars())
             return false;
     }
@@ -1453,6 +1450,9 @@ js::GetFirstDollarIndex(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args.length() == 1);
     RootedString str(cx, args[0].toString());
 
+    // Should be handled in different path.
+    MOZ_ASSERT(str->length() != 0);
+
     int32_t index = -1;
     if (!GetFirstDollarIndexRaw(cx, str, &index))
         return false;
@@ -1477,8 +1477,6 @@ int32_t
 js::GetFirstDollarIndexRawFlat(JSLinearString* text)
 {
     uint32_t len = text->length();
-    // Should be handled in different path.
-    MOZ_ASSERT(len != 0);
 
     JS::AutoCheckCannotGC nogc;
     if (text->hasLatin1Chars())
@@ -1609,12 +1607,12 @@ js::RegExpInstanceOptimizableRaw(JSContext* cx, JSObject* rx, JSObject* proto, u
         return true;
     }
 
-    if (rx->hasLazyPrototype()) {
+    if (!rx->hasStaticPrototype()) {
         *result = false;
         return true;
     }
 
-    if (rx->getTaggedProto().toObjectOrNull() != proto) {
+    if (rx->staticPrototype() != proto) {
         *result = false;
         return true;
     }

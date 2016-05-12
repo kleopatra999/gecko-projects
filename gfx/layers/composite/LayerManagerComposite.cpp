@@ -68,6 +68,7 @@
 #endif
 #include "GeckoProfiler.h"
 #include "TextRenderer.h"               // for TextRenderer
+#include "mozilla/layers/CompositorBridgeParent.h"
 
 class gfxContext;
 
@@ -392,6 +393,9 @@ LayerManagerComposite::EndTransaction(const TimeStamp& aTimeStamp,
   if (mRoot && !(aFlags & END_NO_IMMEDIATE_REDRAW)) {
     MOZ_ASSERT(!aTimeStamp.IsNull());
     UpdateAndRender();
+
+    mPreviousHeldTextureHosts.Clear();
+    mPreviousHeldTextureHosts.SwapElements(mCurrentHeldTextureHosts);
   } else {
     // Modified the layer tree.
     mGeometryChanged = true;
@@ -944,7 +948,7 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion, const nsIntRegi
     mCompositor->EndFrame();
 
     // Call after EndFrame()
-    mCompositor->SetDispAcquireFence(mRoot, mCompositor->GetWidget()->RealWidget());
+    mCompositor->SetDispAcquireFence(mRoot);
   }
 
   if (composer2D) {
@@ -1065,7 +1069,7 @@ LayerManagerComposite::RenderToPresentationSurface()
 
 #elif defined(MOZ_WIDGET_GONK)
   CompositorOGL* compositor = mCompositor->AsCompositorOGL();
-  nsScreenGonk* screen = static_cast<nsWindow*>(mCompositor->GetWidget())->GetScreen();
+  nsScreenGonk* screen = static_cast<nsWindow*>(mCompositor->GetWidget()->RealWidget())->GetScreen();
   if (!screen->IsPrimaryScreen()) {
     // Only primary screen support mirroring
     return;
@@ -1164,8 +1168,7 @@ LayerManagerComposite::RenderToPresentationSurface()
 
   mCompositor->EndFrame();
 #ifdef MOZ_WIDGET_GONK
-  mCompositor->SetDispAcquireFence(mRoot,
-                                   mirrorScreenWidget); // Call after EndFrame()
+  mCompositor->SetDispAcquireFence(mRoot); // Call after EndFrame()
 
   RefPtr<Composer2D> composer2D;
   composer2D = mCompositor->GetWidget()->GetComposer2D();
@@ -1547,7 +1550,10 @@ LayerComposite::SetLayerManager(LayerManagerComposite* aManager)
 bool
 LayerManagerComposite::AsyncPanZoomEnabled() const
 {
-  return mCompositor->GetWidget()->RealWidget()->AsyncPanZoomEnabled();
+  if (CompositorBridgeParent* bridge = mCompositor->GetCompositorBridgeParent()) {
+    return bridge->AsyncPanZoomEnabled();
+  }
+  return false;
 }
 
 nsIntRegion
@@ -1565,7 +1571,7 @@ LayerComposite::GetFullyRenderedRegion() {
   }
 }
 
-const Matrix4x4
+Matrix4x4
 LayerComposite::GetShadowTransform() {
   Matrix4x4 transform = mShadowTransform;
   Layer* layer = GetLayer();

@@ -305,12 +305,14 @@ CompositorVsyncScheduler::Observer::Destroy()
   mOwner = nullptr;
 }
 
-CompositorVsyncScheduler::CompositorVsyncScheduler(CompositorBridgeParent* aCompositorBridgeParent, nsIWidget* aWidget)
+CompositorVsyncScheduler::CompositorVsyncScheduler(CompositorBridgeParent* aCompositorBridgeParent,
+                                                   widget::CompositorWidgetProxy* aWidgetProxy)
   : mCompositorBridgeParent(aCompositorBridgeParent)
   , mLastCompose(TimeStamp::Now())
   , mIsObservingVsync(false)
   , mNeedsComposite(0)
   , mVsyncNotificationsSkipped(0)
+  , mCompositorVsyncDispatcher(aWidgetProxy->GetCompositorVsyncDispatcher())
   , mCurrentCompositeTaskMonitor("CurrentCompositeTaskMonitor")
   , mCurrentCompositeTask(nullptr)
   , mSetNeedsCompositeMonitor("SetNeedsCompositeMonitor")
@@ -324,9 +326,7 @@ CompositorVsyncScheduler::CompositorVsyncScheduler(CompositorBridgeParent* aComp
 #endif
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aWidget != nullptr);
   mVsyncObserver = new Observer(this);
-  mCompositorVsyncDispatcher = aWidget->GetCompositorVsyncDispatcher();
 #ifdef MOZ_WIDGET_GONK
   GeckoTouchDispatcher::GetInstance()->SetCompositorVsyncScheduler(this);
 
@@ -348,7 +348,6 @@ CompositorVsyncScheduler::~CompositorVsyncScheduler()
   MOZ_ASSERT(!mVsyncObserver);
   // The CompositorVsyncDispatcher is cleaned up before this in the nsBaseWidget, which stops vsync listeners
   mCompositorBridgeParent = nullptr;
-  mCompositorVsyncDispatcher = nullptr;
 }
 
 #ifdef MOZ_WIDGET_GONK
@@ -362,7 +361,7 @@ CompositorVsyncScheduler::SetDisplay(bool aDisplayEnable)
     MOZ_ASSERT(NS_IsMainThread());
     MonitorAutoLock lock(mSetDisplayMonitor);
     RefPtr<CancelableRunnable> task =
-      NewRunnableMethod(this, &CompositorVsyncScheduler::SetDisplay, aDisplayEnable);
+      NewCancelableRunnableMethod<bool>(this, &CompositorVsyncScheduler::SetDisplay, aDisplayEnable);
     mSetDisplayTask = task;
     ScheduleTask(task.forget(), 0);
     return;
@@ -427,8 +426,8 @@ CompositorVsyncScheduler::PostCompositeTask(TimeStamp aCompositeTimestamp)
   MonitorAutoLock lock(mCurrentCompositeTaskMonitor);
   if (mCurrentCompositeTask == nullptr) {
     RefPtr<CancelableRunnable> task =
-      NewRunnableMethod(this, &CompositorVsyncScheduler::Composite,
-                        aCompositeTimestamp);
+      NewCancelableRunnableMethod<TimeStamp>(this, &CompositorVsyncScheduler::Composite,
+                                             aCompositeTimestamp);
     mCurrentCompositeTask = task;
     ScheduleTask(task.forget(), 0);
   }
@@ -481,7 +480,7 @@ CompositorVsyncScheduler::SetNeedsComposite()
   if (!CompositorBridgeParent::IsInCompositorThread()) {
     MonitorAutoLock lock(mSetNeedsCompositeMonitor);
     RefPtr<CancelableRunnable> task =
-      NewRunnableMethod(this, &CompositorVsyncScheduler::SetNeedsComposite);
+      NewCancelableRunnableMethod(this, &CompositorVsyncScheduler::SetNeedsComposite);
     mSetNeedsCompositeTask = task;
     ScheduleTask(task.forget(), 0);
     return;
@@ -733,7 +732,7 @@ CompositorBridgeParent::CompositorBridgeParent(widget::CompositorWidgetProxy* aW
     mApzcTreeManager = new APZCTreeManager();
   }
 
-  mCompositorScheduler = new CompositorVsyncScheduler(this, aWidget->RealWidget());
+  mCompositorScheduler = new CompositorVsyncScheduler(this, aWidget);
   LayerScope::SetPixelScale(aScale.scale);
 
   // mSelfRef is cleared in DeferredDestroy.
@@ -981,7 +980,7 @@ CompositorBridgeParent::ActorDestroy(ActorDestroyReason why)
   // We must keep the compositor parent alive untill the code handling message
   // reception is finished on this thread.
   mSelfRef = this;
-  MessageLoop::current()->PostTask(NewRunnableMethod(this,&CompositorBridgeParent::DeferredDestroy));
+  MessageLoop::current()->PostTask(NewRunnableMethod(this, &CompositorBridgeParent::DeferredDestroy));
 }
 
 
@@ -1113,7 +1112,10 @@ CompositorBridgeParent::ScheduleResumeOnCompositorThread(int width, int height)
   MonitorAutoLock lock(mResumeCompositionMonitor);
 
   MOZ_ASSERT(CompositorLoop());
-  CompositorLoop()->PostTask(NewRunnableMethod(this, &CompositorBridgeParent::ResumeCompositionAndResize, width, height));
+  CompositorLoop()->PostTask(NewRunnableMethod
+                             <int, int>(this,
+                                        &CompositorBridgeParent::ResumeCompositionAndResize,
+                                        width, height));
 
   // Wait until the resume has actually been processed by the compositor thread
   lock.Wait();
@@ -1239,8 +1241,7 @@ CompositorBridgeParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRec
   // to local pages, hide every plugin associated with the window.
   if (!hasRemoteContent && BrowserTabsRemoteAutostart() &&
       mCachedPluginData.Length()) {
-    nsIWidget* widget = GetWidgetProxy()->RealWidget();
-    Unused << SendHideAllPlugins(reinterpret_cast<uintptr_t>(widget));
+    Unused << SendHideAllPlugins(GetWidgetProxy()->GetWidgetKey());
     mCachedPluginData.Clear();
   }
 #endif
@@ -1365,7 +1366,8 @@ CompositorBridgeParent::ScheduleRotationOnCompositorThread(const TargetConfig& a
     if (mForceCompositionTask != nullptr) {
       mForceCompositionTask->Cancel();
     }
-    RefPtr<CancelableRunnable> task = NewRunnableMethod(this, &CompositorBridgeParent::ForceComposition);
+    RefPtr<CancelableRunnable> task =
+      NewCancelableRunnableMethod(this, &CompositorBridgeParent::ForceComposition);
     mForceCompositionTask = task;
     ScheduleTask(task.forget(), gfxPrefs::OrientationSyncMillis());
   }
@@ -2106,11 +2108,12 @@ CompositorBridgeParent::ResetCompositor(const nsTArray<LayersBackend>& aBackendH
   {
     MonitorAutoLock lock(mResetCompositorMonitor);
 
-    CompositorLoop()->PostTask(
-      NewRunnableMethod(this,
-                        &CompositorBridgeParent::ResetCompositorTask,
-                        aBackendHints,
-                        &newIdentifier));
+    CompositorLoop()->PostTask(NewRunnableMethod
+                               <StoreCopyPassByConstLRef<nsTArray<LayersBackend>>,
+                                Maybe<TextureFactoryIdentifier>*>(this,
+                                                                  &CompositorBridgeParent::ResetCompositorTask,
+                                                                  aBackendHints,
+                                                                  &newIdentifier));
 
     mResetCompositorMonitor.Wait();
   }
@@ -2278,8 +2281,7 @@ CrossProcessCompositorBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
 
   // We must keep this object alive untill the code handling message
   // reception is finished on this thread.
-  MessageLoop::current()->PostTask(
-      NewRunnableMethod(this, &CrossProcessCompositorBridgeParent::DeferredDestroy));
+  MessageLoop::current()->PostTask(NewRunnableMethod(this, &CrossProcessCompositorBridgeParent::DeferredDestroy));
 }
 
 PLayerTransactionParent*
@@ -2469,8 +2471,7 @@ CompositorBridgeParent::UpdatePluginWindowState(uint64_t aId)
       return false;
     }
 
-    nsIWidget* widget = GetWidgetProxy()->RealWidget();
-    uintptr_t parentWidget = reinterpret_cast<uintptr_t>(widget);
+    uintptr_t parentWidget = GetWidgetProxy()->GetWidgetKey();
 
     // We will pass through here in cases where the previous shadow layer
     // tree contained visible plugins and the new tree does not. All we need
@@ -2555,8 +2556,7 @@ CompositorBridgeParent::HideAllPluginWindows()
     return;
   }
 
-  nsIWidget* widget = GetWidgetProxy()->RealWidget();
-  uintptr_t parentWidget = reinterpret_cast<uintptr_t>(widget);
+  uintptr_t parentWidget = GetWidgetProxy()->GetWidgetKey();
 
   mDeferPluginWindows = true;
   mPluginWindowsHidden = true;

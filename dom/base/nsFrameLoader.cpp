@@ -141,7 +141,7 @@ NS_INTERFACE_MAP_END
 nsFrameLoader::nsFrameLoader(Element* aOwner, bool aNetworkCreated)
   : mOwnerContent(aOwner)
   , mAppIdSentToPermissionManager(nsIScriptSecurityManager::NO_APP_ID)
-  , mDetachedSubdocViews(nullptr)
+  , mDetachedSubdocFrame(nullptr)
   , mRemoteBrowser(nullptr)
   , mChildID(0)
   , mEventMode(EVENT_MODE_NORMAL_DISPATCH)
@@ -1020,10 +1020,28 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
   ourDoc->FlushPendingNotifications(Flush_Layout);
   otherDoc->FlushPendingNotifications(Flush_Layout);
 
+  // Initialize browser API if needed now that owner content has changed.
+  InitializeBrowserAPI();
+  aOther->InitializeBrowserAPI();
+
   mInSwap = aOther->mInSwap = false;
 
-  Unused << mRemoteBrowser->SendSwappedWithOtherRemoteLoader();
-  Unused << aOther->mRemoteBrowser->SendSwappedWithOtherRemoteLoader();
+  // Send an updated tab context since owner content type may have changed.
+  MutableTabContext ourContext;
+  rv = GetNewTabContext(&ourContext);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  MutableTabContext otherContext;
+  rv = aOther->GetNewTabContext(&otherContext);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  Unused << mRemoteBrowser->SendSwappedWithOtherRemoteLoader(
+    ourContext.AsIPCTabContext());
+  Unused << aOther->mRemoteBrowser->SendSwappedWithOtherRemoteLoader(
+    otherContext.AsIPCTabContext());
   return NS_OK;
 }
 
@@ -1428,6 +1446,10 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
 
   ourParentDocument->FlushPendingNotifications(Flush_Layout);
   otherParentDocument->FlushPendingNotifications(Flush_Layout);
+
+  // Initialize browser API if needed now that owner content has changed
+  InitializeBrowserAPI();
+  aOther->InitializeBrowserAPI();
 
   return NS_OK;
 }
@@ -2866,18 +2888,18 @@ nsFrameLoader::SwapRemoteBrowser(nsITabParent* aTabParent)
 }
 
 void
-nsFrameLoader::SetDetachedSubdocView(nsView* aDetachedViews,
-                                     nsIDocument* aContainerDoc)
+nsFrameLoader::SetDetachedSubdocFrame(nsIFrame* aDetachedFrame,
+                                      nsIDocument* aContainerDoc)
 {
-  mDetachedSubdocViews = aDetachedViews;
+  mDetachedSubdocFrame = aDetachedFrame;
   mContainerDocWhileDetached = aContainerDoc;
 }
 
-nsView*
-nsFrameLoader::GetDetachedSubdocView(nsIDocument** aContainerDoc) const
+nsIFrame*
+nsFrameLoader::GetDetachedSubdocFrame(nsIDocument** aContainerDoc) const
 {
   NS_IF_ADDREF(*aContainerDoc = mContainerDocWhileDetached);
-  return mDetachedSubdocViews;
+  return mDetachedSubdocFrame.GetFrame();
 }
 
 void

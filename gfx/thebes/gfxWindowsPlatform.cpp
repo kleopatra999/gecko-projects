@@ -500,6 +500,10 @@ gfxWindowsPlatform::UpdateBackendPrefs()
   uint32_t contentMask = BackendTypeBit(SOFTWARE_BACKEND);
   BackendType defaultBackend = SOFTWARE_BACKEND;
   if (gfxConfig::IsEnabled(Feature::DIRECT2D)) {
+    MOZ_RELEASE_ASSERT(Factory::GetDirect3D11Device());
+    MOZ_RELEASE_ASSERT(Factory::GetD2D1Device());
+    MOZ_RELEASE_ASSERT(Factory::SupportsD2D1());
+
     contentMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
     canvasMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
     defaultBackend = BackendType::DIRECT2D1_1;
@@ -1572,12 +1576,10 @@ bool DoesD3D11DeviceWork()
                                 &displayLinkModuleVersion)) {
           gfxCriticalError() << "DisplayLink: could not parse version "
                              << checkModules[i];
-          gANGLESupportsD3D11 = false;
           return false;
         }
         if (displayLinkModuleVersion <= V(8,6,1,36484)) {
           gfxCriticalError(CriticalLog::DefaultOptions(false)) << "DisplayLink: too old version " << displayLinkModuleVersionString.get();
-          gANGLESupportsD3D11 = false;
           return false;
         }
       }
@@ -1734,7 +1736,7 @@ static bool TryCreateTexture2D(ID3D11Device *device,
     return !FAILED(device->CreateTexture2D(desc, data, getter_AddRefs(texture)));
   } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     // For now we want to aggregrate all the crash signature to a known crash.
-    MOZ_CRASH("Crash creating texture. See bug 1221348.");
+    gfxDevCrash(LogReason::TextureCreation) << "Crash creating texture. See bug 1221348.";
     return false;
   }
 }
@@ -1912,7 +1914,7 @@ bool DoesD3D11AlphaTextureSharingWork(ID3D11Device *device)
 }
 
 static inline bool
-IsGfxInfoStatusOkay(int32_t aFeature)
+IsGfxInfoStatusOkay(int32_t aFeature, nsCString* aOutMessage)
 {
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
   if (!gfxInfo) {
@@ -1920,12 +1922,16 @@ IsGfxInfoStatusOkay(int32_t aFeature)
   }
 
   int32_t status;
-  nsCString discardFailureId;
-  if (FAILED(gfxInfo->GetFeatureStatus(aFeature, discardFailureId, &status))) {
-    return true;
+  nsCString failureId;
+  if (SUCCEEDED(gfxInfo->GetFeatureStatus(aFeature, failureId, &status)) &&
+      status != nsIGfxInfo::FEATURE_STATUS_OK)
+  {
+    aOutMessage->AssignLiteral("#BLOCKLIST_");
+    aOutMessage->AppendASCII(failureId.get());
+    return false;
   }
 
-  return status == nsIGfxInfo::FEATURE_STATUS_OK;
+  return true;
 }
 
 static inline bool
@@ -1946,8 +1952,39 @@ gfxWindowsPlatform::InitializeConfig()
     return;
   }
 
+  InitializeD3D9Config();
   InitializeD3D11Config();
   InitializeD2DConfig();
+}
+
+void
+gfxWindowsPlatform::InitializeD3D9Config()
+{
+  MOZ_ASSERT(XRE_IsParentProcess());
+
+  FeatureState& d3d9 = gfxConfig::GetFeature(Feature::D3D9_COMPOSITING);
+
+  if (!IsVistaOrLater()) {
+    d3d9.EnableByDefault();
+  } else {
+    d3d9.SetDefaultFromPref(
+      gfxPrefs::GetLayersAllowD3D9FallbackPrefName(),
+      true,
+      gfxPrefs::GetLayersAllowD3D9FallbackPrefDefault());
+
+    if (!d3d9.IsEnabled() && gfxPrefs::LayersPreferD3D9()) {
+      d3d9.UserEnable("Direct3D9 enabled via layers.prefer-d3d9");
+    }
+  }
+
+  nsCString message;
+  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS, &message)) {
+    d3d9.Disable(FeatureStatus::Blacklisted, message.get());
+  }
+
+  if (gfxConfig::IsForcedOnByUser(Feature::HW_COMPOSITING)) {
+    d3d9.UserForceEnable("Hardware compositing is force-enabled");
+  }
 }
 
 void
@@ -1957,6 +1994,11 @@ gfxWindowsPlatform::InitializeD3D11Config()
 
   FeatureState& d3d11 = gfxConfig::GetFeature(Feature::D3D11_COMPOSITING);
 
+  if (!gfxConfig::IsEnabled(Feature::HW_COMPOSITING)) {
+    d3d11.DisableByDefault(FeatureStatus::Unavailable, "Hardware compositing is disabled");
+    return;
+  }
+
   d3d11.EnableByDefault();
 
   // If the user prefers D3D9, act as though they disabled D3D11.
@@ -1965,15 +2007,14 @@ gfxWindowsPlatform::InitializeD3D11Config()
     return;
   }
 
-  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS)) {
+  nsCString message;
+  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, &message)) {
     if (IsWARPStable() && !gfxPrefs::LayersD3D11DisableWARP()) {
       // We do not expect hardware D3D11 to work, so we'll try WARP.
-      gfxConfig::EnableFallback(
-        Fallback::USE_D3D11_WARP_COMPOSITOR,
-        "Hardware-accelerated Direct3D11 compositing is blocklisted");
+      gfxConfig::EnableFallback(Fallback::USE_D3D11_WARP_COMPOSITOR, message.get());
     } else {
       // There is little to no chance of D3D11 working, so just disable it.
-      d3d11.Disable(FeatureStatus::Blacklisted, "Hardware-accelerated Direct3D11 compositing is blocklisted");
+      d3d11.Disable(FeatureStatus::Blacklisted, message.get());
     }
   }
 
@@ -2074,8 +2115,16 @@ gfxWindowsPlatform::AttemptD3D11DeviceCreation(FeatureState& d3d11)
   // GetDeviceRemovedReason to return weird values.
   mCompositorD3D11TextureSharingWorks = ::DoesD3D11TextureSharingWork(mD3D11Device);
 
-  if (!mCompositorD3D11TextureSharingWorks || DoesRenderTargetViewNeedsRecreating(mD3D11Device)) {
-    gANGLESupportsD3D11 = false;
+  if (!mCompositorD3D11TextureSharingWorks) {
+    gfxConfig::SetFailed(Feature::D3D11_ANGLE,
+                         FeatureStatus::Broken,
+                         "Texture sharing doesn't work");
+  }
+
+  if (DoesRenderTargetViewNeedsRecreating(mD3D11Device)) {
+    gfxConfig::SetFailed(Feature::D3D11_ANGLE,
+                         FeatureStatus::Broken,
+                         "RenderTargetViews need recreating");
   }
 
   mD3D11Device->SetExceptionMode(0);
@@ -2297,10 +2346,7 @@ gfxWindowsPlatform::InitializeDevices()
   UpdateDeviceInitData();
 
   // If acceleration is disabled, we refuse to initialize anything.
-  FeatureStatus compositing = gfxConfig::GetValue(Feature::HW_COMPOSITING);
-  if (IsFeatureStatusFailure(compositing)) {
-    gfxConfig::DisableByDefault(Feature::D3D11_COMPOSITING, compositing, "Hardware compositing is disabled");
-    gfxConfig::DisableByDefault(Feature::DIRECT2D, compositing, "Hardware compositing is disabled");
+  if (!gfxConfig::IsEnabled(Feature::HW_COMPOSITING)) {
     return;
   }
 
@@ -2324,6 +2370,12 @@ gfxWindowsPlatform::InitializeDevices()
   // First, initialize D3D11. If this succeeds we attempt to use Direct2D.
   InitializeD3D11();
   InitializeD2D();
+
+  if (!gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
+    gfxConfig::DisableByDefault(Feature::D3D11_ANGLE, FeatureStatus::Disabled, "D3D11 compositing is disabled");
+  } else {
+    gfxConfig::EnableByDefault(Feature::D3D11_ANGLE);
+  }
 
   if (!gfxConfig::IsEnabled(Feature::DIRECT2D)) {
     if (XRE_IsContentProcess() && GetParentDevicePrefs().useD2D1()) {
@@ -2462,22 +2514,6 @@ gfxWindowsPlatform::ResetD3D11Devices()
   Factory::SetDirect3D11Device(nullptr);
 }
 
-static bool
-IsD2DBlacklisted()
-{
-  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-  if (gfxInfo) {
-    int32_t status;
-    nsCString discardFailureId;
-    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT2D, discardFailureId, &status))) {
-      if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 void
 gfxWindowsPlatform::InitializeD2DConfig()
 {
@@ -2493,9 +2529,10 @@ gfxWindowsPlatform::InitializeD2DConfig()
       false,
       gfxPrefs::GetDirect2DDisabledPrefDefault());
   }
-  
-  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT2D)) {
-    d2d1.Disable(FeatureStatus::Blacklisted, "Direct2D is blacklisted on this hardware");
+
+  nsCString message;
+  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT2D, &message)) {
+    d2d1.Disable(FeatureStatus::Blacklisted, message.get());
   }
 
   if (!d2d1.IsEnabled() && gfxPrefs::Direct2DForceEnabled()) {
@@ -2893,23 +2930,18 @@ gfxWindowsPlatform::GetAcceleratedCompositorBackends(nsTArray<LayersBackend>& aB
     aBackends.AppendElement(LayersBackend::LAYERS_OPENGL);
   }
 
-  bool allowTryingD3D9 = false;
-  if (!gfxPrefs::LayersPreferD3D9()) {
-    if (mD3D11Device) {
-      aBackends.AppendElement(LayersBackend::LAYERS_D3D11);
-    } else {
-      allowTryingD3D9 = gfxPrefs::LayersAllowD3D9Fallback();
-      NS_WARNING("Direct3D 11-accelerated layers are not supported on this system.");
-    }
+  if (gfxConfig::IsEnabled(Feature::D3D9_COMPOSITING) && gfxPrefs::LayersPreferD3D9()) {
+    aBackends.AppendElement(LayersBackend::LAYERS_D3D9);
   }
 
-  if (gfxPrefs::LayersPreferD3D9() || !IsVistaOrLater() || allowTryingD3D9) {
-    // We don't want D3D9 except on Windows XP, unless we failed to get D3D11
-    if (gfxPlatform::CanUseDirect3D9()) {
-      aBackends.AppendElement(LayersBackend::LAYERS_D3D9);
-    } else {
-      NS_WARNING("Direct3D 9-accelerated layers are not supported on this system.");
-    }
+  if (mD3D11Device) {
+    aBackends.AppendElement(LayersBackend::LAYERS_D3D11);
+  } else {
+    NS_WARNING("Direct3D 11-accelerated layers are not supported on this system.");
+  }
+
+  if (gfxConfig::IsEnabled(Feature::D3D9_COMPOSITING) && !gfxPrefs::LayersPreferD3D9()) {
+    aBackends.AppendElement(LayersBackend::LAYERS_D3D9);
   }
 }
 

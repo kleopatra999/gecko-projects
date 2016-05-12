@@ -50,10 +50,13 @@ TestCrashyOperation(void (*aCrashyOperation)())
 #ifdef MOZ_CRASHREPORTER
     nsCOMPtr<nsICrashReporter> crashreporter =
       do_GetService("@mozilla.org/toolkit/crash-reporter;1");
-    crashreporter->SetEnabled(false);
+    if (crashreporter) {
+      crashreporter->SetEnabled(false);
+    }
 #endif
 
     // Child: perform the crashy operation.
+    fprintf(stderr, "TestCrashyOperation: The following crash is expected. Do not panic.\n");
     aCrashyOperation();
     fprintf(stderr, "TestCrashyOperation: didn't crash?!\n");
     ASSERT_TRUE(false);   // shouldn't reach here

@@ -17,6 +17,7 @@
 #include "gfxPrefs.h"
 #include "gfxCrashReporterUtils.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/widget/WinCompositorWidgetProxy.h"
 
 namespace mozilla {
 namespace layers {
@@ -41,16 +42,12 @@ CompositorD3D9::Initialize()
 {
   ScopedGfxFeatureReporter reporter("D3D9 Layers");
 
-  MOZ_ASSERT(gfxPlatform::CanUseDirect3D9());
-
   mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
   if (!mDeviceManager) {
     return false;
   }
 
-  mSwapChain = mDeviceManager->
-    CreateSwapChain((HWND)mWidget->RealWidget()->GetNativeData(NS_NATIVE_WINDOW));
-
+  mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindowsProxy()->GetHwnd());
   if (!mSwapChain) {
     return false;
   }
@@ -593,8 +590,7 @@ CompositorD3D9::EnsureSwapChain()
   MOZ_ASSERT(mDeviceManager, "Don't call EnsureSwapChain without a device manager");
 
   if (!mSwapChain) {
-    mSwapChain = mDeviceManager->
-      CreateSwapChain((HWND)mWidget->RealWidget()->GetNativeData(NS_NATIVE_WINDOW));
+    mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindowsProxy()->GetHwnd());
     // We could not create a swap chain, return false
     if (!mSwapChain) {
       // Check the state of the device too

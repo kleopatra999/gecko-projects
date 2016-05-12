@@ -265,17 +265,11 @@ SessionStore.prototype = {
         break;
       }
       case "DOMTitleChanged": {
-        let browser = aEvent.currentTarget;
-
-        // Handle only top-level DOMTitleChanged event
-        if (browser.contentDocument !== aEvent.originalTarget) {
-          return;
-        }
-
         // Use DOMTitleChanged to detect page loads over alternatives.
         // onLocationChange happens too early, so we don't have the page title
         // yet; pageshow happens too late, so we could lose session data if the
         // browser were killed.
+        let browser = aEvent.currentTarget;
         log("DOMTitleChanged for tab " + window.BrowserApp.getTabForBrowser(browser).id);
         this.onTabLoad(window, browser);
         break;
@@ -662,8 +656,12 @@ SessionStore.prototype = {
     }
 
     // Write only non-private data to disk
-    log("_saveState() writing normal data, " +
-         normalData.windows[0].tabs.length + " tabs in window[0]");
+    if (normalData.windows[0] && normalData.windows[0].tabs) {
+      log("_saveState() writing normal data, " +
+           normalData.windows[0].tabs.length + " tabs in window[0]");
+    } else {
+      log("_saveState() writing empty normal data");
+    }
     this._writeFile(this._sessionFile, normalData, aAsync);
 
     // If we have private data, send it to Java; otherwise, send null to

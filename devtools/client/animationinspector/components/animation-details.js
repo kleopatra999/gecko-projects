@@ -8,6 +8,7 @@
 
 const {Cu} = require("chrome");
 const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
+const EventEmitter = require("devtools/shared/event-emitter");
 const {createNode, TimeScale} = require("devtools/client/animationinspector/utils");
 const {Keyframes} = require("devtools/client/animationinspector/components/keyframes");
 
@@ -55,6 +56,29 @@ AnimationDetails.prototype = {
     while (this.containerEl.firstChild) {
       this.containerEl.firstChild.remove();
     }
+  },
+
+  getPerfDataForProperty: function (animation, propertyName) {
+    let warning = "";
+    let className = "";
+    if (animation.state.propertyState) {
+      let isRunningOnCompositor;
+      for (let propState of animation.state.propertyState) {
+        if (propState.property == propertyName) {
+          isRunningOnCompositor = propState.runningOnCompositor;
+          if (typeof propState.warning != "undefined") {
+            warning = propState.warning;
+          }
+          break;
+        }
+      }
+      if (isRunningOnCompositor && warning == "") {
+        className = "oncompositor";
+      } else if (!isRunningOnCompositor && warning != "") {
+        className = "warning";
+      }
+    }
+    return {className, warning};
   },
 
   /**
@@ -137,16 +161,19 @@ AnimationDetails.prototype = {
         parent: this.containerEl,
         attributes: {"class": "property"}
       });
-
+      let {warning, className} =
+        this.getPerfDataForProperty(animation, propertyName);
       createNode({
         // text-overflow doesn't work in flex items, so we need a second level
         // of container to actually have an ellipsis on the name.
         // See bug 972664.
         parent: createNode({
           parent: line,
-          attributes: {"class": "name"},
+          attributes: {"class": "name"}
         }),
-        textContent: getCssPropertyName(propertyName)
+        textContent: getCssPropertyName(propertyName),
+        attributes: {"title": warning,
+                     "class": className}
       });
 
       // Add the keyframes diagram for this property.

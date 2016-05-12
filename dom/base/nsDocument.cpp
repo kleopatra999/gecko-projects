@@ -2813,11 +2813,19 @@ nsDocument::InitCSP(nsIChannel* aChannel)
   // Check if this is part of the Loop/Hello service
   bool applyLoopCSP = IsLoopDocument(aChannel);
 
+  // Check if this is a signed content to apply default CSP.
+  bool applySignedContentCSP = false;
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  if (loadInfo && loadInfo->GetVerifySignedContent()) {
+    applySignedContentCSP = true;
+  }
+
   // If there's no CSP to apply, go ahead and return early
   if (!applyAppDefaultCSP &&
       !applyAppManifestCSP &&
       !applyAddonCSP &&
       !applyLoopCSP &&
+      !applySignedContentCSP &&
       cspHeaderValue.IsEmpty() &&
       cspROHeaderValue.IsEmpty()) {
     if (MOZ_LOG_TEST(gCspPRLog, LogLevel::Debug)) {
@@ -2888,6 +2896,15 @@ nsDocument::InitCSP(nsIChannel* aChannel)
     if (NS_SUCCEEDED(rv)) {
       csp->AppendPolicy(addonCSP, false, false);
     }
+  }
+
+  // ----- if the doc is a signed content, apply the default CSP.
+  // Note that when the content signing becomes a standard, we might have
+  // to restrict this enforcement to "remote content" only.
+  if (applySignedContentCSP) {
+    nsAdoptingString signedContentCSP =
+      Preferences::GetString("security.signed_content.CSP.default");
+    csp->AppendPolicy(signedContentCSP, false, false);
   }
 
   // ----- if the doc is part of Loop, apply the loop CSP
@@ -4352,7 +4369,7 @@ nsDocument::SetStyleSheetApplicableState(StyleSheetHandle aSheet,
   }
 
   if (!mSSApplicableStateNotificationPending) {
-    nsCOMPtr<nsIRunnable> notification = NS_NewRunnableMethod(this,
+    nsCOMPtr<nsIRunnable> notification = NewRunnableMethod(this,
       &nsDocument::NotifyStyleSheetApplicableStateChanged);
     mSSApplicableStateNotificationPending =
       NS_SUCCEEDED(NS_DispatchToCurrentThread(notification));
@@ -4961,7 +4978,7 @@ nsDocument::MaybeEndOutermostXBLUpdate()
       BindingManager()->EndOutermostUpdate();
     } else if (!mInDestructor) {
       nsContentUtils::AddScriptRunner(
-        NS_NewRunnableMethod(this, &nsDocument::MaybeEndOutermostXBLUpdate));
+        NewRunnableMethod(this, &nsDocument::MaybeEndOutermostXBLUpdate));
     }
   }
 }
@@ -5146,12 +5163,14 @@ nsDocument::DispatchContentLoadedEvents()
 
   // Dispatch observer notification to notify observers document is interactive.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  nsIPrincipal *principal = GetPrincipal();
-  os->NotifyObservers(static_cast<nsIDocument*>(this),
-                      nsContentUtils::IsSystemPrincipal(principal) ?
-                        "chrome-document-interactive" :
-                        "content-document-interactive",
-                      nullptr);
+  if (os) {
+    nsIPrincipal *principal = GetPrincipal();
+    os->NotifyObservers(static_cast<nsIDocument*>(this),
+                        nsContentUtils::IsSystemPrincipal(principal) ?
+                          "chrome-document-interactive" :
+                          "content-document-interactive",
+                        nullptr);
+  }
 
   // Fire a DOM event notifying listeners that this document has been
   // loaded (excluding images and other loads initiated by this
@@ -5279,7 +5298,7 @@ nsDocument::UnblockDOMContentLoaded()
   MOZ_ASSERT(mReadyState == READYSTATE_INTERACTIVE);
   if (!mSynchronousDOMContentLoaded) {
     nsCOMPtr<nsIRunnable> ev =
-      NS_NewRunnableMethod(this, &nsDocument::DispatchContentLoadedEvents);
+      NewRunnableMethod(this, &nsDocument::DispatchContentLoadedEvents);
     NS_DispatchToCurrentThread(ev);
   } else {
     DispatchContentLoadedEvents();
@@ -7262,7 +7281,7 @@ nsDocument::NotifyPossibleTitleChange(bool aBoundTitleElement)
     return;
 
   RefPtr<nsRunnableMethod<nsDocument, void, false> > event =
-    NS_NewNonOwningRunnableMethod(this,
+    NewNonOwningRunnableMethod(this,
       &nsDocument::DoNotifyPossibleTitleChange);
   nsresult rv = NS_DispatchToCurrentThread(event);
   if (NS_SUCCEEDED(rv)) {
@@ -7411,7 +7430,7 @@ nsDocument::InitializeFrameLoader(nsFrameLoader* aLoader)
   mInitializableFrameLoaders.AppendElement(aLoader);
   if (!mFrameLoaderRunner) {
     mFrameLoaderRunner =
-      NS_NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
+      NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
     NS_ENSURE_TRUE(mFrameLoaderRunner, NS_ERROR_OUT_OF_MEMORY);
     nsContentUtils::AddScriptRunner(mFrameLoaderRunner);
   }
@@ -7429,7 +7448,7 @@ nsDocument::FinalizeFrameLoader(nsFrameLoader* aLoader, nsIRunnable* aFinalizer)
   mFrameLoaderFinalizers.AppendElement(aFinalizer);
   if (!mFrameLoaderRunner) {
     mFrameLoaderRunner =
-      NS_NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
+      NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
     NS_ENSURE_TRUE(mFrameLoaderRunner, NS_ERROR_OUT_OF_MEMORY);
     nsContentUtils::AddScriptRunner(mFrameLoaderRunner);
   }
@@ -7453,7 +7472,7 @@ nsDocument::MaybeInitializeFinalizeFrameLoaders()
         (mInitializableFrameLoaders.Length() ||
          mFrameLoaderFinalizers.Length())) {
       mFrameLoaderRunner =
-        NS_NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
+        NewRunnableMethod(this, &nsDocument::MaybeInitializeFinalizeFrameLoaders);
       nsContentUtils::AddScriptRunner(mFrameLoaderRunner);
     }
     return;
@@ -9063,16 +9082,8 @@ nsDocument::BlockOnload()
       // block onload only when there are no script blockers.
       ++mAsyncOnloadBlockCount;
       if (mAsyncOnloadBlockCount == 1) {
-        bool success = nsContentUtils::AddScriptRunner(
-          NS_NewRunnableMethod(this, &nsDocument::AsyncBlockOnload));
-
-        // The script runner shouldn't fail to add. But if somebody broke
-        // something and it does, we'll thrash at 100% cpu forever. The best
-        // response is just to ignore the onload blocking request. See bug 579535.
-        if (!success) {
-          NS_WARNING("Disaster! Onload blocking script runner failed to add - expect bad things!");
-          mAsyncOnloadBlockCount = 0;
-        }
+        nsContentUtils::AddScriptRunner(
+          NewRunnableMethod(this, &nsDocument::AsyncBlockOnload));
       }
       return;
     }
@@ -9281,15 +9292,17 @@ nsDocument::OnPageShow(bool aPersisted,
 
   // Dispatch observer notification to notify observers page is shown.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  nsIPrincipal *principal = GetPrincipal();
-  os->NotifyObservers(static_cast<nsIDocument*>(this),
-                      nsContentUtils::IsSystemPrincipal(principal) ?
-                        "chrome-page-shown" :
-                        "content-page-shown",
-                      nullptr);
-  if (!mObservingAppThemeChanged) {
-    os->AddObserver(this, "app-theme-changed", /* ownsWeak */ false);
-    mObservingAppThemeChanged = true;
+  if (os) {
+    nsIPrincipal *principal = GetPrincipal();
+    os->NotifyObservers(static_cast<nsIDocument*>(this),
+                        nsContentUtils::IsSystemPrincipal(principal) ?
+                          "chrome-page-shown" :
+                          "content-page-shown",
+                        nullptr);
+    if (!mObservingAppThemeChanged) {
+      os->AddObserver(this, "app-theme-changed", /* ownsWeak */ false);
+      mObservingAppThemeChanged = true;
+    }
   }
 
   DispatchPageTransition(target, NS_LITERAL_STRING("pageshow"), aPersisted);
@@ -11680,6 +11693,14 @@ nsresult nsDocument::RemoteFrameFullscreenReverted()
   return NS_OK;
 }
 
+/* static */ bool
+nsDocument::IsUnprefixedFullscreenEnabled(JSContext* aCx, JSObject* aObject)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return nsContentUtils::IsCallerChrome() ||
+         nsContentUtils::IsUnprefixedFullscreenApiEnabled();
+}
+
 static void
 ReleaseVRDeviceProxyRef(void *, nsIAtom*, void *aPropertyValue, void *)
 {
@@ -12146,7 +12167,7 @@ nsDocument::GetFullscreenElement()
 NS_IMETHODIMP
 nsDocument::GetMozFullScreen(bool *aFullScreen)
 {
-  *aFullScreen = MozFullScreen();
+  *aFullScreen = Fullscreen();
   return NS_OK;
 }
 
@@ -12772,7 +12793,7 @@ nsDocument::GetVisibilityState() const
 nsDocument::PostVisibilityUpdateEvent()
 {
   nsCOMPtr<nsIRunnable> event =
-    NS_NewRunnableMethod(this, &nsDocument::UpdateVisibilityState);
+    NewRunnableMethod(this, &nsDocument::UpdateVisibilityState);
   NS_DispatchToMainThread(event);
 }
 
@@ -13503,7 +13524,7 @@ nsIDocument::RebuildUserFontSet()
   // change reflow).
   if (!mPostedFlushUserFontSet) {
     nsCOMPtr<nsIRunnable> ev =
-      NS_NewRunnableMethod(this, &nsIDocument::HandleRebuildUserFontSet);
+      NewRunnableMethod(this, &nsIDocument::HandleRebuildUserFontSet);
     if (NS_SUCCEEDED(NS_DispatchToCurrentThread(ev))) {
       mPostedFlushUserFontSet = true;
     }

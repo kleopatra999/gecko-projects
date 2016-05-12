@@ -765,6 +765,10 @@ gfxPlatform::Init()
 
     ScrollMetadata::sNullMetadata = new ScrollMetadata();
     ClearOnShutdown(&ScrollMetadata::sNullMetadata);
+
+    if (obs) {
+      obs->NotifyObservers(nullptr, "gfx-features-ready", nullptr);
+    }
 }
 
 static bool sLayersIPCIsUp = false;
@@ -890,8 +894,8 @@ gfxPlatform::ShutdownLayersIPC()
     } else if (XRE_IsParentProcess()) {
 
         gfx::VRManagerChild::ShutDown();
-        layers::ImageBridgeChild::ShutDown();
         layers::CompositorBridgeChild::ShutDown();
+        layers::ImageBridgeChild::ShutDown();
 
 #ifdef MOZ_WIDGET_GONK
         layers::SharedBufferManagerChild::ShutDown();
@@ -2055,7 +2059,6 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
  * and remember the values.  Changing these preferences during the run will
  * not have any effect until we restart.
  */
-static bool sLayersSupportsD3D9 = false;
 bool gANGLESupportsD3D11 = false;
 static bool sLayersSupportsHardwareVideoDecoding = false;
 static bool sLayersHardwareVideoDecodingFailed = false;
@@ -2086,15 +2089,7 @@ gfxPlatform::InitAcceleration()
   nsCString discardFailureId;
   int32_t status;
 #ifdef XP_WIN
-  if (gfxConfig::IsForcedOnByUser(Feature::HW_COMPOSITING)) {
-    sLayersSupportsD3D9 = true;
-  } else if (!gfxPrefs::LayersAccelerationDisabledDoNotUseDirectly() && gfxInfo) {
-    if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS, discardFailureId, &status))) {
-      if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
-        MOZ_ASSERT(!sPrefBrowserTabsRemoteAutostart || IsVistaOrLater());
-        sLayersSupportsD3D9 = true;
-      }
-    }
+  if (!gfxPrefs::LayersAccelerationDisabledDoNotUseDirectly() && gfxInfo) {
     if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE, discardFailureId, &status))) {
       if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
         gANGLESupportsD3D11 = true;
@@ -2156,28 +2151,12 @@ gfxPlatform::InitCompositorAccelerationPrefs()
 }
 
 bool
-gfxPlatform::CanUseDirect3D9()
-{
-  // this function is called from the compositor thread, so it is not
-  // safe to init the prefs etc. from here.
-  MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
-  return sLayersSupportsD3D9;
-}
-
-bool
 gfxPlatform::CanUseHardwareVideoDecoding()
 {
   // this function is called from the compositor thread, so it is not
   // safe to init the prefs etc. from here.
   MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
   return sLayersSupportsHardwareVideoDecoding && !sLayersHardwareVideoDecodingFailed;
-}
-
-bool
-gfxPlatform::CanUseDirect3D11ANGLE()
-{
-  MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
-  return gANGLESupportsD3D11;
 }
 
 bool

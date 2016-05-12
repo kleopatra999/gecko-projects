@@ -816,10 +816,6 @@ function _loadURIWithFlags(browser, uri, params) {
   let charset = params.charset;
   let postData = params.postData;
 
-  if (!(flags & browser.webNavigation.LOAD_FLAGS_FROM_EXTERNAL)) {
-    browser.userTypedClear++;
-  }
-
   let wasRemote = browser.isRemoteBrowser;
 
   let process = browser.isRemoteBrowser ? Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
@@ -866,9 +862,6 @@ function _loadURIWithFlags(browser, uri, params) {
     if ((!wasRemote && !mustChangeProcess) ||
         (wasRemote && mustChangeProcess)) {
       browser.inLoadURI = false;
-    }
-    if (browser.userTypedClear) {
-      browser.userTypedClear--;
     }
   }
 }
@@ -6383,13 +6376,6 @@ function checkEmptyPageOrigin(browser = gBrowser.selectedBrowser,
     return false;
   }
   let contentPrincipal = browser.contentPrincipal;
-  if (gMultiProcessBrowser && browser.isRemoteBrowser &&
-      !contentPrincipal && uri.spec == "about:blank") {
-    // Need to specialcase this because of how stopping an about:blank
-    // load from chrome on e10s causes a permanently null contentPrincipal,
-    // see bug 1249362.
-    return true;
-  }
   // Not all principals have URIs...
   if (contentPrincipal.URI) {
     // A manually entered about:blank URI is slightly magical:

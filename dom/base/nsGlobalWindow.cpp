@@ -116,7 +116,6 @@
 #include "nsIWebBrowserFind.h"  // For window.find()
 #include "nsIWindowMediator.h"  // For window.find()
 #include "nsComputedDOMStyle.h"
-#include "nsIEntropyCollector.h"
 #include "nsDOMCID.h"
 #include "nsDOMWindowUtils.h"
 #include "nsIWindowWatcher.h"
@@ -229,6 +228,7 @@
 #include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/ServiceWorkerRegistration.h"
 #include "mozilla/dom/U2F.h"
+#include "mozilla/dom/WebIDLGlobalNameHash.h"
 #ifdef HAVE_SIDEBAR
 #include "mozilla/dom/ExternalBinding.h"
 #endif
@@ -276,7 +276,6 @@ nsGlobalWindow::WindowByIdTable *nsGlobalWindow::sWindowsById = nullptr;
 bool nsGlobalWindow::sWarnedAboutWindowInternal = false;
 bool nsGlobalWindow::sIdleObserversAPIFuzzTimeDisabled = false;
 
-static nsIEntropyCollector *gEntropyCollector          = nullptr;
 static int32_t              gRefCnt                    = 0;
 static int32_t              gOpenPopupSpamCount        = 0;
 static PopupControlState    gPopupControlState         = openAbused;
@@ -615,7 +614,8 @@ nsPIDOMWindow<T>::nsPIDOMWindow(nsPIDOMWindowOuter *aOuterWindow)
   mMayHavePointerEnterLeaveEventListener(false),
   mInnerObjectsFreed(false),
   mIsModalContentWindow(false),
-  mIsActive(false), mIsBackground(false), mMediaSuspended(false),
+  mIsActive(false), mIsBackground(false),
+  mMediaSuspend(nsISuspendedTypes::NONE_SUSPENDED),
   mAudioMuted(false), mAudioVolume(1.0), mAudioCaptured(false),
   mDesktopModeViewport(false), mInnerWindow(nullptr),
   mOuterWindow(aOuterWindow),
@@ -925,13 +925,14 @@ nsOuterWindowProxy::getPrototypeIfOrdinary(JSContext* cx,
   //
   //   https://html.spec.whatwg.org/multipage/browsers.html#windowproxy-getprototypeof
   //
-  // We nonetheless can implement it here using a non-"lazy" [[Prototype]],
-  // because wrapper-class handlers (particularly, XOW in FilteringWrapper.cpp)
-  // supply all the non-ordinary behavior.
+  // We nonetheless can implement it with a static [[Prototype]], because
+  // wrapper-class handlers (particularly, XOW in FilteringWrapper.cpp) supply
+  // all non-ordinary behavior.
   //
   // But from a spec point of view, it's the exact same object in both cases --
-  // only the observer's changed.  So both cases *must* report non-ordinary,
-  // even if non-"lazy" [[Prototype]] usually means ordinary.
+  // only the observer's changed.  So this getPrototypeIfOrdinary trap on the
+  // non-wrapper object *must* report non-ordinary, even if static [[Prototype]]
+  // usually means ordinary.
   *isOrdinary = false;
   return true;
 }
@@ -1335,10 +1336,6 @@ nsGlobalWindow::Init()
 {
   AssertIsOnMainThread();
 
-  CallGetService(NS_ENTROPYCOLLECTOR_CONTRACTID, &gEntropyCollector);
-  NS_ASSERTION(gEntropyCollector,
-               "gEntropyCollector should have been initialized!");
-
   NS_ASSERTION(gDOMLeakPRLog, "gDOMLeakPRLog should have been initialized!");
 
   sWindowsById = new WindowByIdTable();
@@ -1480,8 +1477,6 @@ nsGlobalWindow::ShutDown()
     fclose(gDumpFile);
   }
   gDumpFile = nullptr;
-
-  NS_IF_RELEASE(gEntropyCollector);
 
   delete sWindowsById;
   sWindowsById = nullptr;
@@ -2677,7 +2672,7 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
      under normal circumstances, but bug 49615 describes a case.) */
 
   nsContentUtils::AddScriptRunner(
-    NS_NewRunnableMethod(this, &nsGlobalWindow::ClearStatus));
+    NewRunnableMethod(this, &nsGlobalWindow::ClearStatus));
 
   // Sometimes, WouldReuseInnerWindow() returns true even if there's no inner
   // window (see bug 776497). Be safe.
@@ -2983,8 +2978,8 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
   // up with the outer. See bug 969156.
   if (createdInnerWindow) {
     nsContentUtils::AddScriptRunner(
-      NS_NewRunnableMethod(newInnerWindow,
-                           &nsGlobalWindow::FireOnNewGlobalObject));
+      NewRunnableMethod(newInnerWindow,
+                        &nsGlobalWindow::FireOnNewGlobalObject));
   }
 
   if (newInnerWindow && !newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
@@ -2997,7 +2992,7 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
         nsContentUtils::IsSystemPrincipal(mDoc->NodePrincipal())) {
       newInnerWindow->mHasNotifiedGlobalCreated = true;
       nsContentUtils::AddScriptRunner(
-        NS_NewRunnableMethod(this, &nsGlobalWindow::DispatchDOMWindowCreated));
+        NewRunnableMethod(this, &nsGlobalWindow::DispatchDOMWindowCreated));
     }
   }
 
@@ -3314,27 +3309,11 @@ nsresult
 nsGlobalWindow::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   NS_PRECONDITION(IsInnerWindow(), "PreHandleEvent is used on outer window!?");
-  static uint32_t count = 0;
   EventMessage msg = aVisitor.mEvent->mMessage;
 
   aVisitor.mCanHandle = true;
   aVisitor.mForceContentDispatch = true; //FIXME! Bug 329119
-  if (msg == eMouseMove && gEntropyCollector) {
-    //Chances are this counter will overflow during the life of the
-    //process, but that's OK for our case. Means we get a little
-    //more entropy.
-    if (count++ % 100 == 0) {
-      //Since the high bits seem to be zero's most of the time,
-      //let's only take the lowest half of the point structure.
-      int16_t myCoord[2];
-
-      myCoord[0] = aVisitor.mEvent->mRefPoint.x;
-      myCoord[1] = aVisitor.mEvent->mRefPoint.y;
-      gEntropyCollector->RandomUpdate((void*)myCoord, sizeof(myCoord));
-      gEntropyCollector->RandomUpdate((void*)&(aVisitor.mEvent->mTime),
-                                      sizeof(uint32_t));
-    }
-  } else if (msg == eResize && aVisitor.mEvent->IsTrusted()) {
+  if (msg == eResize && aVisitor.mEvent->IsTrusted()) {
     // QIing to window so that we can keep the old behavior also in case
     // a child window is handling resize.
     nsCOMPtr<nsPIDOMWindowInner> window =
@@ -3416,6 +3395,16 @@ nsGlobalWindow::AreDialogsEnabled()
     if (isHidden) {
       return false;
     }
+  }
+
+  // Dialogs are also blocked if the document is sandboxed with SANDBOXED_MODALS
+  // (or if we have no document, of course).  Which document?  Who knows; the
+  // spec is daft.  See <https://github.com/whatwg/html/issues/1206>.  For now
+  // just go ahead and check mDoc, since in everything except edge cases in
+  // which a frame is allow-same-origin but not allow-scripts and is being poked
+  // at by some other window this should be the right thing anyway.
+  if (!mDoc || (mDoc->GetSandboxFlags() & SANDBOXED_MODALS)) {
+    return false;
   }
 
   return topWindow->mAreDialogsEnabled;
@@ -3889,30 +3878,29 @@ nsPIDOMWindowInner::CreatePerformanceObjectIfNeeded()
   }
 }
 
-bool
-nsPIDOMWindowOuter::GetMediaSuspended() const
+SuspendTypes
+nsPIDOMWindowOuter::GetMediaSuspend() const
 {
   if (IsInnerWindow()) {
-    return mOuterWindow->GetMediaSuspended();
+    return mOuterWindow->GetMediaSuspend();
   }
 
-  return mMediaSuspended;
+  return mMediaSuspend;
 }
 
 void
-nsPIDOMWindowOuter::SetMediaSuspended(bool aSuspended)
+nsPIDOMWindowOuter::SetMediaSuspend(SuspendTypes aSuspend)
 {
   if (IsInnerWindow()) {
-    mOuterWindow->SetMediaSuspended(aSuspended);
+    mOuterWindow->SetMediaSuspend(aSuspend);
     return;
   }
 
-  if (mMediaSuspended == aSuspended) {
-    return;
+  if (!IsDisposableSuspend(aSuspend)) {
+    mMediaSuspend = aSuspend;
   }
 
-  mMediaSuspended = aSuspended;
-  RefreshMediaElements();
+  RefreshMediaElementsSuspend(aSuspend);
 }
 
 bool
@@ -3938,7 +3926,7 @@ nsPIDOMWindowOuter::SetAudioMuted(bool aMuted)
   }
 
   mAudioMuted = aMuted;
-  RefreshMediaElements();
+  RefreshMediaElementsVolume();
 }
 
 float
@@ -3967,17 +3955,33 @@ nsPIDOMWindowOuter::SetAudioVolume(float aVolume)
   }
 
   mAudioVolume = aVolume;
-  RefreshMediaElements();
+  RefreshMediaElementsVolume();
   return NS_OK;
 }
 
 void
-nsPIDOMWindowOuter::RefreshMediaElements()
+nsPIDOMWindowOuter::RefreshMediaElementsVolume()
 {
   RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   if (service) {
     service->RefreshAgentsVolume(GetOuterWindow());
   }
+}
+
+void
+nsPIDOMWindowOuter::RefreshMediaElementsSuspend(SuspendTypes aSuspend)
+{
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  if (service) {
+    service->RefreshAgentsSuspend(GetOuterWindow(), aSuspend);
+  }
+}
+
+bool
+nsPIDOMWindowOuter::IsDisposableSuspend(SuspendTypes aSuspend) const
+{
+  return (aSuspend == nsISuspendedTypes::SUSPENDED_PAUSE_DISPOSABLE ||
+          aSuspend == nsISuspendedTypes::SUSPENDED_STOP_DISPOSABLE);
 }
 
 void
@@ -4482,6 +4486,15 @@ nsGlobalWindow::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
     return true;
   }
 
+  bool found;
+  if (!WebIDLGlobalNameHash::DefineIfEnabled(aCx, aObj, aId, aDesc, &found)) {
+    return false;
+  }
+
+  if (found) {
+    return true;
+  }
+
   nsresult rv = nsWindowSH::GlobalResolve(this, aCx, aObj, aId, aDesc);
   if (NS_FAILED(rv)) {
     return Throw(aCx, rv);
@@ -4510,6 +4523,10 @@ nsGlobalWindow::MayResolve(jsid aId)
     return true;
   }
 
+  if (WebIDLGlobalNameHash::MayResolve(aId)) {
+    return true;
+  }
+
   nsScriptNameSpaceManager *nameSpaceManager = PeekNameSpaceManager();
   if (!nameSpaceManager) {
     // Really shouldn't happen.  Fail safe.
@@ -4533,12 +4550,13 @@ nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
   nsScriptNameSpaceManager* nameSpaceManager = GetNameSpaceManager();
   if (nameSpaceManager) {
     JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
+
+    WebIDLGlobalNameHash::GetNames(aCx, wrapper, aNames);
+
     for (auto i = nameSpaceManager->GlobalNameIter(); !i.Done(); i.Next()) {
       const GlobalNameMapEntry* entry = i.Get();
       if (nsWindowSH::NameStructEnabled(aCx, this, entry->mKey,
-                                        entry->mGlobalName) &&
-          (!entry->mGlobalName.mConstructorEnabled ||
-           entry->mGlobalName.mConstructorEnabled(aCx, wrapper))) {
+                                        entry->mGlobalName)) {
         aNames.AppendElement(entry->mKey);
       }
     }
@@ -10011,8 +10029,13 @@ nsGlobalWindow::GetFocusMethod()
 void
 nsGlobalWindow::InitializeShowFocusRings()
 {
+  MOZ_ASSERT(IsInnerWindow());
+
+  // Initialize the focus ring state from the parent window. For root windows,
+  // there is no need to do this as SetKeyboardIndicators will propogate any
+  // non-default value to child windows.
   nsPIDOMWindowOuter* root = GetPrivateRoot();
-  if (root) {
+  if (root && GetOuterWindow() != root) {
     bool showAccelerators = false, showFocusRings = false;
     root->GetKeyboardIndicators(&showAccelerators, &showFocusRings);
     mShowFocusRings = showFocusRings;
@@ -11706,7 +11729,7 @@ public:
   ~AutoUnblockScriptClosing()
   {
     void (nsGlobalWindow::*run)() = &nsGlobalWindow::UnblockScriptedClosing;
-    NS_DispatchToCurrentThread(NS_NewRunnableMethod(mWin, run));
+    NS_DispatchToCurrentThread(NewRunnableMethod(mWin, run));
   }
 };
 
@@ -14361,6 +14384,35 @@ nsGlobalWindow::CheckForDPIChange()
         presContext->UIResolutionChanged();
       }
     }
+  }
+}
+
+nsGlobalWindow::TemporarilyDisableDialogs::TemporarilyDisableDialogs(
+  nsGlobalWindow* aWindow MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
+{
+  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+
+  MOZ_ASSERT(aWindow);
+  nsGlobalWindow* topWindow = aWindow->GetScriptableTopInternal();
+  if (!topWindow) {
+    NS_ERROR("nsGlobalWindow::TemporarilyDisableDialogs used without a top "
+             "window?");
+    return;
+  }
+
+  // TODO: Warn if no top window?
+  topWindow = topWindow->GetCurrentInnerWindowInternal();
+  if (topWindow) {
+    mTopWindow = topWindow;
+    mSavedDialogsEnabled = mTopWindow->mAreDialogsEnabled;
+    mTopWindow->mAreDialogsEnabled = false;
+  }
+}
+
+nsGlobalWindow::TemporarilyDisableDialogs::~TemporarilyDisableDialogs()
+{
+  if (mTopWindow) {
+    mTopWindow->mAreDialogsEnabled = mSavedDialogsEnabled;
   }
 }
 

@@ -73,14 +73,13 @@ GMPParent::GMPParent()
   , mChildPid(0)
   , mHoldingSelfRef(false)
 {
-  LOGD("GMPParent ctor");
   mPluginId = GeckoChildProcessHost::GetUniqueID();
+  LOGD("GMPParent ctor id=%u", mPluginId);
 }
 
 GMPParent::~GMPParent()
 {
-  LOGD("GMPParent dtor");
-
+  LOGD("GMPParent dtor id=%u", mPluginId);
   MOZ_ASSERT(!mProcess);
 }
 
@@ -503,7 +502,7 @@ GMPParent::ChildTerminated()
     // removed so there is no harm in not trying to remove it again.
     LOGD("%s::%s: GMPThread() returned nullptr.", __CLASS__, __FUNCTION__);
   } else {
-    gmpThread->Dispatch(NS_NewRunnableMethodWithArg<RefPtr<GMPParent>>(
+    gmpThread->Dispatch(NewRunnableMethod<RefPtr<GMPParent>>(
                          mService,
                          &GeckoMediaPluginServiceParent::PluginTerminated,
                          self),
@@ -522,7 +521,7 @@ GMPParent::DeleteProcess()
     mState = GMPStateClosing;
     Close();
   }
-  mProcess->Delete(NS_NewRunnableMethod(this, &GMPParent::ChildTerminated));
+  mProcess->Delete(NewRunnableMethod(this, &GMPParent::ChildTerminated));
   LOGD("%s: Shut down process", __FUNCTION__);
   mProcess = nullptr;
   mState = GMPStateNotLoaded;
@@ -985,16 +984,13 @@ GMPParent::CanBeSharedCrossNodeIds() const
 bool
 GMPParent::CanBeUsedFrom(const nsACString& aNodeId) const
 {
-  return !mAsyncShutdownInProgress &&
-         ((mNodeId.IsEmpty() && State() == GMPStateNotLoaded) ||
-          mNodeId == aNodeId);
+  return !mAsyncShutdownInProgress && mNodeId == aNodeId;
 }
 
 void
 GMPParent::SetNodeId(const nsACString& aNodeId)
 {
   MOZ_ASSERT(!aNodeId.IsEmpty());
-  MOZ_ASSERT(CanBeUsedFrom(aNodeId));
   mNodeId = aNodeId;
 }
 

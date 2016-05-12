@@ -51,9 +51,7 @@ builds:
       - sm-plain
       - sm-arm-sim
       - sm-compacting
-      - sm-generational
       - sm-rootanalysis
-      - sm-warnaserr
     types:
       opt:
         task: tasks/builds/opt_linux64.yml
@@ -97,12 +95,6 @@ builds:
     types:
       opt:
         task: tasks/builds/opt_macosx64_st-an.yml
-  android-api-15-frontend:
-    platforms:
-      - Android
-    types:
-      opt:
-        task: tasks/builds/android_api_15_frontend.yml
   linux64-mulet-haz:
     platforms:
       - Mulet Linux
@@ -116,7 +108,7 @@ builds:
       opt:
         task: tasks/builds/sm_plain.yml
       debug:
-       task: tasks/builds/sm_plaindebug.yml
+        task: tasks/builds/sm_plaindebug.yml
     when:
       file_patterns:
        - js/public/**
@@ -125,8 +117,18 @@ builds:
     platforms:
       - Linux64
     types:
-      opt:
+      debug:
         task: tasks/builds/sm_arm_sim.yml
+    when:
+      file_patterns:
+       - js/public/**
+       - js/src/**
+  sm-arm64-sim:
+    platforms:
+      - Linux64
+    types:
+      debug:
+        task: tasks/builds/sm_arm64_sim.yml
     when:
       file_patterns:
        - js/public/**
@@ -135,7 +137,7 @@ builds:
     platforms:
       - Linux64
     types:
-      opt:
+      debug:
         task: tasks/builds/sm_arm_sim_osx.yml
     when:
       file_patterns:
@@ -145,18 +147,8 @@ builds:
     platforms:
       - Linux64
     types:
-      opt:
+      debug:
         task: tasks/builds/sm_compacting.yml
-    when:
-      file_patterns:
-       - js/public/**
-       - js/src/**
-  sm-generational:
-    platforms:
-      - Linux64
-    types:
-      opt:
-        task: tasks/builds/sm_generational.yml
     when:
       file_patterns:
        - js/public/**
@@ -165,20 +157,8 @@ builds:
     platforms:
       - Linux64
     types:
-      opt:
-        task: tasks/builds/sm_rootanalysis.yml
-    when:
-      file_patterns:
-       - js/public/**
-       - js/src/**
-  sm-warnaserr:
-    platforms:
-      - Linux64
-    types:
-      opt:
-        task: tasks/builds/sm_warnaserr.yml
       debug:
-        task: tasks/builds/sm_warnaserrdebug.yml
+        task: tasks/builds/sm_rootanalysis.yml
     when:
       file_patterns:
        - js/public/**
@@ -339,6 +319,8 @@ tests:
     allowed_build_tasks:
       tasks/builds/opt_linux64.yml:
         task: tasks/tests/fx_linux64_mochitest_gl_e10s_opt.yml
+      tasks/builds/dbg_linux64.yml:
+        task: tasks/tests/fx_linux64_mochitest_gl_e10s_dbg.yml
   reftest:
     allowed_build_tasks:
       tasks/builds/mulet_linux.yml:
@@ -423,6 +405,13 @@ tasks:
         - 'testing/docker/android-gradle-build/**'
         - 'testing/mozharness/configs/builds/releng_sub_android_configs/*gradle_dependencies.py'
         - '**/*.gradle'
+  android-test:
+    task: tasks/builds/android_test.yml
+    root: true
+    when:
+      file_patterns:
+        - 'mobile/android/base/**'
+        - 'mobile/android/tests/background/junit4/**'
   android-checkstyle:
     task: tasks/builds/android_checkstyle.yml
     root: true
@@ -455,6 +444,7 @@ tasks:
     when:
         file_patterns:
           - 'testing/marionette/harness/**'
+          - 'testing/mozharness/scripts/marionette_harness_tests.py'
   linux64-gcc:
     task: tasks/builds/linux64_gcc.yml
     root: true

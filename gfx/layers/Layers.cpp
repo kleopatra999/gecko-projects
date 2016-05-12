@@ -577,7 +577,7 @@ Layer::ApplyPendingUpdatesToSubtree()
 bool
 Layer::IsOpaqueForVisibility()
 {
-  return GetLocalOpacity() == 1.0f &&
+  return GetEffectiveOpacity() == 1.0f &&
          GetEffectiveMixBlendMode() == CompositionOp::OP_OVER;
 }
 
@@ -851,6 +851,12 @@ Layer::CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect)
   return currentClip.Intersect(scissor);
 }
 
+Maybe<ParentLayerIntRect>
+Layer::GetScrolledClipRect() const
+{
+  return mScrolledClip ? Some(mScrolledClip->GetClipRect()) : Nothing();
+}
+
 const ScrollMetadata&
 Layer::GetScrollMetadata(uint32_t aIndex) const
 {
@@ -884,7 +890,7 @@ Layer::IsScrollInfoLayer() const
       && !GetFirstChild();
 }
 
-const Matrix4x4
+Matrix4x4
 Layer::GetTransform() const
 {
   Matrix4x4 transform = mTransform;
@@ -901,7 +907,7 @@ Layer::GetTransformTyped() const
   return ViewAs<CSSTransformMatrix>(GetTransform());
 }
 
-const Matrix4x4
+Matrix4x4
 Layer::GetLocalTransform()
 {
   if (LayerComposite* shadow = AsLayerComposite())
@@ -1100,17 +1106,10 @@ Layer::GetCombinedClipRect() const
 {
   Maybe<ParentLayerIntRect> clip = GetClipRect();
 
-  for (size_t i = 0; i < mScrollMetadata.Length(); i++) {
-    if (!mScrollMetadata[i].HasClipRect()) {
-      continue;
-    }
+  clip = IntersectMaybeRects(clip, GetScrolledClipRect());
 
-    const ParentLayerIntRect& other = mScrollMetadata[i].ClipRect();
-    if (clip) {
-      clip = Some(clip.value().Intersect(other));
-    } else {
-      clip = Some(other);
-    }
+  for (size_t i = 0; i < mScrollMetadata.Length(); i++) {
+    clip = IntersectMaybeRects(clip, mScrollMetadata[i].GetClipRect());
   }
 
   return clip;
@@ -1911,6 +1910,9 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (mClipRect) {
     AppendToString(aStream, *mClipRect, " [clip=", "]");
   }
+  if (mScrolledClip) {
+    AppendToString(aStream, mScrolledClip->GetClipRect(), " [scrolled-clip=", "]");
+  }
   if (1.0 != mPostXScale || 1.0 != mPostYScale) {
     aStream << nsPrintfCString(" [postScale=%g, %g]", mPostXScale, mPostYScale).get();
   }
@@ -1966,11 +1968,10 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
   if (GetIsFixedPosition()) {
     LayerPoint anchor = GetFixedPositionAnchor();
-    aStream << nsPrintfCString(" [isFixedPosition scrollId=%lld sides=0x%x anchor=%s%s]",
+    aStream << nsPrintfCString(" [isFixedPosition scrollId=%lld sides=0x%x anchor=%s]",
                      GetFixedPositionScrollContainerId(),
                      GetFixedPositionSides(),
-                     ToString(anchor).c_str(),
-                     IsClipFixed() ? "" : " scrollingClip").get();
+                     ToString(anchor).c_str()).get();
   }
   if (GetIsStickyPosition()) {
     aStream << nsPrintfCString(" [isStickyPosition scrollId=%d outer=%f,%f %fx%f "

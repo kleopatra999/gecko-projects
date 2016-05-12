@@ -5,7 +5,7 @@
 
 "use strict";
 
-const {Cu} = require("chrome");
+const {Task} = require("resource://gre/modules/Task.jsm");
 const EventEmitter = require("devtools/shared/event-emitter");
 const {LocalizationHelper} = require("devtools/client/shared/l10n");
 
@@ -451,7 +451,7 @@ StorageUI.prototype = {
       }
       this.emit("store-objects-updated");
     } catch (ex) {
-      Cu.reportError(ex);
+      console.error(ex);
     }
   }),
 

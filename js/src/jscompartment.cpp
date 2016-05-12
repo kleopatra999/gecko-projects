@@ -50,7 +50,6 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     isSystem_(false),
     isSelfHosting(false),
     marked(true),
-    warnedAboutFlagsArgument(false),
     warnedAboutExprClosure(false),
 #ifdef DEBUG
     firedOnNewGlobalObject(false),
@@ -456,7 +455,7 @@ JSCompartment::wrap(JSContext* cx, MutableHandleObject obj, HandleObject existin
     RootedObject existing(cx, existingArg);
     if (existing) {
         // Is it possible to reuse |existing|?
-        if (!existing->getTaggedProto().isLazy() ||
+        if (existing->hasStaticPrototype() ||
             // Note: Class asserted above, so all that's left to check is callability
             existing->isCallable() ||
             obj->isCallable())

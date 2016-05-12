@@ -369,6 +369,7 @@ APZCTreeManager::PrepareNodeForLayer(const LayerMetricsWrapper& aLayer,
                            aLayer.GetScrollbarDirection(),
                            aLayer.GetScrollbarSize(),
                            aLayer.IsScrollbarContainer());
+    node->SetFixedPosData(aLayer.GetFixedPositionScrollContainerId());
     return node;
   }
 
@@ -549,6 +550,7 @@ APZCTreeManager::PrepareNodeForLayer(const LayerMetricsWrapper& aLayer,
                          aLayer.GetScrollbarDirection(),
                          aLayer.GetScrollbarSize(),
                          aLayer.IsScrollbarContainer());
+  node->SetFixedPosData(aLayer.GetFixedPositionScrollContainerId());
   return node;
 }
 
@@ -649,8 +651,8 @@ APZCTreeManager::FlushApzRepaints(uint64_t aLayersId)
   const CompositorBridgeParent::LayerTreeState* state =
     CompositorBridgeParent::GetIndirectShadowTree(aLayersId);
   MOZ_ASSERT(state && state->mController);
-  NS_DispatchToMainThread(NS_NewRunnableMethod(
-    state->mController.get(), &GeckoContentController::NotifyFlushComplete));
+  NS_DispatchToMainThread(NewRunnableMethod(
+    state->mController, &GeckoContentController::NotifyFlushComplete));
 }
 
 nsEventStatus
@@ -780,6 +782,16 @@ APZCTreeManager::ReceiveInputEvent(InputData& aEvent,
       if (!panInput.mHandledByAPZ) {
         return result;
       }
+
+      // If/when we enable support for pan inputs off-main-thread, we'll need
+      // to duplicate this EventStateManager code or something. See the other
+      // call to GetUserPrefsForWheelEvent in this file for why these fields
+      // are stored separately.
+      MOZ_ASSERT(NS_IsMainThread());
+      WidgetWheelEvent wheelEvent = panInput.ToWidgetWheelEvent(nullptr);
+      EventStateManager::GetUserPrefsForWheelEvent(&wheelEvent,
+        &panInput.mUserDeltaMultiplierX,
+        &panInput.mUserDeltaMultiplierY);
 
       RefPtr<AsyncPanZoomController> apzc = GetTargetAPZC(panInput.mPanStartPoint,
                                                             &hitResult);
@@ -1335,8 +1347,7 @@ APZCTreeManager::ClearTree()
   // Ensure that no references to APZCs are alive in any lingering input
   // blocks. This breaks cycles from InputBlockState::mTargetApzc back to
   // the InputQueue.
-  APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-    mInputQueue.get(), &InputQueue::Clear));
+  APZThreadUtils::RunOnControllerThread(NewRunnableMethod(mInputQueue, &InputQueue::Clear));
 
   MutexAutoLock lock(mTreeLock);
 
@@ -1764,10 +1775,25 @@ APZCTreeManager::GetAPZCAtPoint(HitTestingTreeNode* aNode,
           }
         }
       }
-      AsyncPanZoomController* result = resultNode->GetNearestContainingApzcWithSameLayersId();
+
+      AsyncPanZoomController* result = nullptr;
+
+      FrameMetrics::ViewID fpTarget =
+          resultNode->GetNearestAncestorFixedPosTargetWithSameLayersId();
+      if (fpTarget != FrameMetrics::NULL_SCROLL_ID) {
+        ScrollableLayerGuid guid(resultNode->GetLayersId(), 0, fpTarget);
+        RefPtr<HitTestingTreeNode> hitNode = GetTargetNode(guid, &GuidComparatorIgnoringPresShell);
+        result = hitNode ? hitNode->GetApzc() : nullptr;
+        APZCTM_LOG("Found target %p using fixed-pos lookup on %" PRIu64 "\n", result, fpTarget);
+      }
+      if (!result) {
+        result = resultNode->GetNearestContainingApzcWithSameLayersId();
+        APZCTM_LOG("Found target %p using ancestor lookup\n", result);
+      }
       if (!result) {
         result = FindRootApzcForLayersId(resultNode->GetLayersId());
         MOZ_ASSERT(result);
+        APZCTM_LOG("Found target %p using root lookup\n", result);
       }
       APZCTM_LOG("Successfully matched APZC %p via node %p (hit result %d)\n",
           result, resultNode, *aOutHitResult);

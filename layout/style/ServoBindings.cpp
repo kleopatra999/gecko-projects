@@ -151,6 +151,20 @@ Gecko_SetNodeData(RawGeckoNode* aNode, ServoNodeData* aData)
   aNode->SetServoNodeData(aData);
 }
 
+void
+Gecko_SetListStyleType(nsStyleList* style_struct, uint32_t type)
+{
+  // Builtin counter styles are static and use no-op refcounting, and thus are
+  // safe to use off-main-thread.
+  style_struct->SetCounterStyle(CounterStyleManager::GetBuiltinStyle(type));
+}
+
+void
+Gecko_CopyListStyleTypeFrom(nsStyleList* dst, const nsStyleList* src)
+{
+  dst->SetCounterStyle(src->GetCounterStyle());
+}
+
 #define STYLE_STRUCT(name, checkdata_cb)                                      \
                                                                               \
 void                                                                          \
@@ -282,6 +296,13 @@ Servo_GetComputedValuesForPseudoElement(ServoComputedValues* parent_style,
             "non-MOZ_STYLO build");
 }
 
+ServoComputedValues*
+Servo_InheritComputedValues(ServoComputedValues* parent_style)
+{
+  MOZ_CRASH("stylo: shouldn't be calling Servo_InheritComputedValues in a "
+            "non-MOZ_STYLO build");
+}
+
 void
 Servo_AddRefComputedValues(ServoComputedValues*)
 {
@@ -293,6 +314,13 @@ void
 Servo_ReleaseComputedValues(ServoComputedValues*)
 {
   MOZ_CRASH("stylo: shouldn't be calling Servo_ReleaseComputedValues in a "
+            "non-MOZ_STYLO build");
+}
+
+void
+Servo_Initialize()
+{
+  MOZ_CRASH("stylo: shouldn't be calling Servo_Initialize in a "
             "non-MOZ_STYLO build");
 }
 

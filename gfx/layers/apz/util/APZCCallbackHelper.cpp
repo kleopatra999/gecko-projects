@@ -487,9 +487,9 @@ APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
   event.mTime = aTime;
   event.button = WidgetMouseEvent::eLeftButton;
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
-  event.ignoreRootScrollFrame = true;
+  event.mIgnoreRootScrollFrame = true;
   if (aMsg != eMouseMove) {
-    event.clickCount = 1;
+    event.mClickCount = 1;
   }
   event.mModifiers = aModifiers;
 
@@ -688,7 +688,7 @@ public:
     }
 
     APZCCH_LOG("Got refresh, sending target APZCs for input block %" PRIu64 "\n", mInputBlockId);
-    SendLayersDependentApzcTargetConfirmation(mPresShell, mInputBlockId, mTargets);
+    SendLayersDependentApzcTargetConfirmation(mPresShell, mInputBlockId, Move(mTargets));
 
     if (!mPresShell->RemovePostRefreshObserver(this)) {
       MOZ_ASSERT_UNREACHABLE("Unable to unregister post-refresh observer! Leaking it instead of leaving garbage registered");
@@ -719,7 +719,7 @@ SendSetTargetAPZCNotificationHelper(nsIWidget* aWidget,
   if (waitForRefresh) {
     APZCCH_LOG("At least one target got a new displayport, need to wait for refresh\n");
     waitForRefresh = aShell->AddPostRefreshObserver(
-      new DisplayportSetListener(aShell, aInputBlockId, aTargets));
+      new DisplayportSetListener(aShell, aInputBlockId, Move(aTargets)));
   }
   if (!waitForRefresh) {
     APZCCH_LOG("Sending target APZCs for input block %" PRIu64 "\n", aInputBlockId);
@@ -770,7 +770,7 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
           aWidget,
           shell,
           aInputBlockId,
-          targets,
+          Move(targets),
           waitForRefresh);
       }
     }
@@ -790,7 +790,7 @@ APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
       widget::ContentHelper::GetAllowedTouchBehavior(
                                aWidget, aEvent.mTouches[i]->mRefPoint));
   }
-  aCallback(aInputBlockId, flags);
+  aCallback(aInputBlockId, Move(flags));
 }
 
 void

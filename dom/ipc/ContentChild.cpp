@@ -840,16 +840,6 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
     tabId, *ipcContext, aChromeFlags,
     GetID(), IsForApp(), IsForBrowser());
 
-  nsAutoCString url;
-  if (aURI) {
-    aURI->GetSpec(url);
-  } else {
-    // We can't actually send a nullptr up as the URI, since IPDL doesn't let us
-    // send nullptr's for primitives. We indicate that the nsString for the URI
-    // should be converted to a nullptr by voiding the string.
-    url.SetIsVoid(true);
-  }
-
   nsString name(aName);
   nsAutoCString features(aFeatures);
   nsTArray<FrameScriptInfo> frameScripts;
@@ -861,6 +851,16 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
 
   if (aIframeMoz) {
     MOZ_ASSERT(aTabOpener);
+    nsAutoCString url;
+    if (aURI) {
+      aURI->GetSpec(url);
+    } else {
+      // We can't actually send a nullptr up as the URI, since IPDL doesn't let us
+      // send nullptr's for primitives. We indicate that the nsString for the URI
+      // should be converted to a nullptr by voiding the string.
+      url.SetIsVoid(true);
+    }
+
     newChild->SendBrowserFrameOpenWindow(aTabOpener, renderFrame, NS_ConvertUTF8toUTF16(url),
                                          name, NS_ConvertUTF8toUTF16(features),
                                          aWindowIsNew, &textureFactoryIdentifier,
@@ -895,7 +895,7 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
     nsresult rv;
     if (!SendCreateWindow(aTabOpener, newChild, renderFrame,
                           aChromeFlags, aCalledFromJS, aPositionSpecified,
-                          aSizeSpecified, url,
+                          aSizeSpecified,
                           name, features,
                           baseURIString,
                           openerDocShell
@@ -1580,7 +1580,7 @@ ContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
       hasRunOnce = true;
 
     MOZ_ASSERT(!sFirstIdleTask);
-    RefPtr<CancelableRunnable> firstIdleTask = NewRunnableFunction(FirstIdle);
+    RefPtr<CancelableRunnable> firstIdleTask = NewCancelableRunnableFunction(FirstIdle);
     sFirstIdleTask = firstIdleTask;
     MessageLoop::current()->PostIdleTask(firstIdleTask.forget());
 
@@ -3254,7 +3254,8 @@ ContentChild::RecvPush(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifyPushObservers(aScope, Nothing());
+  nsresult rv = pushNotifier->NotifyPushObservers(aScope, aPrincipal,
+                                                  Nothing());
   Unused << NS_WARN_IF(NS_FAILED(rv));
 
   rv = pushNotifier->NotifyPushWorkers(aScope, aPrincipal,
@@ -3277,7 +3278,8 @@ ContentChild::RecvPushWithData(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifyPushObservers(aScope, Some(aData));
+  nsresult rv = pushNotifier->NotifyPushObservers(aScope, aPrincipal,
+                                                  Some(aData));
   Unused << NS_WARN_IF(NS_FAILED(rv));
 
   rv = pushNotifier->NotifyPushWorkers(aScope, aPrincipal,
@@ -3298,7 +3300,8 @@ ContentChild::RecvPushSubscriptionChange(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifySubscriptionChangeObservers(aScope);
+  nsresult rv = pushNotifier->NotifySubscriptionChangeObservers(aScope,
+                                                                aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(rv));
 
   rv = pushNotifier->NotifySubscriptionChangeWorkers(aScope, aPrincipal);

@@ -340,21 +340,11 @@ public:
    * Kill our subprocess and make sure it dies.  Should only be used
    * in emergency situations since it bypasses the normal shutdown
    * process.
+   *
+   * WARNING: aReason appears in telemetry, so any new value passed in requires
+   * data review.
    */
   void KillHard(const char* aWhy);
-
-  /**
-   * API for adding a crash reporter annotation that provides a reason
-   * for a listener request to abort the child.
-   */
-  bool IsKillHardAnnotationSet() const { return mKillHardAnnotation.IsEmpty(); }
-
-  const nsCString& GetKillHardAnnotation() const { return mKillHardAnnotation; }
-
-  void SetKillHardAnnotation(const nsACString& aReason)
-  {
-    mKillHardAnnotation = aReason;
-  }
 
   ContentParentId ChildID() const override { return mChildID; }
 
@@ -502,7 +492,6 @@ public:
                                 const bool& aCalledFromJS,
                                 const bool& aPositionSpecified,
                                 const bool& aSizeSpecified,
-                                const nsCString& aURI,
                                 const nsString& aName,
                                 const nsCString& aFeatures,
                                 const nsCString& aBaseURI,
@@ -1101,16 +1090,19 @@ private:
                                          const uint32_t& aDecodeFPS) override;
 
   virtual bool RecvNotifyPushObservers(const nsCString& aScope,
-                                   const nsString& aMessageId) override;
+                                       const IPC::Principal& aPrincipal,
+                                       const nsString& aMessageId) override;
 
   virtual bool RecvNotifyPushObserversWithData(const nsCString& aScope,
-                                           const nsString& aMessageId,
-                                           InfallibleTArray<uint8_t>&& aData) override;
+                                               const IPC::Principal& aPrincipal,
+                                               const nsString& aMessageId,
+                                               InfallibleTArray<uint8_t>&& aData) override;
 
-  virtual bool RecvNotifyPushSubscriptionChangeObservers(const nsCString& aScope) override;
+  virtual bool RecvNotifyPushSubscriptionChangeObservers(const nsCString& aScope,
+                                                         const IPC::Principal& aPrincipal) override;
 
-  virtual bool RecvNotifyPushSubscriptionLostObservers(const nsCString& aScope,
-                                                       const uint16_t& aReason) override;
+  virtual bool RecvNotifyPushSubscriptionModifiedObservers(const nsCString& aScope,
+                                                           const IPC::Principal& aPrincipal) override;
 
   // If you add strong pointers to cycle collected objects here, be sure to
   // release these objects in ShutDownProcess.  See the comment there for more

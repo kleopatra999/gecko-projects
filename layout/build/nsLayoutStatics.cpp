@@ -129,7 +129,9 @@ using namespace mozilla::system;
 #include "MediaDecoder.h"
 #include "mozilla/layers/CompositorLRU.h"
 #include "mozilla/dom/devicestorage/DeviceStorageStatics.h"
+#include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
+#include "mozilla/dom/WebIDLGlobalNameHash.h"
 
 #ifdef MOZ_B2G_BT
 #include "mozilla/dom/BluetoothUUID.h"
@@ -317,6 +319,10 @@ nsLayoutStatics::Initialize()
 
   mozilla::dom::WebCryptoThreadPool::Initialize();
 
+#ifdef MOZ_STYLO
+  Servo_Initialize();
+#endif
+
   return NS_OK;
 }
 
@@ -379,6 +385,7 @@ nsLayoutStatics::Shutdown()
   ShutdownJSEnvironment();
   nsGlobalWindow::ShutDown();
   nsDOMClassInfo::ShutDown();
+  WebIDLGlobalNameHash::Shutdown();
   nsListControlFrame::Shutdown();
   nsXBLService::Shutdown();
   nsAutoCopyListener::Shutdown();

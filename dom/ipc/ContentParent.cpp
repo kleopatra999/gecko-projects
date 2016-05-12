@@ -1060,7 +1060,10 @@ ContentParent::RecvUngrabPointer(const uint32_t& aTime)
   NS_RUNTIMEABORT("This message only makes sense on GTK platforms");
   return false;
 #else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   gdk_pointer_ungrab(aTime);
+#pragma GCC diagnostic pop
   return true;
 #endif
 }
@@ -2177,9 +2180,10 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
   // Destroy any processes created by this ContentParent
   for(uint32_t i = 0; i < childIDArray.Length(); i++) {
     ContentParent* cp = cpm->GetContentProcessById(childIDArray[i]);
-    MessageLoop::current()->PostTask(
-      NewRunnableMethod(cp, &ContentParent::ShutDownProcess,
-                        SEND_SHUTDOWN_MESSAGE));
+    MessageLoop::current()->PostTask(NewRunnableMethod
+                                     <ShutDownMethod>(cp,
+                                                      &ContentParent::ShutDownProcess,
+                                                      SEND_SHUTDOWN_MESSAGE));
   }
   cpm->RemoveContentProcess(this->ChildID());
 
@@ -2260,9 +2264,10 @@ ContentParent::NotifyTabDestroyed(const TabId& aTabId,
   if (tabIds.Length() == 1) {
     // In the case of normal shutdown, send a shutdown message to child to
     // allow it to perform shutdown tasks.
-    MessageLoop::current()->PostTask(
-      NewRunnableMethod(this, &ContentParent::ShutDownProcess,
-                        SEND_SHUTDOWN_MESSAGE));
+    MessageLoop::current()->PostTask(NewRunnableMethod
+                                     <ShutDownMethod>(this,
+                                                      &ContentParent::ShutDownProcess,
+                                                      SEND_SHUTDOWN_MESSAGE));
   }
 }
 
@@ -3542,6 +3547,8 @@ ContentParent::ForceKillTimerCallback(nsITimer* aTimer, void* aClosure)
   self->KillHard("ShutDownKill");
 }
 
+// WARNING: aReason appears in telemetry, so any new value passed in requires
+// data review.
 void
 ContentParent::KillHard(const char* aReason)
 {
@@ -3572,11 +3579,6 @@ ContentParent::KillHard(const char* aReason)
     crashReporter->AnnotateCrashReport(
       NS_LITERAL_CSTRING("additional_minidumps"),
       additionalDumps);
-    if (IsKillHardAnnotationSet()) {
-      crashReporter->AnnotateCrashReport(
-        NS_LITERAL_CSTRING("kill_hard"),
-        GetKillHardAnnotation());
-    }
     nsDependentCString reason(aReason);
     crashReporter->AnnotateCrashReport(
       NS_LITERAL_CSTRING("ipc_channel_error"),
@@ -3584,6 +3586,8 @@ ContentParent::KillHard(const char* aReason)
 
     // Generate the report and insert into the queue for submittal.
     mCreatedPairedMinidumps = crashReporter->GenerateCompleteMinidump(this);
+
+    Telemetry::Accumulate(Telemetry::SUBPROCESS_KILL_HARD, reason, 1);
   }
 #endif
   ProcessHandle otherProcessHandle;
@@ -5363,7 +5367,6 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
                                 const bool& aCalledFromJS,
                                 const bool& aPositionSpecified,
                                 const bool& aSizeSpecified,
-                                const nsCString& aURI,
                                 const nsString& aName,
                                 const nsCString& aFeatures,
                                 const nsCString& aBaseURI,
@@ -5496,44 +5499,13 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
     return true;
   }
 
-  // WindowWatcher is going to expect a valid URI to open a window
-  // to. If it can't find one, it's going to attempt to figure one
-  // out on its own, which is problematic because it can't access
-  // the document for the remote browser we're opening. Luckily,
-  // TabChild has sent us a baseURI with which we can ensure that
-  // the URI we pass to WindowWatcher is valid.
-  nsCOMPtr<nsIURI> baseURI;
-  *aResult = NS_NewURI(getter_AddRefs(baseURI), aBaseURI);
-
-  if (NS_WARN_IF(NS_FAILED(*aResult))) {
-    return true;
-  }
-
-  nsAutoCString finalURIString;
-  if (!aURI.IsEmpty()) {
-    nsCOMPtr<nsIURI> finalURI;
-    *aResult = NS_NewURI(getter_AddRefs(finalURI), aURI.get(), baseURI);
-
-    if (NS_WARN_IF(NS_FAILED(*aResult))) {
-      return true;
-    }
-
-    finalURI->GetSpec(finalURIString);
-  }
-
   nsCOMPtr<mozIDOMWindowProxy> window;
-
   TabParent::AutoUseNewTab aunt(newTab, aWindowIsNew, aURLToLoad);
 
-  // If nsWindowWatcher::OpenWindowInternal was passed a nullptr for the URI
-  // to open in the content process, we indicate that by sending up a voided
-  // nsString (since primitives are not nullable). If we detect the voided
-  // nsString, we know that we need to send OpenWindow2 a nullptr for the URI.
-  const char* uri = aURI.IsVoid() ? nullptr : finalURIString.get();
   const char* name = aName.IsVoid() ? nullptr : NS_ConvertUTF16toUTF8(aName).get();
   const char* features = aFeatures.IsVoid() ? nullptr : aFeatures.get();
 
-  *aResult = pwwatch->OpenWindow2(parent, uri, name, features, aCalledFromJS,
+  *aResult = pwwatch->OpenWindow2(parent, nullptr, name, features, aCalledFromJS,
                                   false, false, thisTabParent, nullptr,
                                   aFullZoom, 1, getter_AddRefs(window));
 
@@ -5812,6 +5784,7 @@ ContentParent::StartProfiler(nsIProfilerStartParams* aParams)
 
 bool
 ContentParent::RecvNotifyPushObservers(const nsCString& aScope,
+                                       const IPC::Principal& aPrincipal,
                                        const nsString& aMessageId)
 {
 #ifndef MOZ_SIMPLEPUSH
@@ -5821,7 +5794,8 @@ ContentParent::RecvNotifyPushObservers(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifyPushObservers(aScope, Nothing());
+  nsresult rv = pushNotifier->NotifyPushObservers(aScope, aPrincipal,
+                                                  Nothing());
   Unused << NS_WARN_IF(NS_FAILED(rv));
 #endif
   return true;
@@ -5829,6 +5803,7 @@ ContentParent::RecvNotifyPushObservers(const nsCString& aScope,
 
 bool
 ContentParent::RecvNotifyPushObserversWithData(const nsCString& aScope,
+                                               const IPC::Principal& aPrincipal,
                                                const nsString& aMessageId,
                                                InfallibleTArray<uint8_t>&& aData)
 {
@@ -5839,14 +5814,16 @@ ContentParent::RecvNotifyPushObserversWithData(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifyPushObservers(aScope, Some(aData));
+  nsresult rv = pushNotifier->NotifyPushObservers(aScope, aPrincipal,
+                                                  Some(aData));
   Unused << NS_WARN_IF(NS_FAILED(rv));
 #endif
   return true;
 }
 
 bool
-ContentParent::RecvNotifyPushSubscriptionChangeObservers(const nsCString& aScope)
+ContentParent::RecvNotifyPushSubscriptionChangeObservers(const nsCString& aScope,
+                                                         const IPC::Principal& aPrincipal)
 {
 #ifndef MOZ_SIMPLEPUSH
   nsCOMPtr<nsIPushNotifier> pushNotifier =
@@ -5855,15 +5832,16 @@ ContentParent::RecvNotifyPushSubscriptionChangeObservers(const nsCString& aScope
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifySubscriptionChangeObservers(aScope);
+  nsresult rv = pushNotifier->NotifySubscriptionChangeObservers(aScope,
+                                                                aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(rv));
 #endif
   return true;
 }
 
 bool
-ContentParent::RecvNotifyPushSubscriptionLostObservers(const nsCString& aScope,
-                                                       const uint16_t& aReason)
+ContentParent::RecvNotifyPushSubscriptionModifiedObservers(const nsCString& aScope,
+                                                           const IPC::Principal& aPrincipal)
 {
 #ifndef MOZ_SIMPLEPUSH
   nsCOMPtr<nsIPushNotifier> pushNotifier =
@@ -5872,7 +5850,8 @@ ContentParent::RecvNotifyPushSubscriptionLostObservers(const nsCString& aScope,
       return true;
   }
 
-  nsresult rv = pushNotifier->NotifySubscriptionLostObservers(aScope, aReason);
+  nsresult rv = pushNotifier->NotifySubscriptionModifiedObservers(aScope,
+                                                                  aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(rv));
 #endif
   return true;

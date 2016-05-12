@@ -620,6 +620,13 @@ addEventListener("pageshow", function(event) {
     });
   }
 });
+addEventListener("pagehide", function(event) {
+  if (event.target == content.document) {
+    sendAsyncMessage("PageVisibility:Hide", {
+      persisted: event.persisted,
+    });
+  }
+});
 
 var PageMetadataMessenger = {
   init() {
@@ -702,6 +709,9 @@ addMessageListener("ContextMenu:MediaCommand", (message) => {
       break;
     case "pause":
       media.pause();
+      break;
+    case "loop":
+      media.loop = !media.loop;
       break;
     case "mute":
       media.muted = true;

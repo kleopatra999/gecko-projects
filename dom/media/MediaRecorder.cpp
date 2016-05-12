@@ -507,7 +507,6 @@ public:
       // End the Session directly if there is no ExtractRunnable.
       DoSessionEndTask(NS_OK);
     }
-    nsContentUtils::UnregisterShutdownObserver(this);
   }
 
   nsresult Pause()
@@ -581,6 +580,13 @@ private:
     MOZ_COUNT_DTOR(MediaRecorder::Session);
     LOG(LogLevel::Debug, ("Session.~Session (%p)", this));
     CleanupStreams();
+    if (mReadThread) {
+      mReadThread->Shutdown();
+      mReadThread = nullptr;
+      // Inside the if() so that if we delete after xpcom-shutdown's Observe(), we
+      // won't try to remove it after the observer service is shut down.
+      nsContentUtils::UnregisterShutdownObserver(this);
+    }
   }
   // Pull encoded media data from MediaEncoder and put into EncodedBufferCache.
   // Destroy this session object in the end of this function.
@@ -819,10 +825,8 @@ private:
       new DispatchStartEventRunnable(this, NS_LITERAL_STRING("start")));
 
     if (NS_FAILED(rv)) {
-      nsCOMPtr<nsIRunnable> runnable =
-        NS_NewRunnableMethodWithArg<nsresult>(mRecorder,
-                                              &MediaRecorder::NotifyError, rv);
-      NS_DispatchToMainThread(runnable);
+      NS_DispatchToMainThread(NewRunnableMethod<nsresult>(mRecorder,
+                                                          &MediaRecorder::NotifyError, rv));
     }
     if (NS_FAILED(NS_DispatchToMainThread(new EncoderErrorNotifierRunnable(this)))) {
       MOZ_ASSERT(false, "NS_DispatchToMainThread EncoderErrorNotifierRunnable failed");
@@ -882,6 +886,7 @@ private:
         mReadThread->Shutdown();
         mReadThread = nullptr;
       }
+      nsContentUtils::UnregisterShutdownObserver(this);
       BreakCycle();
       Stop();
     }

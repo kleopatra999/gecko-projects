@@ -352,6 +352,13 @@ pref("media.apple.mp3.enabled", true);
 pref("media.apple.mp4.enabled", true);
 #endif
 
+// GMP storage version number. At startup we check the version against
+// media.gmp.storage.version.observed, and if the versions don't match,
+// we clear storage and set media.gmp.storage.version.observed=expected.
+// This provides a mechanism to clear GMP storage when non-compatible
+// changes are made.
+pref("media.gmp.storage.version.expected", 1);
+
 // Filter what triggers user notifications.
 // See DecoderDoctorDocumentWatcher::ReportAnalysis for details.
 pref("media.decoder-doctor.notifications-allowed", "MediaWidevineNoWMFNoSilverlight");
@@ -696,11 +703,7 @@ pref("gfx.font_rendering.wordcache.charlimit", 32);
 // cache shaped word results
 pref("gfx.font_rendering.wordcache.maxentries", 10000);
 
-#ifdef RELEASE_BUILD
-pref("gfx.font_rendering.graphite.enabled", false);
-#else
 pref("gfx.font_rendering.graphite.enabled", true);
-#endif
 
 #ifdef XP_WIN
 pref("gfx.font_rendering.directwrite.force-enabled", false);
@@ -881,7 +884,7 @@ pref("devtools.debugger.prompt-connection", true);
 // Block tools from seeing / interacting with certified apps
 pref("devtools.debugger.forbid-certified-apps", true);
 // List of permissions that a sideloaded app can't ask for
-pref("devtools.apps.forbidden-permissions", "embed-apps,engineering-mode,embed-widgets");
+pref("devtools.apps.forbidden-permissions", "embed-apps,embed-widgets");
 
 // DevTools default color unit
 pref("devtools.defaultColorUnit", "authored");
@@ -2037,6 +2040,9 @@ pref("security.csp.experimentalEnabled", false);
 
 // Default Content Security Policy to apply to privileged apps.
 pref("security.apps.privileged.CSP.default", "default-src * data: blob:; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
+
+// Default Content Security Policy to apply to signed contents.
+pref("security.signed_content.CSP.default", "script-src 'self'; style-src 'self'");
 
 // Mixed content blocking
 pref("security.mixed_content.block_active_content", false);
@@ -4570,6 +4576,11 @@ pref("alerts.showFavicons", false);
 
 // DOM full-screen API.
 pref("full-screen-api.enabled", false);
+#ifdef RELEASE_BUILD
+pref("full-screen-api.unprefix.enabled", false);
+#else
+pref("full-screen-api.unprefix.enabled", true);
+#endif
 pref("full-screen-api.allow-trusted-requests-only", true);
 pref("full-screen-api.pointer-lock.enabled", true);
 // transition duration of fade-to-black and fade-from-black, unit: ms
@@ -4938,9 +4949,6 @@ pref("dom.voicemail.enabled", false);
 // parameter omitted.
 pref("dom.voicemail.defaultServiceId", 0);
 
-// DOM Inter-App Communication API.
-pref("dom.inter-app-communication-api.enabled", false);
-
 // Disable mapped array buffer by default.
 pref("dom.mapped_arraybuffer.enabled", false);
 
@@ -5243,6 +5251,12 @@ pref("reader.errors.includeURLs", false);
 // The default relative font size in reader mode (1-9)
 pref("reader.font_size", 5);
 
+// The default relative content width in reader mode (1-9)
+pref("reader.content_width", 3);
+
+// The default relative line height in reader mode (1-9)
+pref("reader.line_height", 4);
+
 // The default color scheme in reader mode (light, dark, sepia, auto)
 // auto = color automatically adjusts according to ambient light level
 // (auto only works on platforms where the 'devicelight' event is enabled)
@@ -5330,3 +5344,10 @@ pref("dom.mozBrowserFramesEnabled", false);
 
 // Is support for 'color-adjust' CSS property enabled?
 pref("layout.css.color-adjust.enabled", true);
+
+// Disable Node.rootNode in release builds.
+#ifdef RELEASE_BUILD
+pref("dom.node.rootNode.enabled", false);
+#else
+pref("dom.node.rootNode.enabled", true);
+#endif

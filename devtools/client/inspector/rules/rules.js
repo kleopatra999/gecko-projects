@@ -7,12 +7,12 @@
 
 "use strict";
 
-const {Cc, Ci, Cu} = require("chrome");
+const {Cc, Ci} = require("chrome");
 const promise = require("promise");
 const Services = require("Services");
+const {XPCOMUtils} = require("resource://gre/modules/XPCOMUtils.jsm");
+const {Task} = require("resource://gre/modules/Task.jsm");
 const {Tools} = require("devtools/client/definitions");
-const {setTimeout, clearTimeout} =
-      Cu.import("resource://gre/modules/Timer.jsm", {});
 const {CssLogic} = require("devtools/shared/inspector/css-logic");
 const {ELEMENT_STYLE} = require("devtools/server/actors/styles");
 const {OutputParser} = require("devtools/client/shared/output-parser");
@@ -26,8 +26,6 @@ const {RuleEditor} =
 const {createChild, promiseWarn} =
       require("devtools/client/inspector/shared/utils");
 const {gDevTools} = require("devtools/client/framework/devtools");
-
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 loader.lazyRequireGetter(this, "overlays",
   "devtools/client/inspector/shared/style-inspector-overlays");
@@ -315,12 +313,12 @@ CssRuleView.prototype = {
         this.lastSelectorIcon = selectorIcon;
         this.highlightSelector(selector).then(() => {
           this.emit("ruleview-selectorhighlighter-toggled", true);
-        }, Cu.reportError);
+        }, e => console.error(e));
       } else {
         this.highlightedSelector = null;
         this.emit("ruleview-selectorhighlighter-toggled", false);
       }
-    }, Cu.reportError);
+    }, e => console.error(e));
   },
 
   highlightSelector: Task.async(function* (selector) {

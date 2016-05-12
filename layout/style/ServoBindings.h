@@ -62,6 +62,11 @@ ServoNodeData* Gecko_GetNodeData(RawGeckoNode* node);
 void Gecko_SetNodeData(RawGeckoNode* node, ServoNodeData* data);
 void Servo_DropNodeData(ServoNodeData* data);
 
+// Counter style.
+struct nsStyleList;
+void Gecko_SetListStyleType(nsStyleList* style_struct, uint32_t type);
+void Gecko_CopyListStyleTypeFrom(nsStyleList* dst, const nsStyleList* src);
+
 // Styleset and Stylesheet management.
 //
 // TODO: Make these return already_AddRefed and UniquePtr when the binding
@@ -90,10 +95,14 @@ ServoComputedValues* Servo_GetComputedValuesForPseudoElement(ServoComputedValues
                                                              nsIAtom* pseudo_tag,
                                                              RawServoStyleSet* set,
                                                              bool is_probe);
+ServoComputedValues* Servo_InheritComputedValues(ServoComputedValues* parent_style);
 void Servo_AddRefComputedValues(ServoComputedValues*);
 void Servo_ReleaseComputedValues(ServoComputedValues*);
 
-// Servo API.
+// Initialize Servo components. Should be called exactly once at startup.
+void Servo_Initialize();
+
+// Restyle the given document.
 void Servo_RestyleDocument(RawGeckoDocument* doc, RawServoStyleSet* set);
 
 // Style-struct management.

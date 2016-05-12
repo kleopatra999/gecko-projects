@@ -94,6 +94,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "Profiler",
 XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
                                   "resource://gre/modules/SimpleServiceDiscovery.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
+                                  "resource://gre/modules/ExtensionManagement.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
                                   "resource://gre/modules/CharsetMenu.jsm");
 
@@ -153,7 +156,7 @@ var lazilyLoadedObserverScripts = [
   ["Feedback", ["Feedback:Show"], "chrome://browser/content/Feedback.js"],
   ["SelectionHandler", ["TextSelection:Get"], "chrome://browser/content/SelectionHandler.js"],
   ["EmbedRT", ["GeckoView:ImportScript"], "chrome://browser/content/EmbedRT.js"],
-  ["Reader", ["Reader:FetchContent", "Reader:AddToCache", "Reader:RemoveFromCache"], "chrome://browser/content/Reader.js"],
+  ["Reader", ["Reader:AddToCache", "Reader:RemoveFromCache"], "chrome://browser/content/Reader.js"],
   ["PrintHelper", ["Print:PDF"], "chrome://browser/content/PrintHelper.js"],
 ];
 
@@ -384,6 +387,13 @@ var BrowserApp = {
     Services.obs.addObserver(this, "keyword-search", false);
     Services.obs.addObserver(this, "sessionstore-state-purge-complete", false);
     Services.obs.addObserver(this, "Fonts:Reload", false);
+    Services.obs.addObserver(this, "Vibration:Request", false);
+
+    // Register extension source files.
+    ExtensionManagement.registerScript("chrome://browser/content/ext-pageAction.js");
+
+    // Register extension schemas.
+    ExtensionManagement.registerSchema("chrome://browser/content/schemas/page_action.json");
 
     Messaging.addListener(this.getHistory.bind(this), "Session:GetHistory");
 
@@ -1948,6 +1958,31 @@ var BrowserApp = {
 
       case "Fonts:Reload":
         FontEnumerator.updateFontList();
+        break;
+
+      case "Vibration:Request":
+        if (aSubject instanceof Navigator) {
+          let navigator = aSubject;
+          let buttons = [
+            {
+              label: Strings.browser.GetStringFromName("vibrationRequest.denyButton"),
+              callback: function() {
+                navigator.setVibrationPermission(false);
+              }
+            },
+            {
+              label: Strings.browser.GetStringFromName("vibrationRequest.allowButton"),
+              callback: function() {
+                navigator.setVibrationPermission(true);
+              },
+              positive: true
+            }
+          ];
+          let message = Strings.browser.GetStringFromName("vibrationRequest.message");
+          let options = {};
+          NativeWindow.doorhanger.show(message, "vibration-request", buttons,
+              BrowserApp.selectedTab.id, options, "VIBRATION");
+        }
         break;
 
       default:
@@ -6798,6 +6833,21 @@ var Experiments = {
         }
       }
     });
+  },
+
+  setOverride(name, isEnabled) {
+    Messaging.sendRequest({
+      type: "Experiments:SetOverride",
+      name: name,
+      isEnabled: isEnabled
+    });
+  },
+
+  clearOverride(name) {
+    Messaging.sendRequest({
+      type: "Experiments:ClearOverride",
+      name: name
+    });
   }
 };
 
@@ -7212,7 +7262,7 @@ var Tabs = {
         if (["down", "unknown", "up"].indexOf(aData) == -1) {
           return;
         }
-        this.useCache = (aData != "up");
+        this.useCache = (aData === "down");
         break;
     }
   },
@@ -7232,7 +7282,14 @@ var Tabs = {
           let targetURI = targetDoc.documentURI;
           if (isTopLevel && !targetURI.startsWith("about:")) {
             UITelemetry.addEvent("neterror.1", "toast", null, "usecache");
-            Snackbars.show(Strings.browser.GetStringFromName("networkOffline.message"), Snackbars.LENGTH_INDEFINITE);
+            Snackbars.show(
+              Strings.browser.GetStringFromName("networkOffline.message2"),
+              Snackbars.LENGTH_INDEFINITE,
+              {
+                // link_blue
+                backgroundColor: "#0096DD"
+              }
+            );
           }
         }
         break;
@@ -7300,9 +7357,9 @@ var Tabs = {
     BrowserApp.tabs.forEach(function(tab) {
       if (tab.browser && tab.browser.docShell) {
         if (aUseCache) {
-          tab.browser.docShell.defaultLoadFlags &= ~Ci.nsIRequest.LOAD_FROM_CACHE;
-        } else {
           tab.browser.docShell.defaultLoadFlags |= Ci.nsIRequest.LOAD_FROM_CACHE;
+        } else {
+          tab.browser.docShell.defaultLoadFlags &= ~Ci.nsIRequest.LOAD_FROM_CACHE;
         }
       }
     });

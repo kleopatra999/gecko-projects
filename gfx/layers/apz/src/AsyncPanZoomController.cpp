@@ -71,6 +71,10 @@
 #include "SharedMemoryBasic.h"          // for SharedMemoryBasic
 #include "ScrollSnap.h"                 // for ScrollSnapUtils
 #include "WheelScrollAnimation.h"
+#if defined(MOZ_ANDROID_APZ)
+#include "GeneratedJNIWrappers.h"
+#include "FlingOverScrollerAnimation.h"
+#endif // defined(MOZ_ANDROID_APZ)
 
 #define ENABLE_APZC_LOGGING 0
 // #define ENABLE_APZC_LOGGING 1
@@ -220,7 +224,8 @@ using mozilla::gfx::PointTyped;
  * formula: v(t1) = v(t0) * (1 - f)^(t1 - t0), where v(t1) is the velocity
  * for a new sample, v(t0) is the velocity at the previous sample, f is the
  * value of this pref, and (t1 - t0) is the amount of time, in milliseconds,
- * that has elapsed between the two samples.
+ * that has elapsed between the two samples.\n
+ * NOTE: Not currently used in Android fling calculations.
  *
  * \li\b apz.fling_stop_on_tap_threshold
  * When flinging, if the velocity is above this number, then a tap on the
@@ -234,7 +239,9 @@ using mozilla::gfx::PointTyped;
  * When flinging, if the velocity goes below this number, we just stop the
  * animation completely. This is to prevent asymptotically approaching 0
  * velocity and rerendering unnecessarily.\n
- * Units: screen pixels per millisecond
+ * Units: screen pixels per millisecond.\n
+ * NOTE: Should not be set to anything
+ * other than 0.0 for Android except for tests to disable flings.
  *
  * \li\b apz.max_velocity_inches_per_ms
  * Maximum velocity.  Velocity will be capped at this value if a faster fling
@@ -436,6 +443,7 @@ private:
   AsyncPanZoomController::PanZoomState mInitialState;
 };
 
+#if !defined(MOZ_ANDROID_APZ)
 class FlingAnimation: public AsyncPanZoomAnimation {
 public:
   FlingAnimation(AsyncPanZoomController& aApzc,
@@ -516,9 +524,9 @@ public:
       //   is this one, then the SetState(NOTHING) in UpdateAnimation will
       //   stomp on the SetState(SNAP_BACK) it does.
       mDeferredTasks.AppendElement(
-            NewRunnableMethod(mOverscrollHandoffChain.get(),
-                              &OverscrollHandoffChain::SnapBackOverscrolledApzc,
-                              &mApzc));
+            NewRunnableMethod<AsyncPanZoomController*>(mOverscrollHandoffChain.get(),
+                                                       &OverscrollHandoffChain::SnapBackOverscrolledApzc,
+                                                       &mApzc));
       return false;
     }
 
@@ -568,11 +576,13 @@ public:
       // called after mMonitor is released.
       APZC_LOG("%p fling went into overscroll, handing off with velocity %s\n", &mApzc, Stringify(velocity).c_str());
       mDeferredTasks.AppendElement(
-            NewRunnableMethod(&mApzc,
-                              &AsyncPanZoomController::HandleFlingOverscroll,
-                              velocity,
-                              mOverscrollHandoffChain,
-                              mScrolledApzc));
+          NewRunnableMethod<ParentLayerPoint,
+                            RefPtr<const OverscrollHandoffChain>,
+                            RefPtr<const AsyncPanZoomController>>(&mApzc,
+                                                                  &AsyncPanZoomController::HandleFlingOverscroll,
+                                                                  velocity,
+                                                                  mOverscrollHandoffChain,
+                                                                  mScrolledApzc));
 
       // If there is a remaining velocity on this APZC, continue this fling
       // as well. (This fling and the handed-off fling will run concurrently.)
@@ -602,6 +612,7 @@ private:
   RefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
   RefPtr<const AsyncPanZoomController> mScrolledApzc;
 };
+#endif
 
 class ZoomAnimation: public AsyncPanZoomAnimation {
 public:
@@ -700,9 +711,7 @@ public:
       // The scroll snapping is done in a deferred task, otherwise the state
       // change to NOTHING caused by the overscroll animation ending would
       // clobber a possible state change to SMOOTH_SCROLL in ScrollSnap().
-      mDeferredTasks.AppendElement(
-            NewRunnableMethod(&mApzc,
-            &AsyncPanZoomController::ScrollSnap));
+      mDeferredTasks.AppendElement(NewRunnableMethod(&mApzc, &AsyncPanZoomController::ScrollSnap));
       return false;
     }
     return true;
@@ -819,9 +828,9 @@ public:
       // the lock ordering. Instead we schedule HandleSmoothScrollOverscroll() to be
       // called after mMonitor is released.
       mDeferredTasks.AppendElement(
-            NewRunnableMethod(&mApzc,
-                              &AsyncPanZoomController::HandleSmoothScrollOverscroll,
-                              velocity));
+          NewRunnableMethod<ParentLayerPoint>(&mApzc,
+                                              &AsyncPanZoomController::HandleSmoothScrollOverscroll,
+                                              velocity));
       return false;
     }
 
@@ -1750,7 +1759,7 @@ AsyncPanZoomController::CanScroll(const InputData& aEvent) const
     delta = GetScrollWheelDelta(aEvent.AsScrollWheelInput());
   } else if (aEvent.mInputType == PANGESTURE_INPUT) {
     const PanGestureInput& panInput = aEvent.AsPanGestureInput();
-    delta = ToParentLayerCoordinates(panInput.mPanDisplacement, panInput.mPanStartPoint);
+    delta = ToParentLayerCoordinates(panInput.UserMultipliedPanDisplacement(), panInput.mPanStartPoint);
   }
   if (!delta.x && !delta.y) {
     return false;
@@ -2019,19 +2028,27 @@ nsEventStatus AsyncPanZoomController::OnPan(const PanGestureInput& aEvent, bool 
     return OnPanBegin(aEvent);
   }
 
+  // Note that there is a multiplier that applies onto the "physical" pan
+  // displacement (how much the user's fingers moved) that produces the "logical"
+  // pan displacement (how much the page should move). For some of the code
+  // below it makes more sense to use the physical displacement rather than
+  // the logical displacement, and vice-versa.
+  ScreenPoint physicalPanDisplacement = aEvent.mPanDisplacement;
+  ParentLayerPoint logicalPanDisplacement = aEvent.UserMultipliedLocalPanDisplacement();
+
   // We need to update the axis velocity in order to get a useful display port
   // size and position. We need to do so even if this is a momentum pan (i.e.
   // aFingersOnTouchpad == false); in that case the "with touch" part is not
   // really appropriate, so we may want to rethink this at some point.
-  mX.UpdateWithTouchAtDevicePoint(aEvent.mLocalPanStartPoint.x, aEvent.mLocalPanDisplacement.x, aEvent.mTime);
-  mY.UpdateWithTouchAtDevicePoint(aEvent.mLocalPanStartPoint.y, aEvent.mLocalPanDisplacement.y, aEvent.mTime);
+  mX.UpdateWithTouchAtDevicePoint(aEvent.mLocalPanStartPoint.x, logicalPanDisplacement.x, aEvent.mTime);
+  mY.UpdateWithTouchAtDevicePoint(aEvent.mLocalPanStartPoint.y, logicalPanDisplacement.y, aEvent.mTime);
 
-  HandlePanningUpdate(aEvent.mPanDisplacement);
+  HandlePanningUpdate(physicalPanDisplacement);
 
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
       (uint32_t) ScrollInputMethod::ApzPanGesture);
 
-  ScreenPoint panDistance(fabs(aEvent.mPanDisplacement.x), fabs(aEvent.mPanDisplacement.y));
+  ScreenPoint panDistance(fabs(physicalPanDisplacement.x), fabs(physicalPanDisplacement.y));
   OverscrollHandoffState handoffState(
       *CurrentPanGestureBlock()->GetOverscrollHandoffChain(),
       panDistance,
@@ -2045,7 +2062,7 @@ nsEventStatus AsyncPanZoomController::OnPan(const PanGestureInput& aEvent, bool 
   // the motion of the scrolled contents, not of the scroll position, they need
   // to move in the opposite direction of the pan displacement.
   ParentLayerPoint startPoint = aEvent.mLocalPanStartPoint;
-  ParentLayerPoint endPoint = aEvent.mLocalPanStartPoint - aEvent.mLocalPanDisplacement;
+  ParentLayerPoint endPoint = aEvent.mLocalPanStartPoint - logicalPanDisplacement;
   CallDispatchScroll(startPoint, endPoint, handoffState);
 
   return nsEventStatus_eConsumeNoDefault;
@@ -2172,11 +2189,14 @@ nsEventStatus AsyncPanZoomController::GenerateSingleTap(const ScreenIntPoint& aP
       // the single tap message before the corresponding touch-up. To avoid that we
       // schedule the singletap message to run on the next spin of the event loop.
       // See bug 965381 for the issue this was causing.
-      controller->PostDelayedTask(
-        NewRunnableMethod(controller.get(), &GeckoContentController::HandleSingleTap,
-                          geckoScreenPoint, aModifiers,
-                          GetGuid()),
-        0);
+      RefPtr<Runnable> runnable =
+        NewRunnableMethod<CSSPoint,
+                          mozilla::Modifiers,
+                          ScrollableLayerGuid>(controller, &GeckoContentController::HandleSingleTap,
+                                               geckoScreenPoint, aModifiers,
+                                               GetGuid());
+
+      controller->PostDelayedTask(runnable.forget(), 0);
       return nsEventStatus_eConsumeNoDefault;
     }
   }
@@ -2599,10 +2619,25 @@ void AsyncPanZoomController::AcceptFling(FlingHandoffState& aHandoffState) {
   ScrollSnapToDestination();
   if (mState != SMOOTH_SCROLL) {
     SetState(FLING);
+#if defined(MOZ_ANDROID_APZ)
+    if (!mOverScroller) {
+      widget::sdk::OverScroller::LocalRef scroller;
+      if (widget::sdk::OverScroller::New(widget::GeckoAppShell::GetApplicationContext(), &scroller) != NS_OK) {
+        APZC_LOG("%p Failed to create Android OverScroller\n", this);
+        return;
+      }
+      mOverScroller = scroller;
+    }
+    FlingOverScrollerAnimation *fling = new FlingOverScrollerAnimation(*this,
+        mOverScroller,
+        aHandoffState.mChain,
+        aHandoffState.mScrolledApzc);
+#else
     FlingAnimation *fling = new FlingAnimation(*this,
         aHandoffState.mChain,
         !aHandoffState.mIsHandoff,  // only apply acceleration if this is an initial fling
         aHandoffState.mScrolledApzc);
+#endif
     StartAnimation(fling);
   }
 }
@@ -2984,7 +3019,7 @@ void AsyncPanZoomController::RequestContentRepaint() {
     // use the local variable to resolve the function overload.
     auto func = static_cast<void (AsyncPanZoomController::*)()>
         (&AsyncPanZoomController::RequestContentRepaint);
-    NS_DispatchToMainThread(NS_NewRunnableMethod(this, func));
+    NS_DispatchToMainThread(NewRunnableMethod(this, func));
     return;
   }
 
@@ -3510,8 +3545,10 @@ void AsyncPanZoomController::NotifyLayersUpdated(const ScrollMetadata& aScrollMe
     mScrollMetadata.SetLineScrollAmount(aScrollMetadata.GetLineScrollAmount());
     mScrollMetadata.SetPageScrollAmount(aScrollMetadata.GetPageScrollAmount());
     mScrollMetadata.SetSnapInfo(ScrollSnapInfo(aScrollMetadata.GetSnapInfo()));
-    mScrollMetadata.SetClipRect(aScrollMetadata.GetClipRect());
-    mScrollMetadata.SetMaskLayerIndex(aScrollMetadata.GetMaskLayerIndex());
+    // The scroll clip can differ between layers associated a given scroll frame,
+    // so APZC (which keeps a single copy of ScrollMetadata per scroll frame)
+    // has no business using it.
+    mScrollMetadata.SetScrollClip(Nothing());
     mScrollMetadata.SetIsLayersIdRoot(aScrollMetadata.IsLayersIdRoot());
     mScrollMetadata.SetUsesContainerScrolling(aScrollMetadata.UsesContainerScrolling());
     mFrameMetrics.SetIsScrollInfoLayer(aLayerMetrics.IsScrollInfoLayer());
@@ -3717,7 +3754,7 @@ void AsyncPanZoomController::ZoomToRect(CSSRect aRect, const uint32_t aFlags) {
       auto func = static_cast<void (AsyncPanZoomController::*)(const FrameMetrics&, const ParentLayerPoint&)>
           (&AsyncPanZoomController::RequestContentRepaint);
       NS_DispatchToMainThread(
-          NS_NewRunnableMethodWithArgs<FrameMetrics, ParentLayerPoint>(
+          NewRunnableMethod<FrameMetrics, ParentLayerPoint>(
               this, func, endZoomToMetrics, velocity));
     }
   }
@@ -3752,7 +3789,7 @@ AsyncPanZoomController::ResetTouchInputState()
   CancelAnimationAndGestureState();
   // Clear overscroll along the entire handoff chain, in case an APZC
   // later in the chain is overscrolled.
-  if (TouchBlockState* block = CurrentTouchBlock()) {
+  if (TouchBlockState* block = CurrentInputBlock()->AsTouchBlock()) {
     block->GetOverscrollHandoffChain()->ClearOverscroll();
   }
 }

@@ -260,8 +260,10 @@ class ShellPrincipals final : public JSPrincipals {
     }
 
     bool write(JSContext* cx, JSStructuredCloneWriter* writer) override {
-        MOZ_ASSERT(false, "not implemented");
-        return false;
+        // The shell doesn't have a read principals hook, so it doesn't really
+        // matter what we write here, but we have to write something so the
+        // fuzzer is happy.
+        return JS_WriteUint32Pair(writer, bits, 0);
     }
 
     static void destroy(JSPrincipals* principals) {
@@ -3952,22 +3954,6 @@ runOffThreadScript(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
-CompileOffThreadModule(JSContext* cx, const ReadOnlyCompileOptions& options,
-                       const char16_t* chars, size_t length,
-                       JS::OffThreadCompileCallback callback, void* callbackData)
-{
-    MOZ_ASSERT(JS::CanCompileOffThread(cx, options, length));
-    return StartOffThreadParseModule(cx, options, chars, length, callback, callbackData);
-}
-
-static JSObject*
-FinishOffThreadModule(JSContext* maybecx, JSRuntime* rt, void* token)
-{
-    MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
-    return HelperThreadState().finishModuleParseTask(maybecx, rt, token);
-}
-
-static bool
 OffThreadCompileModule(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -4020,8 +4006,8 @@ OffThreadCompileModule(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    if (!CompileOffThreadModule(cx, options, chars, length,
-                                OffThreadCompileScriptCallback, nullptr))
+    if (!JS::CompileOffThreadModule(cx, options, chars, length,
+                                    OffThreadCompileScriptCallback, nullptr))
     {
         offThreadState.abandon(cx);
         return false;
@@ -4046,7 +4032,7 @@ FinishOffThreadModule(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    RootedObject module(cx, FinishOffThreadModule(cx, rt, token));
+    RootedObject module(cx, JS::FinishOffThreadModule(cx, rt, token));
     if (!module)
         return false;
 
@@ -4839,9 +4825,8 @@ ReflectTrackedOptimizations(JSContext* cx, unsigned argc, Value* vp)
     gc::AutoSuppressGC suppress(cx);
 
     jit::JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
-    jit::JitcodeGlobalEntry entry;
     jit::IonScript* ion = fun->nonLazyScript()->ionScript();
-    table->lookupInfallible(ion->method()->raw(), &entry, rt);
+    jit::JitcodeGlobalEntry& entry = table->lookupInfallible(ion->method()->raw());
 
     if (!entry.hasTrackedOptimizations()) {
         JSObject* obj = JS_NewPlainObject(cx);
@@ -6631,9 +6616,6 @@ NewGlobalObject(JSContext* cx, JS::CompartmentOptions& options,
 
         /* Initialize FakeDOMObject.prototype */
         InitDOMObject(domProto);
-
-        if (!js::InitModuleClasses(cx, glob))
-            return nullptr;
     }
 
     JS_FireOnNewGlobalObject(cx, glob);

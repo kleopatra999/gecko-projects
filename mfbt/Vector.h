@@ -128,7 +128,7 @@ struct VectorImpl
    * aNewCap has not overflowed, and (2) multiplying aNewCap by sizeof(T) will
    * not overflow.
    */
-  static inline bool
+  static inline MOZ_MUST_USE bool
   growTo(Vector<T, N, AP>& aV, size_t aNewCap)
   {
     MOZ_ASSERT(!aV.usingInlineStorage());
@@ -215,7 +215,7 @@ struct VectorImpl<T, N, AP, true>
     }
   }
 
-  static inline bool
+  static inline MOZ_MUST_USE bool
   growTo(Vector<T, N, AP>& aV, size_t aNewCap)
   {
     MOZ_ASSERT(!aV.usingInlineStorage());
@@ -228,6 +228,20 @@ struct VectorImpl<T, N, AP, true>
     /* aV.mLength is unchanged. */
     aV.mCapacity = aNewCap;
     return true;
+  }
+
+  static inline void
+  podResizeToFit(Vector<T, N, AP>& aV)
+  {
+    if (aV.usingInlineStorage() || aV.mLength == aV.mCapacity) {
+      return;
+    }
+    T* newbuf = aV.template pod_realloc<T>(aV.mBegin, aV.mCapacity, aV.mLength);
+    if (MOZ_UNLIKELY(!newbuf)) {
+      return;
+    }
+    aV.mBegin = newbuf;
+    aV.mCapacity = aV.mLength;
   }
 };
 
@@ -558,6 +572,13 @@ public:
 
   /** Clears and releases any heap-allocated storage. */
   void clearAndFree();
+
+  /**
+   * Calls the AllocPolicy's pod_realloc to release excess capacity. Since
+   * realloc is only safe on PODs, this method fails to compile if IsPod<T>
+   * is false.
+   */
+  void podResizeToFit();
 
   /**
    * If true, appending |aNeeded| elements won't reallocate elements storage.
@@ -1101,6 +1122,15 @@ Vector<T, N, AP>::clearAndFree()
 #ifdef DEBUG
   mReserved = 0;
 #endif
+}
+
+template<typename T, size_t N, class AP>
+inline void
+Vector<T, N, AP>::podResizeToFit()
+{
+  // This function is only defined if IsPod is true and will fail to compile
+  // otherwise.
+  Impl::podResizeToFit(*this);
 }
 
 template<typename T, size_t N, class AP>

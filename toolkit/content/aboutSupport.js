@@ -14,6 +14,8 @@ Cu.import("resource://gre/modules/AppConstants.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesDBUtils",
+                                  "resource://gre/modules/PlacesDBUtils.jsm");
 
 window.addEventListener("load", function onload(event) {
   try {
@@ -438,9 +440,29 @@ var snapshotFormatters = {
           if (entry.type == "default" && entry.status == "available")
             continue;
 
-          let text = entry.status + " by " + entry.type + ": " + entry.message;
+          let contents;
+          if (entry.message.length > 0 && entry.message[0] == "#") {
+            // This is a failure ID. See nsIGfxInfo.idl.
+            let m;
+            if (m = /#BLOCKLIST_FEATURE_FAILURE_BUG_(\d+)/.exec(entry.message)) {
+              let bugSpan = $.new("span");
+              bugSpan.textContent = strings.GetStringFromName("blocklistedBug") + "; ";
+
+              let bugHref = $.new("a");
+              bugHref.href = "https://bugzilla.mozilla.org/show_bug.cgi?id=" + m[1];
+              bugHref.textContent = strings.formatStringFromName("bugLink", [m[1]], 1);
+
+              contents = [bugSpan, bugHref];
+            } else {
+              contents = strings.formatStringFromName(
+                "unknownFailure", [entry.message.substr(1)], 1);
+            }
+          } else {
+            contents = entry.status + " by " + entry.type + ": " + entry.message;
+          }
+
           trs.push($.new("tr", [
-            $.new("td", text),
+            $.new("td", contents),
           ]));
         }
         addRow("decisions", feature.name, [$.new("table", trs)]);
@@ -455,6 +477,30 @@ var snapshotFormatters = {
       }
     } else {
       $("graphics-workarounds-tbody").style.display = "none";
+    }
+
+    let crashGuards = data.crashGuards;
+    delete data.crashGuards;
+
+    if (crashGuards.length) {
+      for (let guard of crashGuards) {
+        let resetButton = $.new("button");
+        let onClickReset = (function (guard) {
+          // Note - need this wrapper until bug 449811 fixes |guard| scoping.
+          return function () {
+            Services.prefs.setIntPref(guard.prefName, 0);
+            resetButton.removeEventListener("click", onClickReset);
+            resetButton.disabled = true;
+          };
+        })(guard);
+
+        resetButton.textContent = strings.GetStringFromName("resetOnNextRestart");
+        resetButton.addEventListener("click", onClickReset);
+
+        addRow("crashguards", guard.type + "CrashGuard", [resetButton]);
+      }
+    } else {
+      $("graphics-crashguards-tbody").style.display = "none";
     }
 
     // Now that we're done, grab any remaining keys in data and drop them into
@@ -919,5 +965,13 @@ function setupEventListeners(){
     else {
       safeModeRestart();
     }
+  });
+  $("verify-place-integrity-button").addEventListener("click", function (event){
+    PlacesDBUtils.checkAndFixDatabase(function(aLog) {
+      let msg = aLog.join("\n");
+      $("verify-place-result").style.display = "block";
+      $("verify-place-result").classList.remove("no-copy");
+      $("verify-place-result").textContent = msg;
+    });
   });
 }

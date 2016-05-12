@@ -683,7 +683,7 @@ nsDOMWindowUtils::SendPointerEventCommon(const nsAString& aType,
   event.tiltX = aTiltX;
   event.tiltY = aTiltY;
   event.isPrimary = (nsIDOMMouseEvent::MOZ_SOURCE_MOUSE == aInputSourceArg) ? true : aIsPrimary;
-  event.clickCount = aClickCount;
+  event.mClickCount = aClickCount;
   event.mTime = PR_IntervalNow();
   event.mFlags.mIsSynthesizedForTests = aOptionalArgCount >= 10 ? aIsSynthesized : true;
 
@@ -694,7 +694,7 @@ nsDOMWindowUtils::SendPointerEventCommon(const nsAString& aType,
 
   event.mRefPoint =
     nsContentUtils::ToWidgetPoint(CSSPoint(aX, aY), offset, presContext);
-  event.ignoreRootScrollFrame = aIgnoreRootScrollFrame;
+  event.mIgnoreRootScrollFrame = aIgnoreRootScrollFrame;
 
   nsEventStatus status;
   if (aToWindow) {
@@ -1008,7 +1008,7 @@ nsDOMWindowUtils::SendNativeKeyEvent(int32_t aNativeKeyboardLayout,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <int32_t, int32_t, uint32_t, nsString, nsString, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeKeyEvent, aNativeKeyboardLayout,
     aNativeKeyCode, aModifiers, aCharacters, aUnmodifiedCharacters, aObserver));
@@ -1028,7 +1028,7 @@ nsDOMWindowUtils::SendNativeMouseEvent(int32_t aScreenX,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <LayoutDeviceIntPoint, int32_t, int32_t, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeMouseEvent,
     LayoutDeviceIntPoint(aScreenX, aScreenY), aNativeMessage, aModifierFlags,
@@ -1047,7 +1047,7 @@ nsDOMWindowUtils::SendNativeMouseMove(int32_t aScreenX,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <LayoutDeviceIntPoint, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeMouseMove,
     LayoutDeviceIntPoint(aScreenX, aScreenY), aObserver));
@@ -1072,7 +1072,7 @@ nsDOMWindowUtils::SendNativeMouseScrollEvent(int32_t aScreenX,
     return NS_ERROR_FAILURE;
   }
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <mozilla::LayoutDeviceIntPoint, uint32_t, double, double, double, uint32_t, uint32_t, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeMouseScrollEvent,
     LayoutDeviceIntPoint(aScreenX, aScreenY), aNativeMessage, aDeltaX, aDeltaY,
@@ -1098,7 +1098,7 @@ nsDOMWindowUtils::SendNativeTouchPoint(uint32_t aPointerId,
     return NS_ERROR_INVALID_ARG;
   }
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <uint32_t, nsIWidget::TouchPointerState, LayoutDeviceIntPoint, double, uint32_t, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeTouchPoint, aPointerId,
     (nsIWidget::TouchPointerState)aTouchState,
@@ -1118,7 +1118,7 @@ nsDOMWindowUtils::SendNativeTouchTap(int32_t aScreenX,
     return NS_ERROR_FAILURE;
   }
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs
+  NS_DispatchToMainThread(NewRunnableMethod
     <LayoutDeviceIntPoint, bool, nsIObserver*>
     (widget, &nsIWidget::SynthesizeNativeTouchTap,
     LayoutDeviceIntPoint(aScreenX, aScreenY), aLongTap, aObserver));
@@ -1133,7 +1133,7 @@ nsDOMWindowUtils::ClearNativeTouchSequence(nsIObserver* aObserver)
     return NS_ERROR_FAILURE;
   }
 
-  NS_DispatchToMainThread(NS_NewRunnableMethodWithArgs<nsIObserver*>
+  NS_DispatchToMainThread(NewRunnableMethod<nsIObserver*>
     (widget, &nsIWidget::ClearNativeTouchSequence, aObserver));
   return NS_OK;
 }
@@ -1295,9 +1295,9 @@ nsDOMWindowUtils::SendSimpleGestureEvent(const nsAString& aType,
 
   WidgetSimpleGestureEvent event(true, msg, widget);
   event.mModifiers = nsContentUtils::GetWidgetModifiers(aModifiers);
-  event.direction = aDirection;
-  event.delta = aDelta;
-  event.clickCount = aClickCount;
+  event.mDirection = aDirection;
+  event.mDelta = aDelta;
+  event.mClickCount = aClickCount;
   event.mTime = PR_IntervalNow();
 
   nsPresContext* presContext = GetPresContext();
@@ -2503,7 +2503,7 @@ nsDOMWindowUtils::ComputeAnimationDistance(nsIDOMElement* aElement,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCSSProperty property =
-    nsCSSProps::LookupProperty(aProperty, nsCSSProps::eIgnoreEnabledState);
+    nsCSSProps::LookupProperty(aProperty, CSSEnabledState::eIgnoreEnabledState);
   if (property != eCSSProperty_UNKNOWN && nsCSSProps::IsShorthand(property)) {
     property = eCSSProperty_UNKNOWN;
   }
@@ -3667,22 +3667,22 @@ nsDOMWindowUtils::PostRestyleSelfEvent(nsIDOMElement* aElement)
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetMediaSuspended(bool* aSuspended)
+nsDOMWindowUtils::GetMediaSuspend(uint32_t* aSuspend)
 {
   nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  *aSuspended = window->GetMediaSuspended();
+  *aSuspend = window->GetMediaSuspend();
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::SetMediaSuspended(bool aSuspended)
+nsDOMWindowUtils::SetMediaSuspend(uint32_t aSuspend)
 {
   nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  window->SetMediaSuspended(aSuspended);
+  window->SetMediaSuspend(aSuspend);
   return NS_OK;
 }
 
@@ -3779,6 +3779,18 @@ nsDOMWindowUtils::AskPermission(nsIContentPermissionRequest* aRequest)
 {
   nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
   return nsContentPermissionUtils::AskPermission(aRequest, window->GetCurrentInnerWindow());
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetElementsRestyled(uint64_t* aResult)
+{
+  nsPresContext* presContext = GetPresContext();
+  if (!presContext) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  *aResult = presContext->ElementsRestyledCount();
+  return NS_OK;
 }
 
 NS_IMETHODIMP
