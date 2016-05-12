@@ -573,6 +573,7 @@ this.SocialService = {
 
     let options = {
                     learnMoreURL: Services.urlFormatter.formatURLPref("app.support.baseURL") + "social-api",
+                    persistent: true,
                   };
     let anchor = "servicesInstall-notification-icon";
     let notificationid = "servicesInstall";

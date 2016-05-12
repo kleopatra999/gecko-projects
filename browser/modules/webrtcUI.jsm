@@ -361,6 +361,7 @@ function prompt(aBrowser, aRequest) {
   }
 
   let options = {
+    persistent: true,
     eventCallback: function(aTopic, aNewBrowser) {
       if (aTopic == "swapping")
         return true;

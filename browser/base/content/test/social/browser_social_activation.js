@@ -133,28 +133,26 @@ function clickAddonRemoveButton(tab, aCallback) {
 
 function activateOneProvider(manifest, finishActivation, aCallback) {
   let panel = document.getElementById("servicesInstall-notification");
-  PopupNotifications.panel.addEventListener("popupshown", function onpopupshown() {
-    PopupNotifications.panel.removeEventListener("popupshown", onpopupshown);
+  ensureEventFired(PopupNotifications.panel, "popupshown").then(() => {
     ok(!panel.hidden, "servicesInstall-notification panel opened");
+    ensureEventFired(PopupNotifications.panel, "popuphidden").then(() => {
+      ok(panel.hidden, "servicesInstall-notification panel hidden");
+      if (!finishActivation) {
+        ok(panel.hidden, "activation panel is not showing");
+        executeSoon(aCallback);
+      } else {
+        waitForProviderLoad(function() {
+          is(SocialSidebar.provider.origin, manifest.origin, "new provider is active");
+          ok(SocialSidebar.opened, "sidebar is open");
+          checkSocialUI();
+          executeSoon(aCallback);
+        });
+      }
+    });
     if (finishActivation)
       panel.button.click();
     else
       panel.closebutton.click();
-  });
-  PopupNotifications.panel.addEventListener("popuphidden", function _hidden() {
-    PopupNotifications.panel.removeEventListener("popuphidden", _hidden);
-    ok(panel.hidden, "servicesInstall-notification panel hidden");
-    if (!finishActivation) {
-      ok(panel.hidden, "activation panel is not showing");
-      executeSoon(aCallback);
-    } else {
-      waitForProviderLoad(function() {
-        is(SocialSidebar.provider.origin, manifest.origin, "new provider is active");
-        ok(SocialSidebar.opened, "sidebar is open");
-        checkSocialUI();
-        executeSoon(aCallback);
-      });
-    }
   });
 
   // the test will continue as the popup events fire...

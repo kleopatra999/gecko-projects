@@ -2667,6 +2667,7 @@ ContentPermissionPrompt.prototype = {
     if (!aOptions)
       aOptions = {};
     aOptions.displayURI = requestPrincipal.URI;
+    aOptions.persistent = true;
 
     return chromeWin.PopupNotifications.show(browser, aNotificationId, aMessage, aAnchorId,
                                              mainAction, secondaryActions, aOptions);
@@ -3192,6 +3193,7 @@ var E10SAccessibilityCheck = {
     let options = {
       popupIconURL: "chrome://browser/skin/e10s-64@2x.png",
       learnMoreURL: Services.urlFormatter.formatURLPref("app.support.e10sAccessibilityUrl"),
+      persistent: true,
       persistWhileVisible: true,
       hideNotNow: true,
     };
