@@ -7,9 +7,6 @@
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
 
-const PREF_APP_UPDATE_CANCELATIONS_OSX = "app.update.cancelations.osx";
-const PREF_APP_UPDATE_ELEVATE_NEVER    = "app.update.elevate.never";
-
 XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
                                   "resource://gre/modules/UpdateUtils.jsm");
 
