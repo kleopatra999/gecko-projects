@@ -146,18 +146,32 @@ bool ObtainUpdaterArguments(int* argc, char*** argv)
 
   id updateServer = nil;
   @try {
-    updateServer = (id)[NSConnection
-      rootProxyForConnectionWithRegisteredName:
-        @"org.mozilla.updater.server"
-      host:nil
-      usingNameServer:[NSSocketPortNameServer sharedInstance]];
-    if (!updateServer ||
-        ![updateServer respondsToSelector:@selector(getArguments)] ||
-        ![updateServer respondsToSelector:@selector(shutdown)]) {
-      NSLog(@"Server doesn't exist or doesn't provide correct selectors.");
-      // Let's try our best and clean up.
-      CleanupElevatedMacUpdate(true);
-      return false; // Won't actually get here due to CleanupElevatedMacUpdate.
+    BOOL isConnected = NO;
+    int currTry = 0;
+    const int numRetries = 10; // Number of IPC connection retries before
+                               // giving up.
+    while (!isConnected) {
+      updateServer = (id)[NSConnection
+        rootProxyForConnectionWithRegisteredName:
+          @"org.mozilla.updater.server"
+        host:nil
+        usingNameServer:[NSSocketPortNameServer sharedInstance]];
+      if (!updateServer ||
+          ![updateServer respondsToSelector:@selector(getArguments)] ||
+          ![updateServer respondsToSelector:@selector(shutdown)]) {
+        NSLog(@"Server doesn't exist or doesn't provide correct selectors.");
+        if (currTry >= numRetries) {
+          // We've exceeded the number of permissible connection retry attempts.
+          // Let's try our best and clean up.
+          CleanupElevatedMacUpdate(true);
+          return false; // Won't actually get here due to
+                        // CleanupElevatedMacUpdate.
+        }
+        sleep(1); // Wait 1 second.
+        currTry++;
+      } else {
+        isConnected = YES;
+      }
     }
     NSArray* updaterArguments =
       [updateServer performSelector:@selector(getArguments)];
