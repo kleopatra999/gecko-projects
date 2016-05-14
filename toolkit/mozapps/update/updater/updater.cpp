@@ -53,9 +53,6 @@
 #include <algorithm>
 
 #include "updatelogging.h"
-#ifdef XP_MACOSX
-#include "updaterfileutils_osx.h"
-#endif // XP_MACOSX
 
 #include "mozilla/Compiler.h"
 #include "mozilla/Types.h"
@@ -76,19 +73,8 @@
 
 #if defined(XP_MACOSX)
 // These functions are defined in launchchild_osx.mm
-void CleanupElevatedMacUpdate(bool aFailureOccurred);
-bool IsOwnedByGroupAdmin(const char* aAppBundle);
-bool IsRecursivelyWritable(const char* aPath);
-void LaunchChild(int argc, const char** argv);
+void LaunchChild(int argc, char **argv);
 void LaunchMacPostProcess(const char* aAppBundle);
-bool ObtainUpdaterArguments(int* argc, char*** argv);
-bool ServeElevatedUpdate(int argc, const char** argv);
-void SetGroupOwnershipAndPermissions(const char* aAppBundle);
-struct UpdateServerThreadArgs
-{
-  int argc;
-  const NS_tchar** argv;
-};
 #endif
 
 #ifndef _O_BINARY
@@ -2009,7 +1995,7 @@ LaunchCallbackApp(const NS_tchar *workingDir,
 #if defined(USE_EXECV)
   execv(argv[0], argv);
 #elif defined(XP_MACOSX)
-  LaunchChild(argc, (const char**)argv);
+  LaunchChild(argc, argv);
 #elif defined(XP_WIN)
   // Do not allow the callback to run when running an update through the
   // service as session 0.  The unelevated updater.exe will do the launching.
@@ -2532,94 +2518,8 @@ UpdateThreadFunc(void *param)
   QuitProgressUI();
 }
 
-#ifdef XP_MACOSX
-static void
-ServeElevatedUpdateThreadFunc(void* param)
-{
-  UpdateServerThreadArgs* threadArgs = (UpdateServerThreadArgs*)param;
-  gSucceeded = ServeElevatedUpdate(threadArgs->argc, threadArgs->argv);
-  if (!gSucceeded) {
-    WriteStatusFile(ELEVATION_CANCELED);
-  }
-  QuitProgressUI();
-}
-
-void freeArguments(int argc, char** argv)
-{
-  for (int i = 0; i < argc; i++) {
-    free(argv[i]);
-  }
-  free(argv);
-}
-#endif
-
-int LaunchCallbackAndPostProcessApps(int argc, NS_tchar** argv,
-                                     int callbackIndex
-#if defined(XP_WIN)
-                                     , const WCHAR* elevatedLockFilePath
-                                     , HANDLE updateLockFileHandle
-#endif /* XP_WIN */
-#ifdef XP_MACOSX
-                                     , bool isElevated
-#endif /* XP_MACOSX */
-                                     )
-{
-  if (argc > callbackIndex) {
-#if defined(XP_WIN)
-    if (gSucceeded) {
-      if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
-        fprintf(stderr, "The post update process was not launched");
-      }
-
-      // The service update will only be executed if it is already installed.
-      // For first time installs of the service, the install will happen from
-      // the PostUpdate process. We do the service update process here
-      // because it's possible we are updating with updater.exe without the
-      // service if the service failed to apply the update. We want to update
-      // the service to a newer version in that case. If we are not running
-      // through the service, then MOZ_USING_SERVICE will not exist.
-      if (!sUsingService) {
-        StartServiceUpdate(gInstallDirPath);
-      }
-    }
-    EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 0);
-#elif XP_MACOSX
-    if (!isElevated) {
-      if (gSucceeded) {
-        LaunchMacPostProcess(gInstallDirPath);
-      }
-#endif
-
-    LaunchCallbackApp(argv[5],
-                      argc - callbackIndex,
-                      argv + callbackIndex,
-                      sUsingService);
-#ifdef XP_MACOSX
-    } // if (!isElevated)
-#endif /* XP_MACOSX */
-  }
-  return 0;
-}
-
 int NS_main(int argc, NS_tchar **argv)
 {
-  // The callback is the remaining arguments starting at callbackIndex.
-  // The argument specified by callbackIndex is the callback executable and the
-  // argument prior to callbackIndex is the working directory.
-  const int callbackIndex = 6;
-
-#ifdef XP_MACOSX
-  bool isElevated =
-    strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") != 0;
-  if (isElevated) {
-    if (!ObtainUpdaterArguments(&argc, &argv)) {
-      // Won't actually get here because ObtainUpdaterArguments will terminate
-      // the current process on failure.
-      return 1;
-    }
-  }
-#endif
-
 #if defined(MOZ_WIDGET_GONK)
   if (EnvHasValue("LD_PRELOAD")) {
     // If the updater is launched with LD_PRELOAD set, then we wind up
@@ -2651,6 +2551,40 @@ int NS_main(int argc, NS_tchar **argv)
     _exit(1);
   }
 #endif
+
+  InitProgressUI(&argc, &argv);
+
+  // To process an update the updater command line must at a minimum have the
+  // directory path containing the updater.mar file to process as the first
+  // argument, the install directory as the second argument, and the directory
+  // to apply the update to as the third argument. When the updater is launched
+  // by another process the PID of the parent process should be provided in the
+  // optional fourth argument and the updater will wait on the parent process to
+  // exit if the value is non-zero and the process is present. This is necessary
+  // due to not being able to update files that are in use on Windows. The
+  // optional fifth argument is the callback's working directory and the
+  // optional sixth argument is the callback path. The callback is the
+  // application to launch after updating and it will be launched when these
+  // arguments are provided whether the update was successful or not. All
+  // remaining arguments are optional and are passed to the callback when it is
+  // launched.
+  if (argc < 4) {
+    fprintf(stderr, "Usage: updater patch-dir install-dir apply-to-dir [wait-pid [callback-working-dir callback-path args...]]\n");
+    return 1;
+  }
+
+  // The directory containing the update information.
+  gPatchDirPath = argv[1];
+  // The directory we're going to update to.
+  // We copy this string because we need to remove trailing slashes.  The C++
+  // standard says that it's always safe to write to strings pointed to by argv
+  // elements, but I don't necessarily believe it.
+  NS_tstrncpy(gInstallDirPath, argv[2], MAXPATHLEN);
+  gInstallDirPath[MAXPATHLEN - 1] = NS_T('\0');
+  NS_tchar *slash = NS_tstrrchr(gInstallDirPath, NS_SLASH);
+  if (slash && !slash[1]) {
+    *slash = NS_T('\0');
+  }
 
 #ifdef XP_WIN
   bool useService = false;
@@ -2710,71 +2644,6 @@ int NS_main(int argc, NS_tchar **argv)
     }
   }
 
-  // The directory containing the update information.
-  gPatchDirPath = argv[1];
-
-#ifdef XP_MACOSX
-  if (!isElevated) {
-    InitProgressUI(&argc, &argv);
-    if (!IsRecursivelyWritable(argv[2])) {
-      // If the app directory isn't recursively writeable, an elevated update is
-      // required.
-      UpdateServerThreadArgs threadArgs;
-      threadArgs.argc = argc;
-      threadArgs.argv = const_cast<const NS_tchar**>(argv);
-
-      Thread t1;
-      if (t1.Run(ServeElevatedUpdateThreadFunc, &threadArgs) == 0) {
-        // Show an indeterminate progress bar while an elevated update is in
-        // progress.
-        ShowProgressUI(true);
-      }
-      t1.Join();
-
-      LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false);
-      return gSucceeded ? 0 : 1;
-    }
-  }
-#elif
-  InitProgressUI(&argc, &argv);
-#endif
-
-  // To process an update the updater command line must at a minimum have the
-  // directory path containing the updater.mar file to process as the first
-  // argument, the install directory as the second argument, and the directory
-  // to apply the update to as the third argument. When the updater is launched
-  // by another process the PID of the parent process should be provided in the
-  // optional fourth argument and the updater will wait on the parent process to
-  // exit if the value is non-zero and the process is present. This is necessary
-  // due to not being able to update files that are in use on Windows. The
-  // optional fifth argument is the callback's working directory and the
-  // optional sixth argument is the callback path. The callback is the
-  // application to launch after updating and it will be launched when these
-  // arguments are provided whether the update was successful or not. All
-  // remaining arguments are optional and are passed to the callback when it is
-  // launched.
-  if (argc < 4) {
-    fprintf(stderr, "Usage: updater patch-dir install-dir apply-to-dir [wait-pid [callback-working-dir callback-path args...]]\n");
-#ifdef XP_MACOSX
-    if (isElevated) {
-      freeArguments(argc, argv);
-      CleanupElevatedMacUpdate(true);
-    }
-#endif
-    return 1;
-  }
-
-  // The directory we're going to update to.
-  // We copy this string because we need to remove trailing slashes.  The C++
-  // standard says that it's always safe to write to strings pointed to by argv
-  // elements, but I don't necessarily believe it.
-  NS_tstrncpy(gInstallDirPath, argv[2], MAXPATHLEN);
-  gInstallDirPath[MAXPATHLEN - 1] = NS_T('\0');
-  NS_tchar *slash = NS_tstrrchr(gInstallDirPath, NS_SLASH);
-  if (slash && !slash[1]) {
-    *slash = NS_T('\0');
-  }
-
   // The directory we're going to update to.
   // We copy this string because we need to remove trailing slashes.  The C++
   // standard says that it's always safe to write to strings pointed to by argv
@@ -2814,12 +2683,6 @@ int NS_main(int argc, NS_tchar **argv)
 
   if (!WriteStatusFile("applying")) {
     LOG(("failed setting status to 'applying'"));
-#ifdef XP_MACOSX
-    if (isElevated) {
-      freeArguments(argc, argv);
-      CleanupElevatedMacUpdate(true);
-    }
-#endif
     return 1;
   }
 
@@ -2914,6 +2777,11 @@ int NS_main(int argc, NS_tchar **argv)
     }
 #endif
   }
+
+  // The callback is the remaining arguments starting at callbackIndex.
+  // The argument specified by callbackIndex is the callback executable and the
+  // argument prior to callbackIndex is the working directory.
+  const int callbackIndex = 6;
 
 #if defined(XP_WIN)
 #ifdef MOZ_MAINTENANCE_SERVICE
@@ -3250,22 +3118,10 @@ int NS_main(int argc, NS_tchar **argv)
         // Try changing the current directory again
         if (NS_tchdir(gWorkingDirPath) != 0) {
           // OK, time to give up!
-#ifdef XP_MACOSX
-          if (isElevated) {
-            freeArguments(argc, argv);
-            CleanupElevatedMacUpdate(true);
-          }
-#endif
           return 1;
         }
       } else {
         // Failed to create the directory, bail out
-#ifdef XP_MACOSX
-        if (isElevated) {
-          freeArguments(argc, argv);
-          CleanupElevatedMacUpdate(true);
-        }
-#endif
         return 1;
       }
     }
@@ -3478,17 +3334,12 @@ int NS_main(int argc, NS_tchar **argv)
   }
 #endif /* XP_WIN */
 
-  // Run update process on a background thread. ShowProgressUI may return
+  // Run update process on a background thread.  ShowProgressUI may return
   // before QuitProgressUI has been called, so wait for UpdateThreadFunc to
-  // terminate. Avoid showing the progress UI when staging an update, or if this
-  // is an elevated process on OSX.
+  // terminate.  Avoid showing the progress UI when staging an update.
   Thread t;
   if (t.Run(UpdateThreadFunc, nullptr) == 0) {
-    if (!sStagedUpdate && !sReplaceRequest
-#ifdef XP_MACOSX
-        && !isElevated
-#endif
-       ) {
+    if (!sStagedUpdate && !sReplaceRequest) {
       ShowProgressUI();
     }
   }
@@ -3567,32 +3418,43 @@ int NS_main(int argc, NS_tchar **argv)
       }
     }
   }
-
-  if (isElevated) {
-    SetGroupOwnershipAndPermissions(gInstallDirPath);
-    freeArguments(argc, argv);
-    CleanupElevatedMacUpdate(false);
-  } else if (IsOwnedByGroupAdmin(gInstallDirPath)) {
-    // If the group ownership of the Firefox .app bundle was set to the "admin"
-    // group during a previous elevated update, we need to ensure that all files
-    // in the bundle have group ownership of "admin" as well as write permission
-    // for the group to not break updates in the future.
-    SetGroupOwnershipAndPermissions(gInstallDirPath);
-  }
 #endif /* XP_MACOSX */
 
   LogFinish();
 
-  int retVal = LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex
-#ifdef XP_WIN
-                                                , elevatedLockFilePath
-                                                , updateLockFileHandle
-#elif XP_MACOSX
-                                                , isElevated
-#endif
-                                               );
+  if (argc > callbackIndex) {
+#if defined(XP_WIN)
+    if (gSucceeded) {
+      if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
+        fprintf(stderr, "The post update process was not launched");
+      }
 
-  return retVal ? retVal : (gSucceeded ? 0 : 1);
+      // The service update will only be executed if it is already installed.
+      // For first time installs of the service, the install will happen from
+      // the PostUpdate process. We do the service update process here
+      // because it's possible we are updating with updater.exe without the
+      // service if the service failed to apply the update. We want to update
+      // the service to a newer version in that case. If we are not running
+      // through the service, then MOZ_USING_SERVICE will not exist.
+      if (!sUsingService) {
+        StartServiceUpdate(gInstallDirPath);
+      }
+    }
+    EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 0);
+#endif /* XP_WIN */
+#ifdef XP_MACOSX
+    if (gSucceeded) {
+      LaunchMacPostProcess(gInstallDirPath);
+    }
+#endif /* XP_MACOSX */
+
+    LaunchCallbackApp(argv[5],
+                      argc - callbackIndex,
+                      argv + callbackIndex,
+                      sUsingService);
+  }
+
+  return gSucceeded ? 0 : 1;
 }
 
 class ActionList
