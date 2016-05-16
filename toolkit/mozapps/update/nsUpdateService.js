@@ -1996,6 +1996,8 @@ UpdateService.prototype = {
           Services.obs.removeObserver(this,
                                       APPID_TO_TOPIC[Services.appinfo.ID]);
         }
+        // intentional fallthrough
+      case "mochitest-app-startup-finished":
         // Clean up any extant updates
         this._postUpdateProcessing();
         break;

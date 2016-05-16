@@ -137,6 +137,13 @@ XPCOMUtils.defineLazyGetter(this, "gZipW", function test_gZipW() {
          createInstance(Ci.nsIZipWriter);
 });
 
+function signalAppStartupFinished() {
+  let aus = Cc["@mozilla.org/updates/update-service;1"].
+            getService(Ci.nsIApplicationUpdateService).
+            QueryInterface(Ci.nsIObserver);
+  aus.observe(null, "mochitest-app-startup-finished", "");
+}
+
 /* Initializes the update service stub */
 function initUpdateServiceStub() {
   Cc["@mozilla.org/updates/update-service-stub;1"].
