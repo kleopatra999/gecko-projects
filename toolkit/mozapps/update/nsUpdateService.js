@@ -1980,23 +1980,21 @@ UpdateService.prototype = {
   observe: function AUS_observe(subject, topic, data) {
     switch (topic) {
       case "post-update-processing":
-        let appInfoID1 = Cc["@mozilla.org/xre/app-info;1"]
-                           .getService(Ci.nsIXULAppInfo).ID;
-        if (appInfoID1 in APPID_TO_TOPIC) {
+        if (Services.appinfo.ID in APPID_TO_TOPIC) {
           // Delay post-update processing to ensure that possible update
           // dialogs are shown in front of the app window, if possible.
           // See bug 311614.
-          Services.obs.addObserver(this, APPID_TO_TOPIC[appInfoID1], false);
+          Services.obs.addObserver(this, APPID_TO_TOPIC[Services.appinfo.ID],
+                                   false);
           break;
         }
         // intentional fallthrough
       case "sessionstore-windows-restored":
       case "mail-startup-done":
       case "xul-window-visible":
-        let appInfoID2 = Cc["@mozilla.org/xre/app-info;1"]
-                           .getService(Ci.nsIXULAppInfo).ID;
-        if (appInfoID2 in APPID_TO_TOPIC) {
-          Services.obs.removeObserver(this, APPID_TO_TOPIC[appInfoID2]);
+        if (Services.appinfo.ID in APPID_TO_TOPIC) {
+          Services.obs.removeObserver(this,
+                                      APPID_TO_TOPIC[Services.appinfo.ID]);
         }
         // Clean up any extant updates
         this._postUpdateProcessing();
