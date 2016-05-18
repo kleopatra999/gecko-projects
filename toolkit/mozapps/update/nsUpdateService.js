@@ -1997,7 +1997,7 @@ UpdateService.prototype = {
                                       APPID_TO_TOPIC[Services.appinfo.ID]);
         }
         // intentional fallthrough
-      case "mochitest-app-startup-finished":
+      case "test-post-update-processing":
         // Clean up any extant updates
         this._postUpdateProcessing();
         break;
