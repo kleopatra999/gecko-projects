@@ -2652,6 +2652,53 @@ int NS_main(int argc, NS_tchar **argv)
   }
 #endif
 
+#ifdef XP_MACOSX
+  if (!isElevated) {
+#endif
+    InitProgressUI(&argc, &argv);
+#ifdef XP_MACOSX
+  }
+#endif
+
+  // To process an update the updater command line must at a minimum have the
+  // directory path containing the updater.mar file to process as the first
+  // argument, the install directory as the second argument, and the directory
+  // to apply the update to as the third argument. When the updater is launched
+  // by another process the PID of the parent process should be provided in the
+  // optional fourth argument and the updater will wait on the parent process to
+  // exit if the value is non-zero and the process is present. This is necessary
+  // due to not being able to update files that are in use on Windows. The
+  // optional fifth argument is the callback's working directory and the
+  // optional sixth argument is the callback path. The callback is the
+  // application to launch after updating and it will be launched when these
+  // arguments are provided whether the update was successful or not. All
+  // remaining arguments are optional and are passed to the callback when it is
+  // launched.
+  if (argc < 4) {
+    fprintf(stderr, "Usage: updater patch-dir install-dir apply-to-dir [wait-pid [callback-working-dir callback-path args...]]\n");
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
+    return 1;
+  }
+
+  // The directory containing the update information.
+  gPatchDirPath = argv[1];
+
+  // The directory we're going to update to.
+  // We copy this string because we need to remove trailing slashes.  The C++
+  // standard says that it's always safe to write to strings pointed to by argv
+  // elements, but I don't necessarily believe it.
+  NS_tstrncpy(gInstallDirPath, argv[2], MAXPATHLEN);
+  gInstallDirPath[MAXPATHLEN - 1] = NS_T('\0');
+  NS_tchar *slash = NS_tstrrchr(gInstallDirPath, NS_SLASH);
+  if (slash && !slash[1]) {
+    *slash = NS_T('\0');
+  }
+
 #ifdef XP_WIN
   bool useService = false;
   bool testOnlyFallbackKeyExists = false;
@@ -2710,71 +2757,6 @@ int NS_main(int argc, NS_tchar **argv)
     }
   }
 
-  // The directory containing the update information.
-  gPatchDirPath = argv[1];
-
-#ifdef XP_MACOSX
-  if (!isElevated) {
-    InitProgressUI(&argc, &argv);
-    if (!IsRecursivelyWritable(argv[2])) {
-      // If the app directory isn't recursively writeable, an elevated update is
-      // required.
-      UpdateServerThreadArgs threadArgs;
-      threadArgs.argc = argc;
-      threadArgs.argv = const_cast<const NS_tchar**>(argv);
-
-      Thread t1;
-      if (t1.Run(ServeElevatedUpdateThreadFunc, &threadArgs) == 0) {
-        // Show an indeterminate progress bar while an elevated update is in
-        // progress.
-        ShowProgressUI(true);
-      }
-      t1.Join();
-
-      LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false);
-      return gSucceeded ? 0 : 1;
-    }
-  }
-#else
-  InitProgressUI(&argc, &argv);
-#endif
-
-  // To process an update the updater command line must at a minimum have the
-  // directory path containing the updater.mar file to process as the first
-  // argument, the install directory as the second argument, and the directory
-  // to apply the update to as the third argument. When the updater is launched
-  // by another process the PID of the parent process should be provided in the
-  // optional fourth argument and the updater will wait on the parent process to
-  // exit if the value is non-zero and the process is present. This is necessary
-  // due to not being able to update files that are in use on Windows. The
-  // optional fifth argument is the callback's working directory and the
-  // optional sixth argument is the callback path. The callback is the
-  // application to launch after updating and it will be launched when these
-  // arguments are provided whether the update was successful or not. All
-  // remaining arguments are optional and are passed to the callback when it is
-  // launched.
-  if (argc < 4) {
-    fprintf(stderr, "Usage: updater patch-dir install-dir apply-to-dir [wait-pid [callback-working-dir callback-path args...]]\n");
-#ifdef XP_MACOSX
-    if (isElevated) {
-      freeArguments(argc, argv);
-      CleanupElevatedMacUpdate(true);
-    }
-#endif
-    return 1;
-  }
-
-  // The directory we're going to update to.
-  // We copy this string because we need to remove trailing slashes.  The C++
-  // standard says that it's always safe to write to strings pointed to by argv
-  // elements, but I don't necessarily believe it.
-  NS_tstrncpy(gInstallDirPath, argv[2], MAXPATHLEN);
-  gInstallDirPath[MAXPATHLEN - 1] = NS_T('\0');
-  NS_tchar *slash = NS_tstrrchr(gInstallDirPath, NS_SLASH);
-  if (slash && !slash[1]) {
-    *slash = NS_T('\0');
-  }
-
   // The directory we're going to update to.
   // We copy this string because we need to remove trailing slashes.  The C++
   // standard says that it's always safe to write to strings pointed to by argv
@@ -2785,6 +2767,27 @@ int NS_main(int argc, NS_tchar **argv)
   if (slash && !slash[1]) {
     *slash = NS_T('\0');
   }
+
+#ifdef XP_MACOSX
+  if (!isElevated && !IsRecursivelyWritable(argv[2])) {
+    // If the app directory isn't recursively writeable, an elevated update is
+    // required.
+    UpdateServerThreadArgs threadArgs;
+    threadArgs.argc = argc;
+    threadArgs.argv = const_cast<const NS_tchar**>(argv);
+
+    Thread t1;
+    if (t1.Run(ServeElevatedUpdateThreadFunc, &threadArgs) == 0) {
+      // Show an indeterminate progress bar while an elevated update is in
+      // progress.
+      ShowProgressUI(true);
+    }
+    t1.Join();
+
+    LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false);
+    return gSucceeded ? 0 : 1;
+  }
+#endif
 
   if (EnvHasValue("MOZ_OS_UPDATE")) {
     sIsOSUpdate = true;
