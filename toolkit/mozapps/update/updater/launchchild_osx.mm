@@ -22,7 +22,6 @@ public:
   ~MacAutoreleasePool()
   {
     [mPool release];
-
   }
 
 private:
