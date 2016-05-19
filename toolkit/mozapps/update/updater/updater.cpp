@@ -2555,13 +2555,12 @@ void freeArguments(int argc, char** argv)
 
 int LaunchCallbackAndPostProcessApps(int argc, NS_tchar** argv,
                                      int callbackIndex
-#if defined(XP_WIN)
+#ifdef XP_WIN
                                      , const WCHAR* elevatedLockFilePath
                                      , HANDLE updateLockFileHandle
-#endif /* XP_WIN */
-#ifdef XP_MACOSX
+#elif XP_MACOSX
                                      , bool isElevated
-#endif /* XP_MACOSX */
+#endif
                                      )
 {
   if (argc > callbackIndex) {
