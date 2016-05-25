@@ -706,7 +706,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * whenever possible.
      */
     template <typename ReferentVariant, typename Referent, typename Map>
-    JSObject* wrapVariantReferent(JSContext* cx, Map& map, CrossCompartmentKey::Kind keyKind,
+    JSObject* wrapVariantReferent(JSContext* cx, Map& map, Handle<CrossCompartmentKey> key,
                                   Handle<ReferentVariant> referent);
     JSObject* wrapVariantReferent(JSContext* cx, Handle<DebuggerScriptReferent> referent);
     JSObject* wrapVariantReferent(JSContext* cx, Handle<DebuggerSourceReferent> referent);
@@ -1033,22 +1033,37 @@ class DebuggerObject : public NativeObject
   public:
     static const Class class_;
 
-    static NativeObject* initClass(JSContext* cx, HandleObject obj, HandleObject debuggerCtor);
-
+    static NativeObject* initClass(JSContext* cx, HandleObject obj, HandleObject debugCtor);
     static DebuggerObject* create(JSContext* cx, HandleObject proto, HandleObject obj,
                                   HandleNativeObject debugger);
 
-    bool isExtensible(JSContext* cx, bool* result) const;
-
-    bool isSealed(JSContext* cx, bool* result) const {
-        return isSealedHelper(cx, OpSeal, "isSealed", result);
-    }
-
-    bool isFrozen(JSContext* cx, bool* result) const {
-        return isSealedHelper(cx, OpFreeze, "isFrozen", result);
-    }
+    static bool isExtensible(JSContext* cx, Handle<DebuggerObject*> object, bool& result);
+    static bool isSealed(JSContext* cx, Handle<DebuggerObject*> object, bool& result);
+    static bool isFrozen(JSContext* cx, Handle<DebuggerObject*> object, bool& result);
+    static bool getOwnPropertyNames(JSContext* cx, Handle<DebuggerObject*> object,
+                                    MutableHandle<IdVector> result);
+    static bool getOwnPropertySymbols(JSContext* cx, Handle<DebuggerObject*> object,
+                                      MutableHandle<IdVector> result);
+    static bool getOwnPropertyDescriptor(JSContext* cx, Handle<DebuggerObject*> object,
+                                         HandleId id, MutableHandle<PropertyDescriptor> desc);
+    static bool preventExtensions(JSContext* cx, Handle<DebuggerObject*> object);
+    static bool seal(JSContext* cx, Handle<DebuggerObject*> object);
+    static bool freeze(JSContext* cx, Handle<DebuggerObject*> object);
+    static bool defineProperty(JSContext* cx, Handle<DebuggerObject*> object, HandleId id,
+                               Handle<PropertyDescriptor> desc);
+    static bool defineProperties(JSContext* cx, Handle<DebuggerObject*> object,
+                                 Handle<IdVector> ids,
+                                 Handle<PropertyDescriptorVector> descs);
+    static bool deleteProperty(JSContext* cx, Handle<DebuggerObject*> object, HandleId id,
+                               ObjectOpResult& result);
+    static bool call(JSContext* cx, Handle<DebuggerObject*> object, HandleValue thisv,
+                     Handle<ValueVector> args, MutableHandleValue result);
 
   private:
+    enum {
+        OWNER_SLOT
+    };
+
     static const unsigned RESERVED_SLOTS = 1;
 
     static const JSPropertySpec properties_[];
@@ -1063,9 +1078,7 @@ class DebuggerObject : public NativeObject
         return obj;
     }
 
-    enum SealHelperOp { OpSeal, OpFreeze };
-
-    bool isSealedHelper(JSContext* cx, SealHelperOp op, const char* name, bool* result) const;
+    Debugger* owner() const;
 };
 
 class BreakpointSite {

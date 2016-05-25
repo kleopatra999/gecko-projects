@@ -122,7 +122,7 @@ KeyShortcuts.parseElectronKey = function (window, str) {
     }
   }
 
-  if (typeof(key) === "string" && key.length === 1) {
+  if (typeof (key) === "string" && key.length === 1) {
     // Match any single character
     shortcut.key = key.toLowerCase();
   } else if (key in ElectronKeysMapping) {
@@ -134,7 +134,7 @@ KeyShortcuts.parseElectronKey = function (window, str) {
   }
 
   return shortcut;
-}
+};
 
 KeyShortcuts.prototype = {
   destroy() {
@@ -174,7 +174,8 @@ KeyShortcuts.prototype = {
 
   on(key, listener) {
     if (typeof listener !== "function") {
-      throw new Error("KeyShortcuts.on() expects a function as second argument");
+      throw new Error("KeyShortcuts.on() expects a function as " +
+                      "second argument");
     }
     if (!this.keys.has(key)) {
       let shortcut = KeyShortcuts.parseElectronKey(this.window, key);

@@ -8,6 +8,7 @@
 #define mozilla_dom_KeyframeEffect_h
 
 #include "nsAutoPtr.h"
+#include "nsChangeHint.h"
 #include "nsCSSProperty.h"
 #include "nsCSSValue.h"
 #include "nsCycleCollectionParticipant.h"
@@ -36,6 +37,7 @@ class nsCSSPropertySet;
 class nsIContent;
 class nsIDocument;
 class nsIFrame;
+class nsIPresShell;
 class nsPresContext;
 
 namespace mozilla {
@@ -117,6 +119,8 @@ struct AnimationPropertySegment
   float mFromKey, mToKey;
   StyleAnimationValue mFromValue, mToValue;
   Maybe<ComputedTimingFunction> mTimingFunction;
+
+  nsChangeHint mChangeHint;
 
   bool operator==(const AnimationPropertySegment& aOther) const {
     return mFromKey == aOther.mFromKey &&
@@ -312,6 +316,7 @@ public:
   // Returns true if at least one property is being animated on compositor.
   bool IsRunningOnCompositor() const;
   void SetIsRunningOnCompositor(nsCSSProperty aProperty, bool aIsRunning);
+  void ResetIsRunningOnCompositor();
 
   // Returns true if this effect, applied to |aFrame|, contains properties
   // that mean we shouldn't run transform compositor animations on this element.
@@ -328,6 +333,7 @@ public:
 
   nsIDocument* GetRenderedDocument() const;
   nsPresContext* GetPresContext() const;
+  nsIPresShell* GetPresShell() const;
 
   // Associates a warning with the animated property on the specified frame
   // indicating why, for example, the property could not be animated on the
@@ -336,6 +342,16 @@ public:
   void SetPerformanceWarning(
     nsCSSProperty aProperty,
     const AnimationPerformanceWarning& aWarning);
+
+  // Cumulative change hint on each segment for each property.
+  // This is used for deciding the animation is paint-only.
+  void CalculateCumulativeChangeHint();
+
+  // Returns true if all of animation properties' change hints
+  // can ignore painting if the animation is not visible.
+  // See nsChangeHint_Hints_CanIgnoreIfNotVisible in nsChangeHint.h
+  // in detail which change hint can be ignored.
+  bool CanIgnoreIfNotVisible() const;
 
 protected:
   KeyframeEffectReadOnly(nsIDocument* aDocument,
@@ -352,7 +368,6 @@ protected:
                           const OptionsType& aOptions,
                           ErrorResult& aRv);
 
-  void ResetIsRunningOnCompositor();
   void ResetWinsInCascade();
 
   // This effect is registered with its target element so long as:
@@ -392,6 +407,8 @@ protected:
   bool mInEffectOnLastAnimationTimingUpdate;
 
 private:
+  nsChangeHint mCumulativeChangeHint;
+
   nsIFrame* GetAnimationFrame() const;
 
   bool CanThrottle() const;

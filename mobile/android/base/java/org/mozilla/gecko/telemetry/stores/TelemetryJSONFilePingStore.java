@@ -9,6 +9,7 @@ package org.mozilla.gecko.telemetry.stores;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.support.annotation.VisibleForTesting;
+import android.support.annotation.WorkerThread;
 import android.util.Log;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -31,7 +32,9 @@ import java.io.IOException;
 import java.nio.channels.FileLock;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -70,7 +73,9 @@ public class TelemetryJSONFilePingStore implements TelemetryPingStore {
 
     private final File storeDir;
     private final FilenameFilter uuidFilenameFilter;
+    private final FileLastModifiedComparator fileLastModifiedComparator = new FileLastModifiedComparator();
 
+    @WorkerThread // Writes to disk
     public TelemetryJSONFilePingStore(final File storeDir) {
         this.storeDir = storeDir;
         this.storeDir.mkdirs();
@@ -105,7 +110,7 @@ public class TelemetryJSONFilePingStore implements TelemetryPingStore {
             return;
         }
 
-        final SortedSet<File> sortedFiles = new TreeSet<>(new FileLastModifiedComparator());
+        final SortedSet<File> sortedFiles = new TreeSet<>(fileLastModifiedComparator);
         sortedFiles.addAll(Arrays.asList(files));
         deleteSmallestFiles(sortedFiles, files.length - MAX_PING_COUNT);
     }
@@ -123,8 +128,9 @@ public class TelemetryJSONFilePingStore implements TelemetryPingStore {
 
     @Override
     public ArrayList<TelemetryPing> getAllPings() {
-        final File[] files = storeDir.listFiles(uuidFilenameFilter);
-        final ArrayList<TelemetryPing> out = new ArrayList<>(files.length);
+        final List<File> files = Arrays.asList(storeDir.listFiles(uuidFilenameFilter));
+        Collections.sort(files, fileLastModifiedComparator); // oldest to newest
+        final ArrayList<TelemetryPing> out = new ArrayList<>(files.size());
         for (final File file : files) {
             final JSONObject obj = lockAndReadJSONFromFile(file);
             if (obj == null) {
@@ -150,6 +156,12 @@ public class TelemetryJSONFilePingStore implements TelemetryPingStore {
      * @return the JSON object from the given file or null if there is an error.
      */
     private JSONObject lockAndReadJSONFromFile(final File file) {
+        // lockAndReadFileAndCloseStream doesn't handle file size of 0.
+        if (file.length() == 0) {
+            Log.w(LOGTAG, "Unexpected empty file: " + file.getName() + ". Ignoring");
+            return null;
+        }
+
         final FileInputStream inputStream;
         try {
             inputStream = new FileInputStream(file);

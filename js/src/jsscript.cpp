@@ -15,6 +15,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/unused.h"
 #include "mozilla/Vector.h"
 
 #include <algorithm>
@@ -53,6 +54,7 @@
 #include "jsfuninlines.h"
 #include "jsobjinlines.h"
 
+#include "vm/NativeObject-inl.h"
 #include "vm/ScopeObject-inl.h"
 #include "vm/SharedImmutableStringsCache-inl.h"
 #include "vm/Stack-inl.h"
@@ -1341,84 +1343,16 @@ JSScript::initScriptCounts(JSContext* cx)
 
     // Record all pc which are the first instruction of a basic block.
     mozilla::Vector<jsbytecode*, 16, SystemAllocPolicy> jumpTargets;
+    jsbytecode* mainPc = main();
     jsbytecode* end = codeEnd();
-    jsbytecode* mainEntry = main();
     for (jsbytecode* pc = code(); pc != end; pc = GetNextPc(pc)) {
-        if (pc == mainEntry) {
+        if (BytecodeIsJumpTarget(JSOp(*pc)) || pc == mainPc) {
             if (!jumpTargets.append(pc)) {
                 ReportOutOfMemory(cx);
                 return false;
             }
         }
-
-        bool jump = IsJumpOpcode(JSOp(*pc));
-        if (jump) {
-            jsbytecode* target = pc + GET_JUMP_OFFSET(pc);
-            if (!jumpTargets.append(target)) {
-                ReportOutOfMemory(cx);
-                return false;
-            }
-
-            if (BytecodeFallsThrough(JSOp(*pc))) {
-                jsbytecode* fallthrough = GetNextPc(pc);
-                if (!jumpTargets.append(fallthrough)) {
-                    ReportOutOfMemory(cx);
-                    return false;
-                }
-            }
-        }
-
-        if (JSOp(*pc) == JSOP_TABLESWITCH) {
-            jsbytecode* pc2 = pc;
-            int32_t len = GET_JUMP_OFFSET(pc2);
-
-            // Default target.
-            if (!jumpTargets.append(pc + len)) {
-                ReportOutOfMemory(cx);
-                return false;
-            }
-
-            pc2 += JUMP_OFFSET_LEN;
-            int32_t low = GET_JUMP_OFFSET(pc2);
-            pc2 += JUMP_OFFSET_LEN;
-            int32_t high = GET_JUMP_OFFSET(pc2);
-
-            for (int i = 0; i < high-low+1; i++) {
-                pc2 += JUMP_OFFSET_LEN;
-                int32_t off = (int32_t) GET_JUMP_OFFSET(pc2);
-                if (off) {
-                    // Case (i + low)
-                    if (!jumpTargets.append(pc + off)) {
-                        ReportOutOfMemory(cx);
-                        return false;
-                    }
-                }
-            }
-        }
     }
-
-    // Mark catch/finally blocks as being jump targets.
-    if (hasTrynotes()) {
-        JSTryNote* tn = trynotes()->vector;
-        JSTryNote* tnlimit = tn + trynotes()->length;
-        for (; tn < tnlimit; tn++) {
-            jsbytecode* tryStart = mainEntry + tn->start;
-            jsbytecode* tryPc = tryStart - 1;
-            if (JSOp(*tryPc) != JSOP_TRY)
-                continue;
-
-            jsbytecode* tryTarget = tryStart + tn->length;
-            if (!jumpTargets.append(tryTarget)) {
-                ReportOutOfMemory(cx);
-                return false;
-            }
-        }
-    }
-
-    // Sort all pc, and remove duplicates.
-    std::sort(jumpTargets.begin(), jumpTargets.end());
-    auto last = std::unique(jumpTargets.begin(), jumpTargets.end());
-    jumpTargets.erase(last, jumpTargets.end());
 
     // Initialize all PCCounts counters to 0.
     ScriptCounts::PCCountsVector base;
@@ -1955,8 +1889,8 @@ ScriptSource::chars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& holde
                 return nullptr;
             }
 
-            if (!DecompressString((const unsigned char*) ss.compressedData(),
-                                  ss.compressedBytes(),
+            if (!DecompressString((const unsigned char*) c.raw.chars(),
+                                  c.raw.length(),
                                   reinterpret_cast<unsigned char*>(decompressed.get()),
                                   lengthWithNull * sizeof(char16_t)))
             {
@@ -1979,7 +1913,7 @@ ScriptSource::chars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& holde
                     return nullptr;
                 }
                 ss.data = SourceType(Uncompressed(mozilla::Move(*str)));
-                return ss.uncompressedChars();
+                return ss.data.as<Uncompressed>().string.chars();
             }
 
             ReturnType ret = decompressed.get();
@@ -2062,12 +1996,13 @@ ScriptSource::setCompressedSource(ExclusiveContext* cx,
 }
 
 void
-ScriptSource::setCompressedSource(SharedImmutableString&& raw, size_t length)
+ScriptSource::setCompressedSource(SharedImmutableString&& raw, size_t uncompressedLength)
 {
     MOZ_ASSERT(data.is<Missing>() || data.is<Uncompressed>());
-    MOZ_ASSERT_IF(data.is<Uncompressed>(), data.as<Uncompressed>().string.length() == length);
+    MOZ_ASSERT_IF(data.is<Uncompressed>(),
+                  data.as<Uncompressed>().string.length() == uncompressedLength);
 
-    data = SourceType(Compressed(mozilla::Move(raw), length));
+    data = SourceType(Compressed(mozilla::Move(raw), uncompressedLength));
 }
 
 bool
@@ -2121,22 +2056,39 @@ ScriptSource::setSourceCopy(ExclusiveContext* cx, SourceBufferHolder& srcBuf,
     return true;
 }
 
+static MOZ_MUST_USE bool
+reallocUniquePtr(UniquePtr<char[], JS::FreePolicy>& unique, size_t size)
+{
+    auto newPtr = static_cast<char*>(js_realloc(unique.get(), size));
+    if (!newPtr)
+        return false;
+
+    // Since the realloc succeeded, unique is now holding a freed pointer.
+    mozilla::Unused << unique.release();
+    unique.reset(newPtr);
+    return true;
+}
+
 SourceCompressionTask::ResultType
 SourceCompressionTask::work()
 {
+    MOZ_ASSERT(ss->data.is<ScriptSource::Uncompressed>());
+
     // Try to keep the maximum memory usage down by only allocating half the
     // size of the string, first.
     size_t inputBytes = ss->length() * sizeof(char16_t);
     size_t firstSize = inputBytes / 2;
-    compressed = js_malloc(firstSize);
+    mozilla::UniquePtr<char[], JS::FreePolicy> compressed(js_pod_malloc<char>(firstSize));
     if (!compressed)
         return OOM;
 
-    Compressor comp(reinterpret_cast<const unsigned char*>(ss->uncompressedChars()), inputBytes);
+    const char16_t* chars = ss->data.as<ScriptSource::Uncompressed>().string.chars();
+    Compressor comp(reinterpret_cast<const unsigned char*>(chars),
+                    inputBytes);
     if (!comp.init())
         return OOM;
 
-    comp.setOutput((unsigned char*) compressed, firstSize);
+    comp.setOutput(reinterpret_cast<unsigned char*>(compressed.get()), firstSize);
     bool cont = true;
     while (cont) {
         if (abort_)
@@ -2153,11 +2105,10 @@ SourceCompressionTask::work()
 
             // The compressed output is greater than half the size of the
             // original string. Reallocate to the full size.
-            compressed = js_realloc(compressed, inputBytes);
-            if (!compressed)
+            if (!reallocUniquePtr(compressed, inputBytes))
                 return OOM;
 
-            comp.setOutput((unsigned char*) compressed, inputBytes);
+            comp.setOutput(reinterpret_cast<unsigned char*>(compressed.get()), inputBytes);
             break;
           }
           case Compressor::DONE:
@@ -2167,12 +2118,15 @@ SourceCompressionTask::work()
             return OOM;
         }
     }
-    compressedBytes = comp.outWritten();
-    compressedHash = mozilla::HashBytes(compressed, compressedBytes);
+    size_t compressedBytes = comp.outWritten();
 
     // Shrink the buffer to the size of the compressed data.
-    if (void* newCompressed = js_realloc(compressed, compressedBytes))
-        compressed = newCompressed;
+    mozilla::Unused << reallocUniquePtr(compressed, compressedBytes);
+
+    auto& strings = cx->sharedImmutableStrings();
+    resultString = strings.getOrCreate(mozilla::Move(compressed), compressedBytes);
+    if (!resultString)
+        return OOM;
 
     return Success;
 }
@@ -2200,7 +2154,7 @@ ScriptSource::performXDR(XDRState<mode>* xdr)
         }
 
         ReturnType match(Compressed& c) {
-            return c.nbytes();
+            return c.raw.length();
         }
 
         ReturnType match(Missing&) {
@@ -2986,40 +2940,12 @@ JSScript::fullyInitFromEmitter(ExclusiveContext* cx, HandleScript script, Byteco
 
     jsbytecode* code = ssd->data;
     PodCopy<jsbytecode>(code, bce->prologue.code.begin(), prologueLength);
-    PodCopy<jsbytecode>(code + prologueLength, bce->code().begin(), mainLength);
+    PodCopy<jsbytecode>(code + prologueLength, bce->main.code.begin(), mainLength);
     bce->copySrcNotes((jssrcnote*)(code + script->length()), nsrcnotes);
     InitAtomMap(bce->atomIndices.getMap(), ssd->atoms());
 
     if (!SaveSharedScriptData(cx, script, ssd, nsrcnotes))
         return false;
-
-#ifdef DEBUG
-    FunctionBox* funbox = bce->sc->isFunctionBox() ? bce->sc->asFunctionBox() : nullptr;
-
-    // Assert that the properties set by linkToFunctionFromEmitter are
-    // correct.
-    if (funbox) {
-        MOZ_ASSERT(script->funHasExtensibleScope_ == funbox->hasExtensibleScope());
-        MOZ_ASSERT(script->funNeedsDeclEnvObject_ == funbox->needsDeclEnvObject());
-        MOZ_ASSERT(script->needsHomeObject_ == funbox->needsHomeObject());
-        MOZ_ASSERT(script->isDerivedClassConstructor_ == funbox->isDerivedClassConstructor());
-        MOZ_ASSERT(script->argumentsHasVarBinding() == funbox->argumentsHasLocalBinding());
-        MOZ_ASSERT(script->hasMappedArgsObj() == funbox->hasMappedArgsObj());
-        MOZ_ASSERT(script->functionHasThisBinding() == funbox->hasThisBinding());
-        MOZ_ASSERT(script->functionNonDelazifying() == funbox->function());
-        MOZ_ASSERT(script->isGeneratorExp_ == funbox->inGenexpLambda);
-        MOZ_ASSERT(script->generatorKind() == funbox->generatorKind());
-    } else {
-        MOZ_ASSERT(!script->funHasExtensibleScope_);
-        MOZ_ASSERT(!script->funNeedsDeclEnvObject_);
-        MOZ_ASSERT(!script->needsHomeObject_);
-        MOZ_ASSERT(!script->isDerivedClassConstructor_);
-        MOZ_ASSERT(!script->argumentsHasVarBinding());
-        MOZ_ASSERT(!script->hasMappedArgsObj());
-        MOZ_ASSERT(!script->isGeneratorExp_);
-        MOZ_ASSERT(script->generatorKind() == NotGenerator);
-    }
-#endif
 
     if (bce->constList.length() != 0)
         bce->constList.finish(script->consts());
@@ -3051,8 +2977,106 @@ JSScript::fullyInitFromEmitter(ExclusiveContext* cx, HandleScript script, Byteco
         }
     }
 
+#ifdef DEBUG
+    script->assertLinkedProperties(bce);
+    script->assertValidJumpTargets();
+#endif
+
     return true;
 }
+
+#ifdef DEBUG
+void
+JSScript::assertLinkedProperties(js::frontend::BytecodeEmitter* bce) const
+{
+    FunctionBox* funbox = bce->sc->isFunctionBox() ? bce->sc->asFunctionBox() : nullptr;
+
+    // Assert that the properties set by linkToFunctionFromEmitter are
+    // correct.
+    if (funbox) {
+        MOZ_ASSERT(funHasExtensibleScope_ == funbox->hasExtensibleScope());
+        MOZ_ASSERT(funNeedsDeclEnvObject_ == funbox->needsDeclEnvObject());
+        MOZ_ASSERT(needsHomeObject_ == funbox->needsHomeObject());
+        MOZ_ASSERT(isDerivedClassConstructor_ == funbox->isDerivedClassConstructor());
+        MOZ_ASSERT(argumentsHasVarBinding() == funbox->argumentsHasLocalBinding());
+        MOZ_ASSERT(hasMappedArgsObj() == funbox->hasMappedArgsObj());
+        MOZ_ASSERT(functionHasThisBinding() == funbox->hasThisBinding());
+        MOZ_ASSERT(functionNonDelazifying() == funbox->function());
+        MOZ_ASSERT(isGeneratorExp_ == funbox->inGenexpLambda);
+        MOZ_ASSERT(generatorKind() == funbox->generatorKind());
+    } else {
+        MOZ_ASSERT(!funHasExtensibleScope_);
+        MOZ_ASSERT(!funNeedsDeclEnvObject_);
+        MOZ_ASSERT(!needsHomeObject_);
+        MOZ_ASSERT(!isDerivedClassConstructor_);
+        MOZ_ASSERT(!argumentsHasVarBinding());
+        MOZ_ASSERT(!hasMappedArgsObj());
+        MOZ_ASSERT(!isGeneratorExp_);
+        MOZ_ASSERT(generatorKind() == NotGenerator);
+    }
+}
+
+void
+JSScript::assertValidJumpTargets() const
+{
+    jsbytecode* end = codeEnd();
+    jsbytecode* mainEntry = main();
+    for (jsbytecode* pc = code(); pc != end; pc = GetNextPc(pc)) {
+        // Check jump instructions' target.
+        if (IsJumpOpcode(JSOp(*pc))) {
+            jsbytecode* target = pc + GET_JUMP_OFFSET(pc);
+            MOZ_ASSERT(mainEntry <= target && target < end);
+            MOZ_ASSERT(BytecodeIsJumpTarget(JSOp(*target)));
+
+            // Check fallthrough of conditional jump instructions.
+            if (BytecodeFallsThrough(JSOp(*pc))) {
+                jsbytecode* fallthrough = GetNextPc(pc);
+                MOZ_ASSERT(mainEntry <= fallthrough && fallthrough < end);
+                MOZ_ASSERT(BytecodeIsJumpTarget(JSOp(*fallthrough)));
+            }
+        }
+
+        // Check table switch case labels.
+        if (JSOp(*pc) == JSOP_TABLESWITCH) {
+            jsbytecode* pc2 = pc;
+            int32_t len = GET_JUMP_OFFSET(pc2);
+
+            // Default target.
+            MOZ_ASSERT(mainEntry <= pc + len && pc + len < end);
+            MOZ_ASSERT(BytecodeIsJumpTarget(JSOp(*(pc + len))));
+
+            pc2 += JUMP_OFFSET_LEN;
+            int32_t low = GET_JUMP_OFFSET(pc2);
+            pc2 += JUMP_OFFSET_LEN;
+            int32_t high = GET_JUMP_OFFSET(pc2);
+
+            for (int i = 0; i < high - low + 1; i++) {
+                pc2 += JUMP_OFFSET_LEN;
+                int32_t off = (int32_t) GET_JUMP_OFFSET(pc2);
+                // Case (i + low)
+                MOZ_ASSERT_IF(off, mainEntry <= pc + off && pc + off < end);
+                MOZ_ASSERT_IF(off, BytecodeIsJumpTarget(JSOp(*(pc + off))));
+            }
+        }
+    }
+
+    // Check catch/finally blocks as jump targets.
+    if (hasTrynotes()) {
+        JSTryNote* tn = trynotes()->vector;
+        JSTryNote* tnlimit = tn + trynotes()->length;
+        for (; tn < tnlimit; tn++) {
+            jsbytecode* tryStart = mainEntry + tn->start;
+            jsbytecode* tryPc = tryStart - 1;
+            if (JSOp(*tryPc) != JSOP_TRY)
+                continue;
+
+            jsbytecode* tryTarget = tryStart + tn->length;
+            MOZ_ASSERT(mainEntry <= tryTarget && tryTarget < end);
+            MOZ_ASSERT(BytecodeIsJumpTarget(JSOp(*tryTarget)));
+        }
+    }
+}
+#endif
 
 size_t
 JSScript::computedSizeOfData() const
@@ -3346,7 +3370,7 @@ js::DescribeScriptedCallerForCompilation(JSContext* cx, MutableHandleScript mayb
         return;
     }
 
-    NonBuiltinFrameIter iter(cx);
+    NonBuiltinFrameIter iter(cx, FrameIter::STOP_AT_SAVED);
 
     if (iter.done()) {
         maybeScript.set(nullptr);

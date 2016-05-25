@@ -25,7 +25,7 @@ ping”, not total for the whole application lifetime.
 Structure::
 
     {
-      "v": 5, // ping format version
+      "v": 6, // ping format version
       "clientId": <string>, // client id, e.g.
                             // "c641eacf-c30c-4171-b403-f077724e848a"
       "seq": <positive integer>, // running ping counter, e.g. 3
@@ -45,6 +45,9 @@ Structure::
                            // in local time, "yyyy-mm-dd"
       "tz": <integer>, // timezone offset (in minutes) of the
                        // device when the ping was created
+      "searches": <object>, // Optional, object of search use counts in the
+                            // format: { "engine.source": <pos integer> }
+                            // e.g.: { "yahoo.suggestion": 3, "other.listitem": 1 }
       "experiments": [<string>, …], // Optional, array of identifiers
                                     // for the active experiments
     }
@@ -110,6 +113,20 @@ The reason we don't just return the package install time even if the date could
 not be persisted to disk is to ensure the value doesn't change once we start
 sending it: we only want to send consistent values.
 
+searches
+~~~~~~~~
+In the case a search engine is added by a user, the engine identifier "other" is used, e.g. "other.<source>".
+
+Sources in Android are based on the existing UI telemetry values and are as
+follows:
+
+* actionbar: the user types in the url bar and hits enter to use the default
+  search engine
+* listitem: the user selects a search engine from the list of secondary search
+  engines at the bottom of the screen
+* suggestion: the user clicks on a search suggestion or, in the case that
+  suggestions are disabled, the row corresponding with the main engine
+
 Other parameters
 ----------------
 
@@ -123,6 +140,7 @@ et al (e.g. "Tue, 01 Feb 2011 14:00:00 GMT").
 
 Version history
 ---------------
+* v6: added ``searches``
 * v5: added ``created`` & ``tz``
 * v4: ``profileDate`` will return package install time when times.json is not available
 * v3: added ``defaultSearch``

@@ -193,7 +193,7 @@ const DEFAULT_UPDATE_RETRY_TIMEOUT = 2000;
 const DEFAULT_MAX_OSX_CANCELATIONS = 3;
 
 // This maps app IDs to their respective notification topic which signals when
-// app startup is complete.
+// the application's user interface has been displayed.
 const APPID_TO_TOPIC = {
   // Firefox
   "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}": "sessionstore-windows-restored",
