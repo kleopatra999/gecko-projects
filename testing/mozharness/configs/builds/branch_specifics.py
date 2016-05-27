@@ -368,7 +368,7 @@ config = {
     # 'graphics': {}
     # 'holly': {},
     'jamun': {
-        'update_channel': 'release-dev',
+        'update_channel': 'esr',
         'enable_release_promotion': 1,
         'platform_overrides': {
             'linux': {
