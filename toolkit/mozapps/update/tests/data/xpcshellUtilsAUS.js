@@ -1590,10 +1590,13 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   let stageDir = getStageDirFile(null, true);
   let stageDirPath = stageDir.path;
 
+  let workDirPath = applyToDirPath + "/workdir"
+
   if (IS_WIN) {
     // Convert to native path
     applyToDirPath = applyToDirPath.replace(/\//g, "\\");
     stageDirPath = stageDirPath.replace(/\//g, "\\");
+    workDirPath = workDirPath.replace(/\//g, "\\");
   }
 
   let callbackApp = getApplyDirFile(DIR_RESOURCES + gCallbackBinFile);
@@ -1608,7 +1611,11 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
       args[2] = stageDirPath;
       args[3] = "0/replace";
     } else {
-      args[2] = applyToDirPath;
+      if (IS_WIN) {
+        args[2] = workDirPath;
+      } else {
+        args[2] = applyToDirPath;
+      }
       args[3] = "0";
     }
     args = args.concat([callbackApp.parent.path, callbackApp.path]);
