@@ -30,6 +30,8 @@ class MediaDataDecoderCallback;
 class TaskQueue;
 class CDMProxy;
 
+static LazyLogModule sPDMLog("PlatformDecoderModule");
+
 // The PlatformDecoderModule interface is used by the MediaFormatReader to
 // abstract access to decoders provided by various
 // platforms.
@@ -110,6 +112,11 @@ protected:
                      DecoderDoctorDiagnostics* aDiagnostics) = 0;
 };
 
+enum MediaDataDecoderError {
+  FATAL_ERROR,
+  DECODE_ERROR
+};
+
 // A callback used by MediaDataDecoder to return output/errors to the
 // MediaFormatReader.
 // Implementation is threadsafe, and can be called on any thread.
@@ -122,7 +129,7 @@ public:
 
   // Denotes an error in the decoding process. The reader will stop calling
   // the decoder.
-  virtual void Error() = 0;
+  virtual void Error(MediaDataDecoderError aError) = 0;
 
   // Denotes that the last input sample has been inserted into the decoder,
   // and no more output can be produced unless more input is sent.
