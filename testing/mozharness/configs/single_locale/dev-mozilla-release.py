@@ -18,7 +18,7 @@ config = {
     }, {
         "vcs": "hgtool",
         "repo": "https://hg.mozilla.org/projects/jamun",
-        "revision": "default",
+        "revision": "%(revision)s",
         "dest": "jamun",
     }, {
         "vcs": "hgtool",
