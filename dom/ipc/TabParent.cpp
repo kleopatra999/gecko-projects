@@ -2774,9 +2774,11 @@ TabParent::GetLoadContext()
   if (mLoadContext) {
     loadContext = mLoadContext;
   } else {
+    bool isPrivate = mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW;
+    SetPrivateBrowsingAttributes(isPrivate);
     loadContext = new LoadContext(GetOwnerElement(),
                                   true /* aIsContent */,
-                                  mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW,
+                                  isPrivate,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW,
                                   OriginAttributesRef());
     mLoadContext = loadContext;
@@ -3186,6 +3188,7 @@ public:
   NS_IMETHOD GetOriginAttributes(JS::MutableHandleValue) NO_IMPL
   NS_IMETHOD GetUseRemoteTabs(bool*) NO_IMPL
   NS_IMETHOD SetRemoteTabs(bool) NO_IMPL
+  NS_IMETHOD IsTrackingProtectionOn(bool*) NO_IMPL
 #undef NO_IMPL
 
 protected:
