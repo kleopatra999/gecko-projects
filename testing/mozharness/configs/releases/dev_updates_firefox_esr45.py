@@ -16,7 +16,7 @@ config = {
     "archive_prefix": "https://ftp.stage.mozaws.net/pub",
     "previous_archive_prefix": "https://archive.mozilla.org/pub",
     "download_domain": "download.mozilla.org",
-    "balrog_url": "http://ec2-54-241-39-23.us-west-1.compute.amazonaws.com",
+    "balrog_url": "https://aus4.stage.mozaws.net",
     "balrog_username": "stage-ffxbld",
     "update_channels": {
         "esr": {
