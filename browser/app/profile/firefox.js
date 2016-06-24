@@ -579,6 +579,9 @@ pref("mousewheel.with_win.action", 1);
 pref("browser.xul.error_pages.enabled", true);
 pref("browser.xul.error_pages.expert_bad_cert", false);
 
+// Enable captive portal detection.
+pref("network.captive-portal-service.enabled", true);
+
 // If true, network link events will change the value of navigator.onLine
 pref("network.manage-offline-status", true);
 
@@ -1340,7 +1343,11 @@ pref("privacy.trackingprotection.introCount", 0);
 pref("privacy.trackingprotection.introURL", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tracking-protection/start/");
 
 // Enable Contextual Identity Containers
+#ifdef NIGHTLY_BUILD
+pref("privacy.userContext.enabled", true);
+#else
 pref("privacy.userContext.enabled", false);
+#endif
 
 #ifndef RELEASE_BUILD
 // At the moment, autostart.2 is used, while autostart.1 is unused.
@@ -1359,7 +1366,6 @@ pref("browser.tabs.crashReporting.email", "");
 #ifndef MOZ_MULET
 pref("layers.async-pan-zoom.enabled", true);
 #endif
-pref("apz.velocity_bias", "0.0");
 
 // Enable e10s add-on interposition by default.
 pref("extensions.interposition.enabled", true);

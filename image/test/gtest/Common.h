@@ -327,11 +327,14 @@ ImageTestCase GreenFirstFrameAnimatedGIFTestCase();
 ImageTestCase GreenFirstFrameAnimatedPNGTestCase();
 
 ImageTestCase CorruptTestCase();
+ImageTestCase CorruptICOWithBadBMPWidthTestCase();
+ImageTestCase CorruptICOWithBadBMPHeightTestCase();
 
 ImageTestCase TransparentPNGTestCase();
 ImageTestCase TransparentGIFTestCase();
 ImageTestCase FirstFramePaddingGIFTestCase();
 ImageTestCase NoFrameDelayGIFTestCase();
+ImageTestCase ExtraImageSubBlocksAnimatedGIFTestCase();
 
 ImageTestCase TransparentBMPWhenBMPAlphaEnabledTestCase();
 ImageTestCase RLE4BMPTestCase();

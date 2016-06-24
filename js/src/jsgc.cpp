@@ -972,7 +972,7 @@ GCRuntime::parseAndSetZeal(const char* str)
 {
     int frequency = -1;
     bool foundFrequency = false;
-    mozilla::Vector<int> zeals;
+    mozilla::Vector<int, 0, SystemAllocPolicy> zeals;
 
     static const struct {
         const char* const zealMode;
@@ -1970,6 +1970,7 @@ RelocateArena(Arena* arena, SliceBudget& sliceBudget)
     MOZ_ASSERT(!arena->hasDelayedMarking);
     MOZ_ASSERT(!arena->markOverflow);
     MOZ_ASSERT(!arena->allocatedDuringIncremental);
+    MOZ_ASSERT(arena->bufferedCells->isEmpty());
 
     Zone* zone = arena->zone;
 
@@ -2643,8 +2644,9 @@ GCRuntime::releaseHeldRelocatedArenas()
 {
 #ifdef DEBUG
     unprotectHeldRelocatedArenas();
-    releaseRelocatedArenas(relocatedArenasToRelease);
+    Arena* arenas = relocatedArenasToRelease;
     relocatedArenasToRelease = nullptr;
+    releaseRelocatedArenas(arenas);
 #endif
 }
 
@@ -3134,7 +3136,7 @@ GCRuntime::decommitArenas(AutoLockGC& lock)
     // Build a Vector of all current available Chunks. Since we release the
     // gc lock while doing the decommit syscall, it is dangerous to iterate
     // the available list directly, as concurrent operations can modify it.
-    mozilla::Vector<Chunk*> toDecommit;
+    mozilla::Vector<Chunk*, 0, SystemAllocPolicy> toDecommit;
     MOZ_ASSERT(availableChunks(lock).verify());
     for (ChunkPool::Iter iter(availableChunks(lock)); !iter.done(); iter.next()) {
         if (!toDecommit.append(iter.get())) {
@@ -3732,7 +3734,8 @@ CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing)
                     InCrossCompartmentMap(static_cast<JSObject*>(src), thing)));
     } else {
         TenuredCell* tenured = TenuredCell::fromPointer(thing.asCell());
-        MOZ_ASSERT(tenured->zone() == zone || tenured->zone()->isAtomsZone());
+        Zone* thingZone = tenured->zoneFromAnyThread();
+        MOZ_ASSERT(thingZone == zone || thingZone->isAtomsZone());
     }
 }
 
@@ -4931,6 +4934,34 @@ GCRuntime::joinTask(GCParallelTask& task, gcstats::Phase phase)
     task.joinWithLockHeld();
 }
 
+using WeakCacheTaskVector = mozilla::Vector<SweepWeakCacheTask, 0, SystemAllocPolicy>;
+
+static void
+SweepWeakCachesFromMainThread(JSRuntime* rt)
+{
+    for (GCZoneGroupIter zone(rt); !zone.done(); zone.next()) {
+        for (JS::WeakCache<void*>* cache : zone->weakCaches_) {
+            SweepWeakCacheTask task(rt, *cache);
+            task.runFromMainThread(rt);
+        }
+    }
+}
+
+static WeakCacheTaskVector
+PrepareWeakCacheTasks(JSRuntime* rt)
+{
+    WeakCacheTaskVector out;
+    for (GCZoneGroupIter zone(rt); !zone.done(); zone.next()) {
+        for (JS::WeakCache<void*>* cache : zone->weakCaches_) {
+            if (!out.append(SweepWeakCacheTask(rt, *cache))) {
+                SweepWeakCachesFromMainThread(rt);
+                return WeakCacheTaskVector();
+            }
+        }
+    }
+    return out;
+}
+
 void
 GCRuntime::beginSweepingZoneGroup(AutoLockForExclusiveAccess& lock)
 {
@@ -4968,7 +4999,7 @@ GCRuntime::beginSweepingZoneGroup(AutoLockForExclusiveAccess& lock)
     SweepObjectGroupsTask sweepObjectGroupsTask(rt);
     SweepRegExpsTask sweepRegExpsTask(rt);
     SweepMiscTask sweepMiscTask(rt);
-    mozilla::Vector<SweepWeakCacheTask> sweepCacheTasks;
+    WeakCacheTaskVector sweepCacheTasks = PrepareWeakCacheTasks(rt);
 
     for (GCZoneGroupIter zone(rt); !zone.done(); zone.next()) {
         /* Clear all weakrefs that point to unmarked things. */
@@ -4979,13 +5010,8 @@ GCRuntime::beginSweepingZoneGroup(AutoLockForExclusiveAccess& lock)
         }
         zone->gcWeakRefs.clear();
 
-        AutoEnterOOMUnsafeRegion oomUnsafe;
-        for (JS::WeakCache<void*>* cache : zone->weakCaches_) {
-            if (!sweepCacheTasks.append(SweepWeakCacheTask(rt, *cache)))
-                oomUnsafe.crash("preparing weak cache sweeping task list");
-        }
-
         /* No need to look up any more weakmap keys from this zone group. */
+        AutoEnterOOMUnsafeRegion oomUnsafe;
         if (!zone->gcWeakKeys.clear())
             oomUnsafe.crash("clearing weak keys in beginSweepingZoneGroup()");
     }
@@ -5536,10 +5562,6 @@ GCRuntime::compactPhase(JS::gcreason::Reason reason, SliceBudget& sliceBudget,
 
 #ifdef DEBUG
     CheckHashTablesAfterMovingGC(rt);
-#endif
-#ifdef JS_GC_ZEAL
-    if (rt->hasZealMode(ZealMode::CheckHeapOnMovingGC))
-        CheckHeapAfterMovingGC(rt, lock);
 #endif
 
     return zonesToMaybeCompact.isEmpty() ? Finished : NotFinished;
@@ -6309,6 +6331,13 @@ GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget, JS::gcreason::R
     } while (repeat);
 
     agc.setCycleCount(cycleCount);
+
+#ifdef JS_GC_ZEAL
+    if (shouldCompact() && rt->hasZealMode(ZealMode::CheckHeapOnMovingGC)) {
+        gcstats::AutoPhase ap(rt->gc.stats, gcstats::PHASE_TRACE_HEAP);
+        CheckHeapAfterMovingGC(rt);
+    }
+#endif
 }
 
 js::AutoEnqueuePendingParseTasksAfterGC::~AutoEnqueuePendingParseTasksAfterGC()
@@ -6516,6 +6545,11 @@ GCRuntime::minorGCImpl(JS::gcreason::Reason reason, Nursery::ObjectGroupList* pr
     MOZ_ASSERT(nursery.isEmpty());
 
     blocksToFreeAfterMinorGC.freeAll();
+
+#ifdef JS_GC_ZEAL
+    if (rt->hasZealMode(ZealMode::CheckHeapOnMovingGC))
+        CheckHeapAfterMovingGC(rt);
+#endif
 
     AutoLockGC lock(rt);
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next())

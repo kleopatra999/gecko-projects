@@ -166,6 +166,61 @@ public:
 
   static void GetAllEvenIfDead(nsTArray<ContentParent*>& aArray);
 
+  enum CPIteratorPolicy {
+    eLive,
+    eAll
+  };
+
+  class ContentParentIterator {
+  private:
+    ContentParent* mCurrent;
+    CPIteratorPolicy mPolicy;
+
+  public:
+    ContentParentIterator(CPIteratorPolicy aPolicy, ContentParent* aCurrent)
+      : mCurrent(aCurrent),
+        mPolicy(aPolicy)
+    {
+    }
+
+    ContentParentIterator begin()
+    {
+      return *this;
+    }
+    ContentParentIterator end()
+    {
+      return ContentParentIterator(mPolicy, nullptr);
+    }
+
+    const ContentParentIterator& operator++()
+    {
+      MOZ_ASSERT(mCurrent);
+      do {
+        mCurrent = mCurrent->LinkedListElement<ContentParent>::getNext();
+      } while (mPolicy != eAll && mCurrent && !mCurrent->mIsAlive);
+
+      return *this;
+    }
+
+    bool operator!=(const ContentParentIterator& aOther)
+    {
+      MOZ_ASSERT(mPolicy == aOther.mPolicy);
+      return mCurrent != aOther.mCurrent;
+    }
+
+    ContentParent* operator*()
+    {
+      return mCurrent;
+    }
+  };
+
+  static ContentParentIterator AllProcesses(CPIteratorPolicy aPolicy)
+  {
+    ContentParent* first =
+      sContentParents ? sContentParents->getFirst() : nullptr;
+    return ContentParentIterator(aPolicy, first);
+  }
+
   static bool IgnoreIPCPrincipal();
 
   static void NotifyUpdatedDictionaries();
@@ -563,6 +618,8 @@ private:
       const bool& aIsForApp,
       const bool& aIsForBrowser) override;
   using PContentParent::SendPTestShellConstructor;
+
+  FORWARD_SHMEM_ALLOCATOR_TO(PContentParent)
 
   // No more than one of !!aApp, aIsForBrowser, and aIsForPreallocated may be
   // true.
@@ -1122,6 +1179,8 @@ private:
 
   virtual bool RecvNotifyPushSubscriptionModifiedObservers(const nsCString& aScope,
                                                            const IPC::Principal& aPrincipal) override;
+
+  virtual bool RecvNotifyLowMemory() override;
 
   // If you add strong pointers to cycle collected objects here, be sure to
   // release these objects in ShutDownProcess.  See the comment there for more

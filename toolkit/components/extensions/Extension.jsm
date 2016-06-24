@@ -88,6 +88,7 @@ ExtensionManagement.registerSchema("chrome://extensions/content/schemas/notifica
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/runtime.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/storage.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/test.json");
+ExtensionManagement.registerSchema("chrome://extensions/content/schemas/events.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/web_navigation.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/web_request.json");
 
@@ -178,8 +179,8 @@ var Management = {
     this.apis.push({api, permission});
   },
 
-  registerSchemaAPI(namespace, permission, api) {
-    this.schemaApis.push({namespace, permission, api});
+  registerSchemaAPI(namespace, api) {
+    this.schemaApis.push({namespace, api});
   },
 
   // Mash together into a single object all the APIs registered by the
@@ -541,6 +542,10 @@ GlobalManager = {
         return context.cloneScope;
       },
 
+      hasPermission(permission) {
+        return extension.hasPermission(permission);
+      },
+
       callFunction(path, name, args) {
         return findPathInObject(schemaApi, path)[name](...args);
       },
@@ -568,7 +573,7 @@ GlobalManager = {
       },
 
       shouldInject(namespace, name) {
-        if (namespaces && namespaces.indexOf(namespace) == -1) {
+        if (namespaces && !namespaces.includes(namespace)) {
           return false;
         }
         return findPathInObject(schemaApi, [namespace]) != null;
@@ -1306,6 +1311,7 @@ Extension.prototype = extend(Object.create(ExtensionData.prototype), {
       webAccessibleResources: this.webAccessibleResources.serialize(),
       whiteListedHosts: this.whiteListedHosts.serialize(),
       localeData: this.localeData.serialize(),
+      permissions: this.permissions,
     };
   },
 

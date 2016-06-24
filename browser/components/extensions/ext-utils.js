@@ -12,8 +12,9 @@ Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import("resource://gre/modules/AppConstants.jsm");
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
-
 const INTEGER = /^[1-9]\d*$/;
+// Minimum time between two resizes.
+const RESIZE_TIMEOUT = 100;
 
 var {
   EventManager,
@@ -103,10 +104,29 @@ global.IconDetails = {
 
   // Returns the appropriate icon URL for the given icons object and the
   // screen resolution of the given window.
-  getURL(icons, window, extension, size = 18) {
+  getURL(icons, window, extension, size = 16) {
     const DEFAULT = "chrome://browser/content/extension.svg";
 
-    return AddonManager.getPreferredIconURL({icons: icons}, size, window) || DEFAULT;
+    size *= window.devicePixelRatio;
+
+    let bestSize = null;
+    if (icons[size]) {
+      bestSize = size;
+    } else if (icons[2 * size]) {
+      bestSize = 2 * size;
+    } else {
+      let sizes = Object.keys(icons)
+                        .map(key => parseInt(key, 10))
+                        .sort((a, b) => a - b);
+
+      bestSize = sizes.find(candidate => candidate > size) || sizes.pop();
+    }
+
+    if (bestSize) {
+      return {size: bestSize, icon: icons[bestSize]};
+    }
+
+    return {size, icon: DEFAULT};
   },
 
   convertImageDataToPNG(imageData, context) {
@@ -188,9 +208,8 @@ class BasePopup {
       this.browser.removeEventListener("load", this, true);
       this.browser.removeEventListener("DOMTitleChanged", this, true);
       this.browser.removeEventListener("DOMWindowClose", this, true);
-
+      this.browser.removeEventListener("MozScrolledAreaChanged", this, true);
       this.viewNode.removeEventListener(this.DESTROY_EVENT, this);
-
       this.browser.remove();
 
       this.browser = null;
@@ -237,10 +256,22 @@ class BasePopup {
         // that we calculate the size after the entire event cycle has completed
         // (unless someone spins the event loop, anyway), and hopefully after
         // the content has made any modifications.
-        //
-        // In the future, to match Chrome's behavior, we'll need to update this
-        // dynamically, probably in response to MozScrolledAreaChanged events.
-        this.window.setTimeout(() => this.resizeBrowser(), 0);
+        Promise.resolve().then(() => {
+          this.resizeBrowser();
+        });
+
+        // Mutation observer to make sure the panel shrinks when the content does.
+        new this.browser.contentWindow.MutationObserver(this.resizeBrowser.bind(this)).observe(
+          this.browser.contentDocument.documentElement, {
+            attributes: true,
+            characterData: true,
+            childList: true,
+            subtree: true,
+          });
+        break;
+
+      case "MozScrolledAreaChanged":
+        this.resizeBrowser();
         break;
     }
   }
@@ -285,11 +316,20 @@ class BasePopup {
       this.browser.addEventListener("load", this, true);
       this.browser.addEventListener("DOMTitleChanged", this, true);
       this.browser.addEventListener("DOMWindowClose", this, true);
+      this.browser.addEventListener("MozScrolledAreaChanged", this, true);
     });
   }
-
-  // Resizes the browser to match the preferred size of the content.
+  // Resizes the browser to match the preferred size of the content (debounced).
   resizeBrowser() {
+    if (this.resizeTimeout == null) {
+      this._resizeBrowser();
+      this.resizeTimeout = setTimeout(this._resizeBrowser.bind(this), RESIZE_TIMEOUT);
+    }
+  }
+
+  _resizeBrowser() {
+    this.resizeTimeout = null;
+
     if (!this.browser) {
       return;
     }

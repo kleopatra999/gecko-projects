@@ -7,6 +7,7 @@
 #ifndef nsXMLHttpRequest_h__
 #define nsXMLHttpRequest_h__
 
+#include "nsAutoPtr.h"
 #include "nsIXMLHttpRequest.h"
 #include "nsISupportsUtils.h"
 #include "nsString.h"
@@ -518,11 +519,7 @@ public:
   void GetAllResponseHeaders(nsCString& aResponseHeaders);
   bool IsSafeHeader(const nsACString& aHeaderName,
                     mozilla::NotNull<nsIHttpChannel*> aHttpChannel) const;
-  void OverrideMimeType(const nsAString& aMimeType)
-  {
-    // XXX Should we do some validation here?
-    mOverrideMimeType = aMimeType;
-  }
+  void OverrideMimeType(const nsAString& aMimeType, ErrorResult& aRv);
   XMLHttpRequestResponseType ResponseType()
   {
     return XMLHttpRequestResponseType(mResponseType);

@@ -148,6 +148,7 @@ class BaseContext {
     this.contextId = ++gContextId;
     this.unloaded = false;
     this.extensionId = extensionId;
+    this.jsonSandbox = null;
   }
 
   get cloneScope() {
@@ -194,6 +195,24 @@ class BaseContext {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Safely call JSON.stringify() on an object that comes from an
+   * extension.
+   *
+   * @param {array<any>} args Arguments for JSON.stringify()
+   * @returns {string} The stringified representation of obj
+   */
+  jsonStringify(...args) {
+    if (!this.jsonSandbox) {
+      this.jsonSandbox = Cu.Sandbox(this.principal, {
+        sameZoneAs: this.cloneScope,
+        wantXrays: false,
+      });
+    }
+
+    return Cu.waiveXrays(this.jsonSandbox.JSON).stringify(...args);
   }
 
   callOnClose(obj) {
@@ -1147,6 +1166,10 @@ class ChildAPIManager {
 
   shouldInject(namespace, name) {
     return this.namespaces.includes(namespace);
+  }
+
+  hasPermission(permission) {
+    return this.context.extension.permissions.has(permission);
   }
 
   getProperty(path, name) {

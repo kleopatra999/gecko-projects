@@ -25,6 +25,7 @@
 #include "mozilla/dom/AudioTrack.h"
 #include "mozilla/dom/AudioTrackList.h"
 #include "mozilla/dom/HTMLMediaElement.h"
+#include "mozilla/dom/Promise.h"
 #include "mozilla/dom/VideoTrack.h"
 #include "mozilla/dom/VideoTrackList.h"
 #include "nsPrintfCString.h"
@@ -340,9 +341,6 @@ MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
 
   bool prevDormant = mIsDormant;
   mIsDormant = false;
-  if (!mOwner->IsActive()) {
-    mIsDormant = true;
-  }
 #ifdef MOZ_WIDGET_GONK
   if (mOwner->IsHidden()) {
     mIsDormant = true;
@@ -353,7 +351,8 @@ MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
   bool prevHeuristicDormant = mIsHeuristicDormant;
   mIsHeuristicDormant = false;
   if (IsHeuristicDormantSupported() && !mIsVisible) {
-    if (aDormantTimeout && !aActivity &&
+    // Do not enter dormant when MediaDecoder is not paused nor ended.
+    if ((aDormantTimeout || !mOwner->IsActive()) && !aActivity &&
         (mPlayState == PLAY_STATE_PAUSED || IsEnded())) {
       // Enable heuristic dormant
       mIsHeuristicDormant = true;
@@ -814,7 +813,7 @@ MediaDecoder::Play()
 }
 
 nsresult
-MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
+MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType, dom::Promise* aPromise /*=nullptr*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
   NS_ENSURE_TRUE(!mShuttingDown, NS_ERROR_FAILURE);
@@ -831,7 +830,7 @@ MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
 
   mLogicallySeeking = true;
   SeekTarget target = SeekTarget(timeUsecs, aSeekType);
-  CallSeek(target);
+  CallSeek(target, aPromise);
 
   if (mPlayState == PLAY_STATE_ENDED) {
     PinForSeek();
@@ -841,10 +840,48 @@ MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
 }
 
 void
-MediaDecoder::CallSeek(const SeekTarget& aTarget)
+MediaDecoder::AsyncResolveSeekDOMPromiseIfExists()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (mSeekDOMPromise) {
+    RefPtr<dom::Promise> promise = mSeekDOMPromise;
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
+      promise->MaybeResolve(JS::UndefinedHandleValue);
+    });
+    AbstractThread::MainThread()->Dispatch(r.forget());
+    mSeekDOMPromise = nullptr;
+  }
+}
+
+void
+MediaDecoder::AsyncRejectSeekDOMPromiseIfExists()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (mSeekDOMPromise) {
+    RefPtr<dom::Promise> promise = mSeekDOMPromise;
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
+      promise->MaybeRejectWithUndefined();
+    });
+    AbstractThread::MainThread()->Dispatch(r.forget());
+    mSeekDOMPromise = nullptr;
+  }
+}
+
+void
+MediaDecoder::DiscardOngoingSeekIfExists()
 {
   MOZ_ASSERT(NS_IsMainThread());
   mSeekRequest.DisconnectIfExists();
+  AsyncRejectSeekDOMPromiseIfExists();
+}
+
+void
+MediaDecoder::CallSeek(const SeekTarget& aTarget, dom::Promise* aPromise)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  DiscardOngoingSeekIfExists();
+
+  mSeekDOMPromise = aPromise;
   mSeekRequest.Begin(
     mDecoderStateMachine->InvokeSeek(aTarget)
     ->Then(AbstractThread::MainThread(), __func__, this,
@@ -1256,10 +1293,20 @@ MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
 
   if (aVal.mEventVisibility != MediaDecoderEventVisibility::Suppressed) {
     mOwner->SeekCompleted();
+    AsyncResolveSeekDOMPromiseIfExists();
     if (fireEnded) {
       mOwner->PlaybackEnded();
     }
   }
+}
+
+void
+MediaDecoder::OnSeekRejected()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  mSeekRequest.Complete();
+  mLogicallySeeking = false;
+  AsyncRejectSeekDOMPromiseIfExists();
 }
 
 void

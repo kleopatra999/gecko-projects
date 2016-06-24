@@ -60,6 +60,7 @@
 #include "mozilla/media/MediaChild.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/WebBrowserPersistDocumentChild.h"
+#include "imgLoader.h"
 
 #if defined(MOZ_CONTENT_SANDBOX)
 #if defined(XP_WIN)
@@ -2244,6 +2245,16 @@ ContentChild::RecvRegisterChromeItem(const ChromeRegistryItem& item)
 }
 
 bool
+ContentChild::RecvClearImageCache(const bool& privateLoader, const bool& chrome)
+{
+  imgLoader* loader = privateLoader ? imgLoader::PrivateBrowsingLoader() :
+                                      imgLoader::NormalLoader();
+
+  loader->ClearCache(chrome);
+  return true;
+}
+
+bool
 ContentChild::RecvSetOffline(const bool& offline)
 {
   nsCOMPtr<nsIIOService> io (do_GetIOService());
@@ -2514,13 +2525,11 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
   MOZ_ASSERT(permissionManager,
          "We have no permissionManager in the Content process !");
 
+  // note we do not need to force mUserContextId to the default here because
+  // the permission manager does that internally.
   nsAutoCString originNoSuffix;
   PrincipalOriginAttributes attrs;
   attrs.PopulateFromOrigin(permission.origin, originNoSuffix);
-  // we're doing this because we currently don't support isolating permissions
-  // by userContextId.
-  MOZ_ASSERT(attrs.mUserContextId == nsIScriptSecurityManager::DEFAULT_USER_CONTEXT_ID,
-      "permission user context should be set to default!");
 
   nsCOMPtr<nsIURI> uri;
   nsresult rv = NS_NewURI(getter_AddRefs(uri), originNoSuffix);
@@ -3309,9 +3318,10 @@ ContentChild::RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
           if (item.data().type() == IPCDataTransferData::TnsString) {
             const nsString& data = item.data().get_nsString();
             variant->SetAsAString(data);
-          } else if (item.data().type() == IPCDataTransferData::TnsCString) {
-            const nsCString& data = item.data().get_nsCString();
-            variant->SetAsACString(data);
+          } else if (item.data().type() == IPCDataTransferData::TShmem) {
+            Shmem data = item.data().get_Shmem();
+            variant->SetAsACString(nsDependentCString(data.get<char>(), data.Size<char>()));
+            Unused << DeallocShmem(data);
           } else if (item.data().type() == IPCDataTransferData::TPBlobChild) {
             BlobChild* blob = static_cast<BlobChild*>(item.data().get_PBlobChild());
             RefPtr<BlobImpl> blobImpl = blob->GetBlobImpl();

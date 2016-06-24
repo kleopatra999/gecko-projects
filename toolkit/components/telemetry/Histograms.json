@@ -1064,7 +1064,7 @@
     "description": "2D canvas used"
   },
   "CANVAS_WEBGL_ACCL_FAILURE_ID": {
-    "alert_emails": ["bgirard@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","bgirard@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "keyed": true,
@@ -1072,7 +1072,7 @@
     "bug_numbers": [1272808]
   },
   "CANVAS_WEBGL_FAILURE_ID": {
-    "alert_emails": ["bgirard@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","bgirard@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "keyed": true,
@@ -2884,21 +2884,6 @@
     "kind": "enumerated",
     "n_values": 4,
     "description": "Count the number of 0) successful connections to an ipv4 address, 1) failed connection an ipv4 address, 2) successful connection to an ipv6 address and 3) failed connections to an ipv6 address."
-  },
-  "URL_PATH_ENDS_IN_EXCLAMATION": {
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "The URL path ends in !"
-  },
-  "URL_PATH_CONTAINS_EXCLAMATION_SLASH": {
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "The URL path contains !/"
-  },
-  "URL_PATH_CONTAINS_EXCLAMATION_DOUBLE_SLASH": {
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "The URL path contains !//"
   },
   "NETWORK_SESSION_AT_900FD": {
     "expires_in_version": "never",
@@ -5879,6 +5864,22 @@
     "n_buckets": 50,
     "description": "(Bug 1207089) Time in ms between displaying a popup notification and dismissing it without an action the first time, keyed by ID"
   },
+  "PRINT_PREVIEW_OPENED_COUNT": {
+    "alert_emails": ["carnold@mozilla.org"],
+    "bug_numbers": [1275570],
+    "expires_in_version": "56",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "description": "A counter incremented every time the browser enters print preview."
+  },
+  "PRINT_PREVIEW_SIMPLIFY_PAGE_OPENED_COUNT": {
+    "alert_emails": ["carnold@mozilla.org"],
+    "bug_numbers": [1275570],
+    "expires_in_version": "56",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "description": "A counter incremented every time the browser enters simplified mode on print preview."
+  },
   "DEVTOOLS_DEBUGGER_RDP_LOCAL_RELOAD_MS": {
     "expires_in_version": "never",
     "kind": "exponential",
@@ -6389,7 +6390,7 @@
   },
   "MEDIA_RUST_MP4PARSE_SUCCESS": {
     "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "boolean",
     "bug_numbers": [1220885],
     "description": "(Bug 1220885) Whether the rust mp4 demuxer successfully parsed a stream segment.",
@@ -6397,16 +6398,16 @@
   },
   "MEDIA_RUST_MP4PARSE_ERROR_CODE": {
     "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 32,
     "bug_numbers": [1238420],
-    "description": "The error code reported when an MP4 parse attempt has failed.",
+    "description": "The error code reported when an MP4 parse attempt has failed.0 = OK, 1 = bad argument, 2 = invalid data, 3 = unsupported, 4 = unexpected end of file, 5 = read error.",
     "cpp_guard": "MOZ_RUST_MP4PARSE"
   },
   "MEDIA_RUST_MP4PARSE_TRACK_MATCH_AUDIO": {
     "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "boolean",
     "bug_numbers": [1231169],
     "description": "Whether rust and stagefight mp4 parser audio track results match.",
@@ -6414,14 +6415,14 @@
   },
   "MEDIA_RUST_MP4PARSE_TRACK_MATCH_VIDEO": {
     "alert_emails": ["giles@mozilla.com", "kinetik@flim.org"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "boolean",
     "bug_numbers": [1231169],
     "description": "Whether rust and stagefight mp4 parser video track results match.",
     "cpp_guard": "MOZ_RUST_MP4PARSE"
   },
   "MEDIA_WMF_DECODE_ERROR": {
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 256,
     "description": "WMF media decoder error or success (0) codes."
@@ -6435,14 +6436,14 @@
   },
   "MEDIA_HLS_CANPLAY_REQUESTED": {
     "alert_emails": ["ajones@mozilla.com", "giles@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "boolean",
     "description": "Reports a true value when a page requests canPlayType for an HTTP Live Streaming media type (or generic m3u playlist).",
     "bug_numbers": [1262659]
   },
   "MEDIA_HLS_DECODER_SUCCESS": {
     "alert_emails": ["ajones@mozilla.com", "giles@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "boolean",
     "description": "Reports whether a decoder for an HTTP Live Streaming media type was created when requested.",
     "bug_numbers": [1262659]
@@ -6495,26 +6496,35 @@
     "n_values": 244,
     "description": "The H.264 profile number (profile_idc) as extracted from the codecs parameter passed to HTMLMediaElement.canPlayType."
   },
+  "DECODER_DOCTOR_INFOBAR_STATS": {
+    "alert_emails": ["gsquelart@mozilla.com"],
+    "bug_numbers": [1271483],
+    "expires_in_version": "53",
+    "kind": "enumerated",
+    "keyed": true,
+    "n_values": 8,
+    "description": "Counts of various Decoder Doctor notification events. Used to track efficacy of Decoder Doctor at helping users fix problems with their audio/video codecs. Keys are localized string names that identify problem with audio/video codecs that Decoder Doctor attempts to solve; see string values in dom.properties for verbose description of problems being solved. 0=recorded every time the Decoder Doctor notification is shown, 1=recorded the first time in a profile when notification is shown, 2=recorded when 'Learn how' button clicked, 3=recorded when 'Learn how' button first clicked in a profile, 4=recorded when issue solved after infobar has been shown at least once in a profile."
+  },
   "VIDEO_DECODED_H264_SPS_CONSTRAINT_SET_FLAG": {
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 128,
     "description": "A bit pattern to collect H.264 constraint set flag from the decoded SPS. Bits 0 through 5 represent constraint_set0_flag through constraint_set5_flag, respectively."
   },
   "VIDEO_DECODED_H264_SPS_LEVEL": {
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 51,
     "description": "The H.264 level (level_idc) as extracted from the decoded SPS, from levels 1 (10) to 5.2 (51), with the addition of 0 for unknown values."
   },
   "VIDEO_DECODED_H264_SPS_PROFILE": {
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 244,
     "description": "The H.264 profile number (profile_idc) as extracted from the decoded SPS."
   },
   "VIDEO_H264_SPS_MAX_NUM_REF_FRAMES": {
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "enumerated",
     "n_values": 17,
     "description": "SPS.max_num_ref_frames indicates how deep the H.264 queue is going to be, and as such the minimum memory usage by the decoder, from 0 to 16. 17 indicates an invalid value."
@@ -8892,66 +8902,26 @@
     "kind": "boolean",
     "description": "Stores 1 every time the URL is copied or shared."
   },
-  "LOOP_TWO_WAY_MEDIA_CONN_LENGTH_1": {
-    "alert_emails": ["firefox-dev@mozilla.org", "dmose@mozilla.com"],
-    "expires_in_version": "50",
-    "kind": "enumerated",
-    "n_values": 8,
-    "releaseChannelCollection": "opt-out",
-    "description": "Connection length for bi-directionally connected media (0=SHORTER_THAN_10S, 1=BETWEEN_10S_AND_30S, 2=BETWEEN_30S_AND_5M, 3=MORE_THAN_5M)"
-  },
-  "LOOP_SHARING_ROOM_URL": {
-    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "50",
-    "kind": "enumerated",
-    "n_values": 8,
-    "releaseChannelCollection": "opt-out",
-    "description": "Number of times a room URL is shared (0=COPY_FROM_PANEL, 1=COPY_FROM_CONVERSATION, 2=EMAIL_FROM_CALLFAILED, 3=EMAIL_FROM_CONVERSATION, 4=FACEBOOK_FROM_CONVERSATION, 5=EMAIL_FROM_PANEL)"
-  },
   "LOOP_ROOM_CREATE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "54",
     "kind": "enumerated",
     "n_values": 4,
     "releaseChannelCollection": "opt-out",
     "description": "Number of times a room create action is performed (0=CREATE_SUCCESS, 1=CREATE_FAIL)"
   },
-  "LOOP_ROOM_DELETE": {
-    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "50",
-    "kind": "enumerated",
-    "n_values": 4,
-    "releaseChannelCollection": "opt-out",
-    "description": "Number of times a room delete action is performed (0=DELETE_SUCCESS, 2=DELETE_FAIL)"
-  },
-  "LOOP_ROOM_SESSION_WITHCHAT": {
-    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "50",
-    "kind": "count",
-    "releaseChannelCollection": "opt-out",
-    "description": "Number of sessions where at least one chat message was exchanged"
-  },
   "LOOP_COPY_PANEL_ACTIONS": {
     "alert_emails": ["firefox-dev@mozilla.org", "edilee@mozilla.com"],
-    "expires_in_version": "51",
+    "expires_in_version": "54",
     "kind": "enumerated",
     "n_values": 5,
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1239965, 1259506],
     "description": "Number of times each of the following copy panel actions are triggered: 0=SHOWN, 1=NO_AGAIN, 2=NO_NEVER, 3=YES_AGAIN, 4=YES_NEVER"
   },
-  "LOOP_INFOBAR_ACTION_BUTTONS": {
-    "alert_emails": ["firefox-dev@mozilla.org", "mbanner@mozilla.com"],
-    "expires_in_version": "51",
-    "kind": "enumerated",
-    "n_values": 4,
-    "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1245486],
-    "description": "Number times info bar buttons are clicked (0=PAUSED, 1=CREATED)"
-  },
   "LOOP_ACTIVITY_COUNTER": {
     "alert_emails": ["firefox-dev@mozilla.org", "mbanner@mozilla.com"],
-    "expires_in_version": "51",
+    "expires_in_version": "54",
     "kind": "enumerated",
     "n_values": 5,
     "releaseChannelCollection": "opt-out",
@@ -9194,7 +9164,7 @@
   },
   "VIDEO_VP9_BENCHMARK_FPS": {
     "alert_emails": ["ajones@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "bug_numbers": [1230265],
     "kind": "linear",
     "high": 1000,
@@ -9551,16 +9521,6 @@
     "kind": "count",
     "description": "Count ServiceWorkers that really did get a thread created for them. File bugs in Core::DOM in case of a Telemetry regression."
   },
-  "SERVICE_WORKER_SPAWN_GETS_QUEUED": {
-    "expires_in_version": "50",
-    "kind": "count",
-    "description": "Tracking whether a ServiceWorker spawn gets queued due to hitting max workers per domain limit. File bugs in Core::DOM in case of a Telemetry regression."
-  },
-  "SHARED_WORKER_SPAWN_GETS_QUEUED": {
-    "expires_in_version": "50",
-    "kind": "count",
-    "description": "Tracking whether a SharedWorker spawn gets queued due to hitting max workers per domain limit. File bugs in Core::DOM in case of a Telemetry regression."
-  },
   "SERVICE_WORKER_REGISTRATIONS": {
     "expires_in_version": "50",
     "kind": "count",
@@ -9585,7 +9545,7 @@
   },
   "GRAPHICS_SANITY_TEST": {
     "expires_in_version": "never",
-    "alert_emails": ["gfx-telemetry-alerts@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","msreckovic@mozilla.com"],
     "kind": "enumerated",
     "n_values": 20,
     "releaseChannelCollection": "opt-out",
@@ -9663,7 +9623,7 @@
     "description": "Whether the user has set a custom homepage."
   },
   "GRAPHICS_DRIVER_STARTUP_TEST": {
-    "alert_emails": ["danderson@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","danderson@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
@@ -9671,7 +9631,7 @@
     "description": "Reports whether or not graphics drivers crashed during startup."
   },
   "GRAPHICS_SANITY_TEST_OS_SNAPSHOT": {
-    "alert_emails": ["danderson@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","danderson@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 10,
@@ -9925,7 +9885,7 @@
     "description": "The number of times a given type of breakdown was used for a dominator tree"
   },
   "GRAPHICS_SANITY_TEST_REASON": {
-    "alert_emails": ["danderson@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","danderson@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "43",
     "kind": "enumerated",
     "n_values": 20,
@@ -10313,7 +10273,7 @@
   },
   "VIDEO_EME_REQUEST_SUCCESS_LATENCY_MS": {
     "alert_emails": ["cpearce@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "exponential",
     "high": 60000,
     "n_buckets": 60,
@@ -10322,7 +10282,7 @@
   },
   "VIDEO_EME_REQUEST_FAILURE_LATENCY_MS": {
     "alert_emails": ["cpearce@mozilla.com"],
-    "expires_in_version": "50",
+    "expires_in_version": "55",
     "kind": "exponential",
     "high": 60000,
     "n_buckets": 60,
@@ -10493,14 +10453,14 @@
     "description": "Attempt to notify ServiceWorker of push notification resubscription."
   },
   "D3D11_SYNC_HANDLE_FAILURE": {
-    "alert_emails": ["bschouten@mozilla.com","danderson@mozilla.com","msreckovic@mozilla.com","ashughes@mozilla.com"],
-    "expires_in_version": "50",
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","bschouten@mozilla.com","danderson@mozilla.com","msreckovic@mozilla.com","ashughes@mozilla.com"],
+    "expires_in_version": "60",
     "releaseChannelCollection": "opt-out",
     "kind": "count",
     "description": "Number of times the D3D11 compositor failed to get a texture sync handle."
   },
   "GFX_CONTENT_FAILED_TO_ACQUIRE_DEVICE": {
-    "alert_emails": ["gfx-telemetry-alerts@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 6,
@@ -10902,11 +10862,19 @@
     "description": "Counts the number of times that about:tabcrashed was unloaded without submitting."
   },
   "ABOUTCRASHES_OPENED_COUNT": {
-    "alert_emails": ["bgirard@mozilla.com"],
+    "alert_emails": ["gfx-telemetry-alerts@mozilla.com","bgirard@mozilla.com","msreckovic@mozilla.com"],
     "expires_in_version": "55",
     "kind": "count",
     "bug_numbers": [1276714, 1276716],
     "description": "Number of times about:crashes has been opened.",
+    "releaseChannelCollection": "opt-out"
+  },
+  "XHR_IN_WORKER": {
+    "alert_emails": ["amarchesini@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "bug_numbers": [1280229],
+    "description": "Number of the use of XHR in workers.",
     "releaseChannelCollection": "opt-out"
   }
 }

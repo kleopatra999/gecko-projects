@@ -109,7 +109,6 @@
 #include "mozilla/unused.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsAppRunner.h"
-#include "nsAutoPtr.h"
 #include "nsCDefaultURIFixup.h"
 #include "nsCExternalHandlerService.h"
 #include "nsCOMPtr.h"
@@ -272,6 +271,10 @@ using namespace mozilla::system;
 
 #ifdef XP_WIN
 #include "mozilla/widget/AudioSession.h"
+#endif
+
+#ifdef MOZ_CRASHREPORTER
+#include "nsThread.h"
 #endif
 
 #include "VRManagerParent.h"            // for VRManagerParent
@@ -1401,15 +1404,8 @@ ContentParent::GetAll(nsTArray<ContentParent*>& aArray)
 {
   aArray.Clear();
 
-  if (!sContentParents) {
-    return;
-  }
-
-  for (ContentParent* cp = sContentParents->getFirst(); cp;
-     cp = cp->LinkedListElement<ContentParent>::getNext()) {
-    if (cp->mIsAlive) {
-      aArray.AppendElement(cp);
-    }
+  for (auto* cp : AllProcesses(eLive)) {
+    aArray.AppendElement(cp);
   }
 }
 
@@ -1418,12 +1414,7 @@ ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray)
 {
   aArray.Clear();
 
-  if (!sContentParents) {
-    return;
-  }
-
-  for (ContentParent* cp = sContentParents->getFirst(); cp;
-     cp = cp->LinkedListElement<ContentParent>::getNext()) {
+  for (auto* cp : AllProcesses(eAll)) {
     aArray.AppendElement(cp);
   }
 }
@@ -2776,7 +2767,7 @@ ContentParent::RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
                                   text.Length() * sizeof(char16_t));
 
       NS_ENSURE_SUCCESS(rv, true);
-    } else if (item.data().type() == IPCDataTransferData::TnsCString) {
+    } else if (item.data().type() == IPCDataTransferData::TShmem) {
       if (nsContentUtils::IsFlavorImage(item.flavor())) {
         nsCOMPtr<imgIContainer> imageContainer;
         rv = nsContentUtils::DataTransferItemToImage(item,
@@ -2796,7 +2787,10 @@ ContentParent::RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
           do_CreateInstance(NS_SUPPORTS_CSTRING_CONTRACTID, &rv);
         NS_ENSURE_SUCCESS(rv, true);
 
-        const nsCString& text = item.data().get_nsCString();
+        // The buffer contains the terminating null.
+        Shmem itemData = item.data().get_Shmem();
+        const nsDependentCString text(itemData.get<char>(),
+                                      itemData.Size<char>());
         rv = dataWrapper->SetData(text);
         NS_ENSURE_SUCCESS(rv, true);
 
@@ -2804,6 +2798,8 @@ ContentParent::RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
 
         NS_ENSURE_SUCCESS(rv, true);
       }
+
+      Unused << DeallocShmem(item.data().get_Shmem());
     }
   }
 
@@ -3050,7 +3046,7 @@ ContentParent::OnNewProcessCreated(uint32_t aPid,
   }
 
   // Update offline settings.
-  bool isOffline, isLangRTL;
+  bool isOffline, isLangRTL, haveBidiKeyboards;
   bool isConnected;
   InfallibleTArray<nsString> unusedDictionaries;
   ClipboardCapabilities clipboardCaps;
@@ -3058,7 +3054,8 @@ ContentParent::OnNewProcessCreated(uint32_t aPid,
   StructuredCloneData initialData;
 
   RecvGetXPCOMProcessAttributes(&isOffline, &isConnected,
-                                &isLangRTL, &unusedDictionaries,
+                                &isLangRTL, &haveBidiKeyboards,
+                                &unusedDictionaries,
                                 &clipboardCaps, &domainPolicy, &initialData);
   mozilla::Unused << content->SendSetOffline(isOffline);
   mozilla::Unused << content->SendSetConnectivity(isConnected);
@@ -5110,17 +5107,14 @@ ContentParent::IgnoreIPCPrincipal()
 void
 ContentParent::NotifyUpdatedDictionaries()
 {
-  AutoTArray<ContentParent*, 8> processes;
-  GetAll(processes);
-
   nsCOMPtr<nsISpellChecker> spellChecker(do_GetService(NS_SPELLCHECKER_CONTRACTID));
   MOZ_ASSERT(spellChecker, "No spell checker?");
 
   InfallibleTArray<nsString> dictionaries;
   spellChecker->GetDictionaryList(&dictionaries);
 
-  for (size_t i = 0; i < processes.Length(); ++i) {
-    Unused << processes[i]->SendUpdateDictionaryList(dictionaries);
+  for (auto* cp : AllProcesses(eLive)) {
+    Unused << cp->SendUpdateDictionaryList(dictionaries);
   }
 }
 
@@ -5844,6 +5838,15 @@ ContentParent::RecvNotifyPushSubscriptionModifiedObservers(const nsCString& aSco
 #ifndef MOZ_SIMPLEPUSH
   PushSubscriptionModifiedDispatcher dispatcher(aScope, aPrincipal);
   Unused << NS_WARN_IF(NS_FAILED(dispatcher.NotifyObservers()));
+#endif
+  return true;
+}
+
+bool
+ContentParent::RecvNotifyLowMemory()
+{
+#ifdef MOZ_CRASHREPORTER
+  nsThread::SaveMemoryReportNearOOM(nsThread::ShouldSaveMemoryReport::kForceReport);
 #endif
   return true;
 }

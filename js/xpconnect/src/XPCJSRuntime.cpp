@@ -15,6 +15,7 @@
 #include "XPCJSMemoryReporter.h"
 #include "WrapperFactory.h"
 #include "mozJSComponentLoader.h"
+#include "nsAutoPtr.h"
 #include "nsNetUtil.h"
 
 #include "nsIMemoryInfoDumper.h"
@@ -131,20 +132,6 @@ xpc::SharedMemoryEnabled() { return sSharedMemoryEnabled; }
 // *All* NativeSets are referenced from mNativeSetMap.
 // So, in mClassInfo2NativeSetMap we just clear references to the unmarked.
 // In mNativeSetMap we clear the references to the unmarked *and* delete them.
-
-bool
-XPCJSRuntime::CustomContextCallback(JSContext* cx, unsigned operation)
-{
-    if (operation == JSCONTEXT_NEW) {
-        if (!OnJSContextNew(cx)) {
-            return false;
-        }
-    } else if (operation == JSCONTEXT_DESTROY) {
-        delete XPCContext::GetXPCContext(cx);
-    }
-
-    return true;
-}
 
 class AsyncFreeSnowWhite : public Runnable
 {
@@ -1592,6 +1579,7 @@ ReloadPrefsCallback(const char* pref, void* data)
     bool useIon = Preferences::GetBool(JS_OPTIONS_DOT_STR "ion") && !safeMode;
     bool useAsmJS = Preferences::GetBool(JS_OPTIONS_DOT_STR "asmjs") && !safeMode;
     bool useWasm = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm") && !safeMode;
+    bool useWasmBaseline = Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_baselinejit") && !safeMode;
     bool throwOnAsmJSValidationFailure = Preferences::GetBool(JS_OPTIONS_DOT_STR
                                                               "throw_on_asmjs_validation_failure");
     bool useNativeRegExp = Preferences::GetBool(JS_OPTIONS_DOT_STR "native_regexp") && !safeMode;
@@ -1637,6 +1625,7 @@ ReloadPrefsCallback(const char* pref, void* data)
                              .setIon(useIon)
                              .setAsmJS(useAsmJS)
                              .setWasm(useWasm)
+                             .setWasmAlwaysBaseline(useWasmBaseline)
                              .setThrowOnAsmJSValidationFailure(throwOnAsmJSValidationFailure)
                              .setNativeRegExp(useNativeRegExp)
                              .setAsyncStack(useAsyncStack)
@@ -3419,7 +3408,8 @@ XPCJSRuntime::XPCJSRuntime()
    mObjectHolderRoots(nullptr),
    mWatchdogManager(new WatchdogManager(this)),
    mAsyncSnowWhiteFreer(new AsyncFreeSnowWhite()),
-   mTimeoutAccumulated(false)
+   mTimeoutAccumulated(false),
+   mPendingResult(NS_OK)
 {
 }
 
@@ -3662,11 +3652,8 @@ XPCJSRuntime::newXPCJSRuntime()
 }
 
 bool
-XPCJSRuntime::OnJSContextNew(JSContext* cx)
+XPCJSRuntime::JSContextInitialized(JSContext* cx)
 {
-    // If we were the first cx ever created (like the SafeJSContext), the caller
-    // would have had no way to enter a request. Enter one now before doing the
-    // rest of the cx setup.
     JSAutoRequest ar(cx);
 
     // if it is our first context then we need to generate our string ids
@@ -3686,10 +3673,6 @@ XPCJSRuntime::OnJSContextNew(JSContext* cx)
             return false;
         }
     }
-
-    XPCContext* xpc = new XPCContext(this, cx);
-    if (!xpc)
-        return false;
 
     return true;
 }
@@ -3801,20 +3784,6 @@ XPCJSRuntime::DebugDump(int16_t depth)
         XPC_LOG_INDENT();
         XPC_LOG_ALWAYS(("mJSRuntime @ %x", Runtime()));
 
-        int cxCount = 0;
-        JSContext* iter = nullptr;
-        while (JS_ContextIterator(Runtime(), &iter))
-            ++cxCount;
-        XPC_LOG_ALWAYS(("%d JS context(s)", cxCount));
-
-        iter = nullptr;
-        while (JS_ContextIterator(Runtime(), &iter)) {
-            XPCContext* xpc = XPCContext::GetXPCContext(iter);
-            XPC_LOG_INDENT();
-            xpc->DebugDump(depth);
-            XPC_LOG_OUTDENT();
-        }
-
         XPC_LOG_ALWAYS(("mWrappedJSClassMap @ %x with %d wrapperclasses(s)",
                         mWrappedJSClassMap, mWrappedJSClassMap->Count()));
         // iterate wrappersclasses...
@@ -3859,6 +3828,8 @@ XPCJSRuntime::DebugDump(int16_t depth)
             }
             XPC_LOG_OUTDENT();
         }
+
+        XPC_LOG_ALWAYS(("mPendingResult of %x", mPendingResult));
 
         XPC_LOG_OUTDENT();
 #endif

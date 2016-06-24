@@ -16,17 +16,11 @@ const events = require("sdk/event/core");
 
 // This will also add the "stylesheet" actor type for protocol.js to recognize
 const {UPDATE_PRESERVING_RULES, UPDATE_GENERAL} = require("devtools/server/actors/stylesheets");
-const {pageStyleSpec, styleRuleSpec} = require("devtools/shared/specs/styles");
+const {pageStyleSpec, styleRuleSpec, ELEMENT_STYLE} = require("devtools/shared/specs/styles");
 
 loader.lazyRequireGetter(this, "CSS", "CSS");
 loader.lazyGetter(this, "CssLogic", () => require("devtools/shared/inspector/css-logic").CssLogic);
 loader.lazyGetter(this, "DOMUtils", () => Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils));
-
-// The PageStyle actor flattens the DOM CSS objects a little bit, merging
-// Rules and their Styles into one actor.  For elements (which have a style
-// but no associated rule) we fake a rule with the following style id.
-const ELEMENT_STYLE = 100;
-exports.ELEMENT_STYLE = ELEMENT_STYLE;
 
 // When gathering rules to read for pseudo elements, we will skip
 // :before and :after, which are handled as a special case.
@@ -75,7 +69,10 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
     this.styleElements = new WeakMap();
 
     this.onFrameUnload = this.onFrameUnload.bind(this);
+    this.onStyleSheetAdded = this.onStyleSheetAdded.bind(this);
+
     events.on(this.inspector.tabActor, "will-navigate", this.onFrameUnload);
+    events.on(this.inspector.tabActor, "stylesheet-added", this.onStyleSheetAdded);
 
     this._styleApplied = this._styleApplied.bind(this);
     this._watchedSheets = new Set();
@@ -87,6 +84,7 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
     }
     protocol.Actor.prototype.destroy.call(this);
     events.off(this.inspector.tabActor, "will-navigate", this.onFrameUnload);
+    events.off(this.inspector.tabActor, "stylesheet-added", this.onStyleSheetAdded);
     this.inspector = null;
     this.walker = null;
     this.refMap = null;
@@ -174,10 +172,6 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
   _sheetRef: function (sheet) {
     let tabActor = this.inspector.tabActor;
     let actor = tabActor.createStyleSheetActor(sheet);
-    if (!this._watchedSheets.has(actor)) {
-      this._watchedSheets.add(actor);
-      actor.on("style-applied", this._styleApplied);
-    }
     return actor;
   },
 
@@ -835,6 +829,18 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
    */
   onFrameUnload: function () {
     this.styleElements = new WeakMap();
+  },
+
+  /**
+   * When a stylesheet is added, handle the related StyleSheetActor to listen for changes.
+   * @param  {StyleSheetActor} actor
+   *         The actor for the added stylesheet.
+   */
+  onStyleSheetAdded: function (actor) {
+    if (!this._watchedSheets.has(actor)) {
+      this._watchedSheets.add(actor);
+      actor.on("style-applied", this._styleApplied);
+    }
   },
 
   /**

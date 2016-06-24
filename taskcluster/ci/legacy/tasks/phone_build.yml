@@ -61,8 +61,9 @@ task:
     build_name: '{{build_name}}'
     build_type: '{{build_type}}'
     index:
-      rank: {{pushlog_id}}
+      rank: {{push_epoch}}
     treeherder:
+      jobKind: build
       groupSymbol: tc
       groupName: Submitted by taskcluster
       symbol: B

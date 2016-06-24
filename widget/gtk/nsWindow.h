@@ -60,7 +60,6 @@ extern PRLogModuleInfo *gWidgetDrawLog;
 
 #endif /* MOZ_LOGGING */
 
-class gfxASurface;
 class gfxPattern;
 class nsPluginNativeWindowGtk;
 
@@ -322,7 +321,7 @@ public:
 
 #if (MOZ_WIDGET_GTK == 2)
     static already_AddRefed<DrawTarget> GetDrawTargetForGdkDrawable(GdkDrawable* aDrawable,
-                                                                    const IntSize& aSize);
+                                                                    const mozilla::gfx::IntSize& aSize);
 #endif
     NS_IMETHOD         ReparentNativeWidget(nsIWidget* aNewParent) override;
 
@@ -408,6 +407,8 @@ protected:
 #endif
     // true if this is a drag and drop feedback popup
     bool               mIsDragPopup;
+    // Can we access X?
+    bool               mIsX11Display;
 
 private:
     void               DestroyChildWindows();

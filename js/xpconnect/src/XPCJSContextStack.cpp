@@ -22,7 +22,6 @@ using mozilla::dom::DestroyProtoAndIfaceCache;
 XPCJSContextStack::~XPCJSContextStack()
 {
     if (mSafeJSContext) {
-        JS_DestroyContextNoGC(mSafeJSContext);
         mSafeJSContext = nullptr;
     }
 }
@@ -59,11 +58,15 @@ XPCJSContextStack::GetSafeJSContext()
     return mSafeJSContext;
 }
 
-JSContext*
+void
 XPCJSContextStack::InitSafeJSContext()
 {
     MOZ_ASSERT(!mSafeJSContext);
-    mSafeJSContext = JS_NewContext(XPCJSRuntime::Get()->Runtime(), 8192);
-    MOZ_RELEASE_ASSERT(mSafeJSContext, "JS_NewContext failed");
-    return mSafeJSContext;
+
+    mSafeJSContext = JS_GetContext(mRuntime->Runtime());
+    if (!JS::InitSelfHostedCode(mSafeJSContext))
+        MOZ_CRASH("InitSelfHostedCode failed");
+
+    if (!mRuntime->JSContextInitialized(mSafeJSContext))
+        MOZ_CRASH("JSContextCreated failed");
 }

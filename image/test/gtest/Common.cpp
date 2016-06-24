@@ -485,6 +485,22 @@ ImageTestCase CorruptTestCase()
                        TEST_CASE_HAS_ERROR);
 }
 
+ImageTestCase CorruptICOWithBadBMPWidthTestCase()
+{
+  // This ICO contains a BMP icon which has a width that doesn't match the size
+  // listed in the corresponding ICO directory entry.
+  return ImageTestCase("corrupt-with-bad-bmp-width.ico", "image/x-icon",
+                       IntSize(100, 100), TEST_CASE_HAS_ERROR);
+}
+
+ImageTestCase CorruptICOWithBadBMPHeightTestCase()
+{
+  // This ICO contains a BMP icon which has a height that doesn't match the size
+  // listed in the corresponding ICO directory entry.
+  return ImageTestCase("corrupt-with-bad-bmp-height.ico", "image/x-icon",
+                       IntSize(100, 100), TEST_CASE_HAS_ERROR);
+}
+
 ImageTestCase TransparentPNGTestCase()
 {
   return ImageTestCase("transparent.png", "image/png", IntSize(32, 32),
@@ -531,6 +547,14 @@ ImageTestCase NoFrameDelayGIFTestCase()
   // marked TEST_CASE_IS_ANIMATED because the metadata decoder can't detect that
   // it's animated.
   return ImageTestCase("no-frame-delay.gif", "image/gif", IntSize(100, 100));
+}
+
+ImageTestCase ExtraImageSubBlocksAnimatedGIFTestCase()
+{
+  // This is a corrupt GIF that has extra image sub blocks between the first and
+  // second frame.
+  return ImageTestCase("animated-with-extra-image-sub-blocks.gif", "image/gif",
+                       IntSize(100, 100));
 }
 
 ImageTestCase DownscaledPNGTestCase()

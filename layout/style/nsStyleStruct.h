@@ -18,6 +18,7 @@
 #include "mozilla/SheetType.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StyleStructContext.h"
+#include "nsAutoPtr.h"
 #include "nsColor.h"
 #include "nsCoord.h"
 #include "nsMargin.h"
@@ -118,7 +119,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
     MOZ_COUNT_DTOR(nsStyleFont);
   }
 
-  nsChangeHint CalcDifference(const nsStyleFont& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleFont& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_REFLOW |
            nsChangeHint_NeutralChange;
@@ -386,7 +387,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColor
     MOZ_COUNT_DTOR(nsStyleColor);
   }
 
-  nsChangeHint CalcDifference(const nsStyleColor& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleColor& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_RepaintFrame;
   }
@@ -690,7 +691,9 @@ struct nsStyleImageLayers {
     bool RenderingMightDependOnPositioningAreaSizeChange() const;
 
     // Compute the change hint required by changes in just this layer.
-    nsChangeHint CalcDifference(const Layer& aOther) const;
+    // aPositionChangeHint indicates the hint for position change.
+    nsChangeHint CalcDifference(const Layer& aNewLayer,
+                                nsChangeHint aPositionChangeHint) const;
 
     // An equality operator that compares the images using URL-equality
     // rather than pointer-equality.
@@ -738,7 +741,8 @@ struct nsStyleImageLayers {
       mLayers[i].UntrackImages(aContext);
   }
 
-  nsChangeHint CalcDifference(const nsStyleImageLayers& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleImageLayers& aNewLayers,
+                              nsChangeHint aPositionChangeHint) const;
 
   bool HasLayerWithImage() const;
 
@@ -765,7 +769,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBackground {
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStyleBackground& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleBackground& aNewData) const;
   static nsChangeHint MaxDifference() {
      return nsChangeHint_UpdateEffects |
            nsChangeHint_RepaintFrame |
@@ -821,7 +825,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleMargin
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStyleMargin& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleMargin& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_NeedReflow |
            nsChangeHint_ReflowChangesSizeOrPosition |
@@ -868,7 +872,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStylePadding& aOther) const;
+  nsChangeHint CalcDifference(const nsStylePadding& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_REFLOW & ~nsChangeHint_ClearDescendantIntrinsics;
   }
@@ -1070,7 +1074,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleBorder
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStyleBorder& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleBorder& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_REFLOW |
            nsChangeHint_UpdateOverflow |
@@ -1304,7 +1308,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
   }
 
   void RecalcData();
-  nsChangeHint CalcDifference(const nsStyleOutline& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleOutline& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_UpdateOverflow |
            nsChangeHint_SchedulePaint |
@@ -1416,7 +1420,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleList, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleList& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleList& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE |
            nsChangeHint_NeutralChange;
@@ -1641,7 +1645,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
       FreeByObjectID(mozilla::eArenaObjectID_nsStylePosition, this);
   }
 
-  nsChangeHint CalcDifference(const nsStylePosition& aOther,
+  nsChangeHint CalcDifference(const nsStylePosition& aNewData,
                               const nsStyleVisibility* aOldStyleVisibility) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_REFLOW |
@@ -1936,7 +1940,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTextReset
     mTextDecorationStyle |= BORDER_COLOR_FOREGROUND;
   }
 
-  nsChangeHint CalcDifference(const nsStyleTextReset& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleTextReset& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint(
         NS_STYLE_HINT_REFLOW |
@@ -1977,7 +1981,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleText, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleText& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleText& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE |
            nsChangeHint_UpdateSubtreeOverflow |
@@ -2196,7 +2200,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVisibility
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleVisibility, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleVisibility& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleVisibility& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE |
            nsChangeHint_NeutralChange;
@@ -2477,7 +2481,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleDisplay, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleDisplay& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleDisplay& aNewData) const;
   static nsChangeHint MaxDifference() {
     // All the parts of FRAMECHANGE are present in CalcDifference.
     return nsChangeHint(NS_STYLE_HINT_FRAMECHANGE |
@@ -2509,9 +2513,9 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   uint8_t mContain;             // [reset] see nsStyleConsts.h NS_STYLE_CONTAIN_*
   uint8_t mAppearance;          // [reset]
   uint8_t mPosition;            // [reset] see nsStyleConsts.h
-  uint8_t mFloats;              // [reset] see nsStyleConsts.h NS_STYLE_FLOAT_*
-  uint8_t mOriginalFloats;      // [reset] saved mFloats for position:absolute/fixed;
-                                //         otherwise equal to mFloats
+  uint8_t mFloat;               // [reset] see nsStyleConsts.h NS_STYLE_FLOAT_*
+  uint8_t mOriginalFloat;       // [reset] saved mFloat for position:absolute/fixed;
+                                //         otherwise equal to mFloat
   uint8_t mBreakType;           // [reset] see nsStyleConsts.h NS_STYLE_CLEAR_*
   uint8_t mBreakInside;         // [reset] NS_STYLE_PAGE_BREAK_AUTO/AVOID
   bool mBreakBefore;    // [reset]
@@ -2633,7 +2637,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   }
 
   bool IsFloatingStyle() const {
-    return NS_STYLE_FLOAT_NONE != mFloats;
+    return NS_STYLE_FLOAT_NONE != mFloat;
   }
 
   bool IsAbsolutelyPositionedStyle() const {
@@ -2749,7 +2753,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTable
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleTable, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleTable& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleTable& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE;
   }
@@ -2782,7 +2786,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleTableBorder
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleTableBorder, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleTableBorder& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleTableBorder& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE;
   }
@@ -2878,7 +2882,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleContent
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStyleContent& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleContent& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE;
   }
@@ -2993,7 +2997,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUIReset
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleUIReset, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleUIReset& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleUIReset& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE;
   }
@@ -3059,7 +3063,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleUserInterface, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleUserInterface& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleUserInterface& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE |
            nsChangeHint_UpdateCursor |
@@ -3110,7 +3114,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleXUL
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleXUL, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleXUL& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleXUL& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE;
   }
@@ -3148,7 +3152,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleColumn, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleColumn& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleColumn& aNewData) const;
   static nsChangeHint MaxDifference() {
     return NS_STYLE_HINT_FRAMECHANGE |
            nsChangeHint_NeutralChange;
@@ -3245,7 +3249,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleSVG, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleSVG& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleSVG& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_UpdateEffects |
            nsChangeHint_NeedReflow |
@@ -3573,12 +3577,12 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
   }
   void Destroy(nsPresContext* aContext);
 
-  nsChangeHint CalcDifference(const nsStyleSVGReset& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleSVGReset& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_UpdateEffects |
            nsChangeHint_UpdateOverflow |
            nsChangeHint_NeutralChange |
-           nsChangeHint_UpdateBackgroundPosition |
+           nsChangeHint_RepaintFrame |
            NS_STYLE_HINT_REFLOW;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
@@ -3628,7 +3632,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVariables
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleVariables, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleVariables& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleVariables& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint(0);
   }
@@ -3658,7 +3662,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleEffects
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleEffects, this);
   }
 
-  nsChangeHint CalcDifference(const nsStyleEffects& aOther) const;
+  nsChangeHint CalcDifference(const nsStyleEffects& aNewData) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint_AllReflowHints |
            nsChangeHint_UpdateOverflow |

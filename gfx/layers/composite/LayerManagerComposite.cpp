@@ -395,9 +395,7 @@ LayerManagerComposite::EndTransaction(const TimeStamp& aTimeStamp,
   if (mRoot && !(aFlags & END_NO_IMMEDIATE_REDRAW)) {
     MOZ_ASSERT(!aTimeStamp.IsNull());
     UpdateAndRender();
-
-    mPreviousHeldTextureHosts.Clear();
-    mPreviousHeldTextureHosts.SwapElements(mCurrentHeldTextureHosts);
+    mCompositor->FlushPendingNotifyNotUsed();
   } else {
     // Modified the layer tree.
     mGeometryChanged = true;
@@ -723,6 +721,7 @@ LayerManagerComposite::PushGroupForLayerEffects()
       mTwoPassTmpTarget->GetOrigin() != previousTarget->GetOrigin()) {
     mTwoPassTmpTarget = mCompositor->CreateRenderTarget(rect, INIT_MODE_NONE);
   }
+  MOZ_ASSERT(mTwoPassTmpTarget);
   mCompositor->SetRenderTarget(mTwoPassTmpTarget);
   return previousTarget;
 }
@@ -809,7 +808,7 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion, const nsIntRegi
   PROFILER_LABEL("LayerManagerComposite", "Render",
     js::ProfileEntry::Category::GRAPHICS);
 
-  if (mDestroyed) {
+  if (mDestroyed || !mCompositor || mCompositor->IsDestroyed()) {
     NS_WARNING("Call on destroyed layer manager");
     return;
   }

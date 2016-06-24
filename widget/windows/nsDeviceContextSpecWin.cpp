@@ -5,7 +5,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/gfx/PrintTargetPDF.h"
-#include "mozilla/gfx/PrintTargetThebes.h"
+#include "mozilla/gfx/PrintTargetWindows.h"
 #include "mozilla/RefPtr.h"
 
 #include "nsDeviceContextSpecWin.h"
@@ -264,16 +264,8 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecWin::MakePrintTarget()
       return nullptr;
     }
 
-    // have this surface take over ownership of this DC
-    RefPtr<gfxASurface> newSurface =
-      new gfxWindowsSurface(dc, gfxWindowsSurface::FLAG_TAKE_DC |
-                                gfxWindowsSurface::FLAG_FOR_PRINTING);
-    if (newSurface->GetType() == (gfxSurfaceType)-1) {
-      gfxCriticalError() << "Invalid windows surface from " << gfx::hexa(dc);
-      return nullptr;
-    }
-
-    return PrintTargetThebes::CreateOrNull(newSurface);
+    // The PrintTargetWindows takes over ownership of this DC
+    return PrintTargetWindows::CreateOrNull(dc);
   }
 
   return nullptr;
@@ -462,6 +454,20 @@ nsPrinterEnumeratorWin::InitPrintSettingsFromPrinter(const char16_t *aPrinterNam
   }
 
   AutoFreeGlobalPrinters autoFreeGlobalPrinters;
+
+  // If the settings have already been initialized from prefs then pass these to
+  // GetDataFromPrinter, so that they are saved to the printer.
+  bool initializedFromPrefs;
+  nsresult rv =
+    aPrintSettings->GetIsInitializedFromPrefs(&initializedFromPrefs);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  if (initializedFromPrefs) {
+    // If we pass in print settings to GetDataFromPrinter it already copies
+    // things back to the settings, so we can return here.
+    return devSpecWin->GetDataFromPrinter(aPrinterName, aPrintSettings);
+  }
 
   devSpecWin->GetDataFromPrinter(aPrinterName);
 

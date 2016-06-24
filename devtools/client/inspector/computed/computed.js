@@ -12,7 +12,7 @@ const {Cc, Ci} = require("chrome");
 
 const ToolDefinitions = require("devtools/client/definitions").Tools;
 const {CssLogic} = require("devtools/shared/inspector/css-logic");
-const {ELEMENT_STYLE} = require("devtools/server/actors/styles");
+const {ELEMENT_STYLE} = require("devtools/shared/specs/styles");
 const promise = require("promise");
 const Services = require("Services");
 const {OutputParser} = require("devtools/client/shared/output-parser");
@@ -20,6 +20,7 @@ const {PrefObserver, PREF_ORIG_SOURCES} = require("devtools/client/styleeditor/u
 const {createChild} = require("devtools/client/inspector/shared/utils");
 const {gDevTools} = require("devtools/client/framework/devtools");
 const {XPCOMUtils} = require("resource://gre/modules/XPCOMUtils.jsm");
+const {getCssProperties} = require("devtools/shared/fronts/css-properties");
 
 loader.lazyRequireGetter(this, "overlays",
   "devtools/client/inspector/shared/style-inspector-overlays");
@@ -148,7 +149,8 @@ function CssComputedView(inspector, document, pageStyle) {
 
   this.propertyViews = [];
 
-  this._outputParser = new OutputParser(document);
+  let cssProperties = getCssProperties(inspector.toolbox);
+  this._outputParser = new OutputParser(document, cssProperties.supportsType);
 
   let chromeReg = Cc["@mozilla.org/chrome/chrome-registry;1"]
     .getService(Ci.nsIXULChromeRegistry);
@@ -203,7 +205,7 @@ function CssComputedView(inspector, document, pageStyle) {
   this._prefObserver.on(PREF_ORIG_SOURCES, this._onSourcePrefChanged);
 
   // The element that we're inspecting, and the document that it comes from.
-  this.viewedElement = null;
+  this._viewedElement = null;
 
   this.createStyleViews();
 
@@ -274,7 +276,7 @@ CssComputedView.prototype = {
    */
   selectElement: function (element) {
     if (!element) {
-      this.viewedElement = null;
+      this._viewedElement = null;
       this.noResults.hidden = false;
 
       if (this._refreshProcess) {
@@ -287,11 +289,11 @@ CssComputedView.prototype = {
       return promise.resolve(undefined);
     }
 
-    if (element === this.viewedElement) {
+    if (element === this._viewedElement) {
       return promise.resolve(undefined);
     }
 
-    this.viewedElement = element;
+    this._viewedElement = element;
     this.refreshSourceFilter();
 
     return this.refreshPanel();
@@ -433,23 +435,23 @@ CssComputedView.prototype = {
    * Refresh the panel content.
    */
   refreshPanel: function () {
-    if (!this.viewedElement) {
+    if (!this._viewedElement) {
       return promise.resolve();
     }
 
     // Capture the current viewed element to return from the promise handler
     // early if it changed
-    let viewedElement = this.viewedElement;
+    let viewedElement = this._viewedElement;
 
     return promise.all([
       this._createPropertyViews(),
-      this.pageStyle.getComputed(this.viewedElement, {
+      this.pageStyle.getComputed(this._viewedElement, {
         filter: this._sourceFilter,
         onlyMatched: !this.includeBrowserStyles,
         markMatched: true
       })
     ]).then(([, computed]) => {
-      if (viewedElement !== this.viewedElement) {
+      if (viewedElement !== this._viewedElement) {
         return promise.resolve();
       }
 
@@ -736,7 +738,7 @@ CssComputedView.prototype = {
    * Destructor for CssComputedView.
    */
   destroy: function () {
-    this.viewedElement = null;
+    this._viewedElement = null;
     this._outputParser = null;
 
     gDevTools.off("pref-changed", this._handlePrefChange);
@@ -855,7 +857,7 @@ PropertyView.prototype = {
   _matchedSelectorViews: null,
 
   // The previously selected element used for the selector view caches
-  prevViewedElement: null,
+  _prevViewedElement: null,
 
   /**
    * Get the computed style for the current property.
@@ -885,7 +887,7 @@ PropertyView.prototype = {
    * Should this property be visible?
    */
   get visible() {
-    if (!this.tree.viewedElement) {
+    if (!this.tree._viewedElement) {
       return false;
     }
 
@@ -1015,12 +1017,12 @@ PropertyView.prototype = {
     this.element.className = this.propertyHeaderClassName;
     this.element.nextElementSibling.className = this.propertyContentClassName;
 
-    if (this.prevViewedElement !== this.tree.viewedElement) {
+    if (this._prevViewedElement !== this.tree._viewedElement) {
       this._matchedSelectorViews = null;
-      this.prevViewedElement = this.tree.viewedElement;
+      this._prevViewedElement = this.tree._viewedElement;
     }
 
-    if (!this.tree.viewedElement || !this.visible) {
+    if (!this.tree._viewedElement || !this.visible) {
       this.valueNode.textContent = this.valueNode.title = "";
       this.matchedSelectorsContainer.parentNode.hidden = true;
       this.matchedSelectorsContainer.textContent = "";
@@ -1060,7 +1062,7 @@ PropertyView.prototype = {
 
     if (this.matchedExpanded && hasMatchedSelectors) {
       return this.tree.pageStyle
-        .getMatchedSelectors(this.tree.viewedElement, this.name)
+        .getMatchedSelectors(this.tree._viewedElement, this.name)
         .then(matched => {
           if (!this.matchedExpanded) {
             return promise.resolve(undefined);
@@ -1472,7 +1474,7 @@ ComputedViewTool.prototype = {
   },
 
   onPanelSelected: function () {
-    if (this.inspector.selection.nodeFront === this.view.viewedElement) {
+    if (this.inspector.selection.nodeFront === this.view._viewedElement) {
       this.refresh();
     } else {
       this.onSelected();

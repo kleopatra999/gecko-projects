@@ -16,7 +16,6 @@
 #include "mozilla/TextComposition.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/Element.h"
-#include "nsAutoPtr.h"
 #include "nsContentUtils.h"
 #include "nsGkAtoms.h"
 #include "nsIAtom.h"
@@ -701,15 +700,20 @@ IMEContentObserver::ReflowInterruptible(DOMHighResTimeStamp aStart,
 nsresult
 IMEContentObserver::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
 {
-  // If the instance has cache, it should use the cached selection which was
+  // If the instance has normal selection cache and the query event queries
+  // normal selection's range, it should use the cached selection which was
   // sent to the widget.  However, if this instance has already received new
   // selection change notification but hasn't updated the cache yet (i.e.,
   // not sending selection change notification to IME, don't use the cached
   // value.  Note that don't update selection cache here since if you update
   // selection cache here, IMENotificationSender won't notify IME of selection
   // change because it looks like that the selection isn't actually changed.
-  if (aEvent->mMessage == eQuerySelectedText && aEvent->mUseNativeLineBreak &&
-      mSelectionData.IsValid() && !mNeedsToNotifyIMEOfSelectionChange) {
+  bool isSelectionCacheAvailable =
+    aEvent->mUseNativeLineBreak && mSelectionData.IsValid() &&
+    !mNeedsToNotifyIMEOfSelectionChange;
+  if (isSelectionCacheAvailable &&
+      aEvent->mMessage == eQuerySelectedText &&
+      aEvent->mInput.mSelectionType == SelectionType::eNormal) {
     aEvent->mReply.mContentsRoot = mRootContent;
     aEvent->mReply.mHasSelection = !mSelectionData.IsCollapsed();
     aEvent->mReply.mOffset = mSelectionData.mOffset;
@@ -726,6 +730,32 @@ IMEContentObserver::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::HandleQueryContentEvent(aEvent={ "
      "mMessage=%s })", this, ToChar(aEvent->mMessage)));
+
+  // If we can make the event's input offset absolute with TextComposition or
+  // mSelection, we should set it here for reducing the cost of computing
+  // selection start offset.  If ContentEventHandler receives a
+  // WidgetQueryContentEvent whose input offset is relative to insertion point,
+  // it computes current selection start offset (this may be expensive) and
+  // make the offset absolute value itself.
+  // Note that calling MakeOffsetAbsolute() makes the event a query event with
+  // absolute offset.  So, ContentEventHandler doesn't pay any additional cost
+  // after calling MakeOffsetAbsolute() here.
+  if (aEvent->mInput.mRelativeToInsertionPoint &&
+      aEvent->mInput.IsValidEventMessage(aEvent->mMessage)) {
+    RefPtr<TextComposition> composition =
+      IMEStateManager::GetTextCompositionFor(aEvent->mWidget);
+    if (composition) {
+      uint32_t compositionStart = composition->NativeOffsetOfStartComposition();
+      if (NS_WARN_IF(!aEvent->mInput.MakeOffsetAbsolute(compositionStart))) {
+        return NS_ERROR_FAILURE;
+      }
+    } else if (isSelectionCacheAvailable) {
+      uint32_t selectionStart = mSelectionData.mOffset;
+      if (NS_WARN_IF(!aEvent->mInput.MakeOffsetAbsolute(selectionStart))) {
+        return NS_ERROR_FAILURE;
+      }
+    }
+  }
 
   AutoRestore<bool> handling(mIsHandlingQueryContentEvent);
   mIsHandlingQueryContentEvent = true;

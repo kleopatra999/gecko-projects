@@ -299,10 +299,9 @@ WebGLContext::DestroyResourcesAndContext()
 
     // We just got rid of everything, so the context had better
     // have been going away.
-#ifdef DEBUG
-    if (gl->DebugMode())
+    if (GLContext::ShouldSpew()) {
         printf_stderr("--- WebGL context destroyed: %p\n", gl.get());
-#endif
+    }
 
     gl = nullptr;
 }
@@ -587,7 +586,7 @@ CreateGLWithEGL(const gl::SurfaceCaps& caps, gl::CreateContextFlags flags,
 {
     const gfx::IntSize dummySize(16, 16);
     RefPtr<GLContext> gl = gl::GLContextProviderEGL::CreateOffscreen(dummySize, caps,
-                                                                     flags, *out_failureId);
+                                                                     flags, out_failureId);
     if (gl && gl->IsANGLE()) {
         gl = nullptr;
     }
@@ -613,7 +612,7 @@ CreateGLWithANGLE(const gl::SurfaceCaps& caps, gl::CreateContextFlags flags,
 {
     const gfx::IntSize dummySize(16, 16);
     RefPtr<GLContext> gl = gl::GLContextProviderEGL::CreateOffscreen(dummySize, caps,
-                                                                     flags, *out_failureId);
+                                                                     flags, out_failureId);
     if (gl && !gl->IsANGLE()) {
         gl = nullptr;
     }
@@ -652,7 +651,7 @@ CreateGLWithDefault(const gl::SurfaceCaps& caps, gl::CreateContextFlags flags,
 
     const gfx::IntSize dummySize(16, 16);
     RefPtr<GLContext> gl = gl::GLContextProvider::CreateOffscreen(dummySize, caps,
-                                                                  flags, *out_failureId);
+                                                                  flags, out_failureId);
 
     if (gl && gl->IsANGLE()) {
         gl = nullptr;
@@ -684,7 +683,7 @@ WebGLContext::CreateAndInitGLWith(FnCreateGL_T fnCreateGL,
     std::queue<gl::SurfaceCaps> fallbackCaps;
     PopulateCapFallbackQueue(baseCaps, &fallbackCaps);
 
-    MOZ_RELEASE_ASSERT(!gl);
+    MOZ_RELEASE_ASSERT(!gl, "GFX: Already have a context.");
     gl = nullptr;
     while (!fallbackCaps.empty()) {
         gl::SurfaceCaps& caps = fallbackCaps.front();
@@ -719,7 +718,8 @@ WebGLContext::CreateAndInitGL(bool forceEnabled, nsACString* const out_failReaso
     useANGLE = !disableANGLE;
 #endif
 
-    gl::CreateContextFlags flags = gl::CreateContextFlags::NONE;
+    gl::CreateContextFlags flags = gl::CreateContextFlags::NO_VALIDATION;
+
     if (forceEnabled) flags |= gl::CreateContextFlags::FORCE_ENABLE_HARDWARE;
     if (!IsWebGL2())  flags |= gl::CreateContextFlags::REQUIRE_COMPAT_PROFILE;
     if (IsWebGL2())   flags |= gl::CreateContextFlags::PREFER_ES3;
@@ -961,10 +961,9 @@ WebGLContext::SetDimensions(int32_t signedWidth, int32_t signedHeight)
         return NS_ERROR_FAILURE;
     }
 
-#ifdef DEBUG
-    if (gl->DebugMode())
+    if (GLContext::ShouldSpew()) {
         printf_stderr("--- WebGL context created: %p\n", gl.get());
-#endif
+    }
 
     mResetLayer = true;
     mOptionsFrozen = true;
@@ -1335,7 +1334,7 @@ void
 WebGLContext::GetCanvas(Nullable<dom::OwningHTMLCanvasElementOrOffscreenCanvas>& retval)
 {
     if (mCanvasElement) {
-        MOZ_RELEASE_ASSERT(!mOffscreenCanvas);
+        MOZ_RELEASE_ASSERT(!mOffscreenCanvas, "GFX: Canvas is offscreen.");
 
         if (mCanvasElement->IsInNativeAnonymousSubtree()) {
           retval.SetNull();
@@ -2066,7 +2065,7 @@ ZeroTexImageWithClear(WebGLContext* webgl, GLContext* gl, TexImageTarget target,
         clearBits |= LOCAL_GL_STENCIL_BUFFER_BIT;
     }
 
-    MOZ_RELEASE_ASSERT(attachPoint && clearBits);
+    MOZ_RELEASE_ASSERT(attachPoint && clearBits, "GFX: No bits cleared.");
 
     {
         gl::GLContext::LocalErrorScope errorScope(*gl);
@@ -2120,11 +2119,11 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, bool respecifyTexture
 
     auto compression = usage->format->compression;
     if (compression) {
-        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset);
-        MOZ_RELEASE_ASSERT(!respecifyTexture);
+        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset, "GFX: Can't zero compressed texture with offsets.");
+        MOZ_RELEASE_ASSERT(!respecifyTexture, "GFX: respecifyTexture is set to true.");
 
         auto sizedFormat = usage->format->sizedFormat;
-        MOZ_RELEASE_ASSERT(sizedFormat);
+        MOZ_RELEASE_ASSERT(sizedFormat, "GFX: texture sized format not set");
 
         const auto fnSizeInBlocks = [](CheckedUint32 pixels, uint8_t pixelsPerBlock) {
             return RoundUpToMultipleOf(pixels, pixelsPerBlock) / pixelsPerBlock;
@@ -2161,7 +2160,7 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, bool respecifyTexture
     }
 
     const auto driverUnpackInfo = usage->idealUnpack;
-    MOZ_RELEASE_ASSERT(driverUnpackInfo);
+    MOZ_RELEASE_ASSERT(driverUnpackInfo, "GFX: ideal unpack info not set.");
 
     if (usage->isRenderable && depth == 1 &&
         !xOffset && !yOffset && !zOffset)
@@ -2207,7 +2206,7 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, bool respecifyTexture
 
     GLenum error;
     if (respecifyTexture) {
-        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset);
+        MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset, "GFX: texture data, offsets, not zeroed.");
         error = DoTexImage(gl, target, level, driverUnpackInfo, width, height, depth,
                            zeros.get());
     } else {

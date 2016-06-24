@@ -145,7 +145,7 @@ TextTrackManager::AddTextTrack(TextTrackKind aKind, const nsAString& aLabel,
   AddCues(ttrack);
 
   if (aTextTrackSource == Track) {
-    HonorUserPreferencesForTrackSelection();
+    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection));
   }
 
   return ttrack.forget();
@@ -160,7 +160,7 @@ TextTrackManager::AddTextTrack(TextTrack* aTextTrack)
   mTextTracks->AddTextTrack(aTextTrack, CompareTextTracks(mMediaElement));
   AddCues(aTextTrack);
   if (aTextTrack->GetTextTrackSource() == Track) {
-    HonorUserPreferencesForTrackSelection();
+    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection));
   }
 }
 
@@ -527,6 +527,11 @@ TextTrackManager::TimeMarchesOn()
 
   mTimeMarchesOnDispatched = false;
 
+  // Early return if we don't have any TextTracks.
+  if (mTextTracks->Length() == 0) {
+    return;
+  }
+
   nsISupports* parentObject =
     mMediaElement->OwnerDoc()->GetParentObject();
   if (NS_WARN_IF(!parentObject)) {
@@ -564,6 +569,11 @@ TextTrackManager::TimeMarchesOn()
   }
   // Populate otherCues with 'non-active" cues.
   if (hasNormalPlayback) {
+    if (currentPlaybackTime < mLastTimeMarchesOnCalled) {
+      // TODO: Add log and find the root cause why the
+      // playback position goes backward.
+      mLastTimeMarchesOnCalled = currentPlaybackTime;
+    }
     media::Interval<double> interval(mLastTimeMarchesOnCalled,
                                      currentPlaybackTime);
     otherCues = mNewCues->GetCueListByTimeInterval(interval);;
@@ -659,8 +669,7 @@ TextTrackManager::TimeMarchesOn()
   // Step 11, 17.
   for (uint32_t i = 0; i < otherCues->Length(); ++i) {
     TextTrackCue* cue = (*otherCues)[i];
-    if (cue->GetActive() ||
-        missedCues->GetCueById(cue->Id()) != nullptr) {
+    if (cue->GetActive() || missedCues->IsCueExist(cue)) {
       double time = cue->StartTime() > cue->EndTime() ? cue->StartTime()
                                                       : cue->EndTime();
       SimpleTextTrackEvent* event =
@@ -710,6 +719,19 @@ TextTrackManager::TimeMarchesOn()
 
   // Step 18.
   UpdateCueDisplay();
+}
+
+void
+TextTrackManager::NotifyCueUpdated(TextTrackCue *aCue)
+{
+  // TODO: Add/Reorder the cue to mNewCues if we have some optimization?
+  DispatchTimeMarchesOn();
+}
+
+void
+TextTrackManager::NotifyReset()
+{
+  mLastTimeMarchesOnCalled = 0.0;
 }
 
 } // namespace dom

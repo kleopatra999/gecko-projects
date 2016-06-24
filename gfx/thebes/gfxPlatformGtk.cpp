@@ -90,7 +90,7 @@ gfxPlatformGtk::gfxPlatformGtk()
     mMaxGenericSubstitutions = UNINITIALIZED_VALUE;
 
 #ifdef MOZ_X11
-    sUseXRender = (GDK_IS_X11_DISPLAY(gdk_display_get_default())) ? 
+    sUseXRender = (GDK_IS_X11_DISPLAY(gdk_display_get_default())) ?
                     mozilla::Preferences::GetBool("gfx.xrender.enabled") : false;
 #endif
 
@@ -202,6 +202,7 @@ gfxPlatformGtk::UpdateFontList()
 // out a more general list
 static const char kFontDejaVuSans[] = "DejaVu Sans";
 static const char kFontDejaVuSerif[] = "DejaVu Serif";
+static const char kFontEmojiOneMozilla[] = "EmojiOne Mozilla";
 static const char kFontFreeSans[] = "FreeSans";
 static const char kFontFreeSerif[] = "FreeSerif";
 static const char kFontTakaoPGothic[] = "TakaoPGothic";
@@ -214,10 +215,24 @@ gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
                                        Script aRunScript,
                                        nsTArray<const char*>& aFontList)
 {
+    if (aNextCh == 0xfe0fu) {
+      // if char is followed by VS16, try for a color emoji glyph
+      aFontList.AppendElement(kFontEmojiOneMozilla);
+    }
+
     aFontList.AppendElement(kFontDejaVuSerif);
     aFontList.AppendElement(kFontFreeSerif);
     aFontList.AppendElement(kFontDejaVuSans);
     aFontList.AppendElement(kFontFreeSans);
+
+    if (!IS_IN_BMP(aCh)) {
+        uint32_t p = aCh >> 16;
+        if (p == 1) { // try color emoji font, unless VS15 (text style) present
+            if (aNextCh != 0xfe0fu && aNextCh != 0xfe0eu) {
+                aFontList.AppendElement(kFontEmojiOneMozilla);
+            }
+        }
+    }
 
     // add fonts for CJK ranges
     // xxx - this isn't really correct, should use the same CJK font ordering
@@ -288,7 +303,7 @@ gfxPlatformGtk::LookupLocalFont(const nsAString& aFontName,
                                            aStretch, aStyle);
 }
 
-gfxFontEntry* 
+gfxFontEntry*
 gfxPlatformGtk::MakePlatformFont(const nsAString& aFontName,
                                  uint16_t aWeight,
                                  int16_t aStretch,
@@ -437,7 +452,7 @@ gfxPlatformGtk::GetPlatformCMSOutputProfile(void *&mem, size_t &size)
     // return with nullptr.
     if (!dpy)
         return;
- 
+
     Window root = gdk_x11_get_default_root_xwindow();
 
     Atom retAtom;
@@ -678,6 +693,7 @@ public:
         }
 
         mGLContext = gl::GLContextGLX::CreateGLContext(
+            gl::CreateContextFlags::NONE,
             gl::SurfaceCaps::Any(),
             nullptr,
             false,
@@ -685,6 +701,11 @@ public:
             root,
             config,
             false);
+
+        if (!mGLContext) {
+          lock.NotifyAll();
+          return;
+        }
 
         mGLContext->MakeCurrent();
 
@@ -765,23 +786,32 @@ public:
         }
 
         TimeStamp lastVsync = TimeStamp::Now();
+        bool useSoftware = false;
+
         // Wait until the video sync counter reaches the next value by waiting
         // until the parity of the counter value changes.
         unsigned int nextSync = syncCounter + 1;
-        if (gl::sGLXLibrary.xWaitVideoSync(2, nextSync % 2,
-                                           &syncCounter) == 0) {
-          if (syncCounter == (nextSync - 1)) {
-            gfxWarning() << "GLX sync counter failed to increment after glXWaitVideoSync!\n";
-            // If we failed to block until the next sync, fallback to software.
-            double remaining = (1000.f / 60.f) -
-                               (TimeStamp::Now() - lastVsync).ToMilliseconds();
-            if (remaining > 0) {
-              PlatformThread::Sleep(remaining);
-            }
-          }
-          lastVsync = TimeStamp::Now();
-          NotifyVsync(lastVsync);
+        int status;
+        if ((status = gl::sGLXLibrary.xWaitVideoSync(2, nextSync % 2, &syncCounter)) != 0) {
+          gfxWarningOnce() << "glXWaitVideoSync returned " << status;
+          useSoftware = true;
         }
+
+        if (syncCounter == (nextSync - 1)) {
+          gfxWarningOnce() << "glXWaitVideoSync failed to increment the sync counter.";
+          useSoftware = true;
+        }
+
+        if (useSoftware) {
+          double remaining = (1000.f / 60.f) -
+            (TimeStamp::Now() - lastVsync).ToMilliseconds();
+          if (remaining > 0) {
+            PlatformThread::Sleep(remaining);
+          }
+        }
+
+        lastVsync = TimeStamp::Now();
+        NotifyVsync(lastVsync);
       }
     }
 

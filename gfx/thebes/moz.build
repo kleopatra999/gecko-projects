@@ -39,10 +39,8 @@ EXPORTS += [
     'gfxQuaternion.h',
     'gfxRect.h',
     'gfxSharedImageSurface.h',
-    'gfxSharedQuartzSurface.h',
     'gfxSkipChars.h',
     'gfxSVGGlyphs.h',
-    'gfxTeeSurface.h',
     'gfxTextRun.h',
     'gfxTypes.h',
     'gfxUserFontSet.h',
@@ -97,12 +95,16 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'gfxQuartzNativeDrawing.h',
         'gfxQuartzSurface.h',
     ]
+    EXPORTS.mozilla.gfx += [
+        'PrintTargetCG.h',
+    ]
     SOURCES += [
         'gfxCoreTextShaper.cpp',
         'gfxMacFont.cpp',
         'gfxPlatformMac.cpp',
         'gfxQuartzNativeDrawing.cpp',
         'gfxQuartzSurface.cpp',
+        'PrintTargetCG.cpp',
     ]
 elif 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     EXPORTS += [
@@ -141,7 +143,6 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
     EXPORTS += [
         'gfxFontconfigFonts.h',
         'gfxFT2FontBase.h',
-        'gfxQPainterSurface.h',
         'gfxQtNativeRenderer.h',
         'gfxQtPlatform.h',
     ]
@@ -153,7 +154,6 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
         'gfxFontconfigUtils.cpp',
         'gfxFT2FontBase.cpp',
         'gfxFT2Utils.cpp',
-        'gfxQPainterSurface.cpp',
         'gfxQtPlatform.cpp',
         'PrintTargetPDF.cpp',
     ]
@@ -179,6 +179,7 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     ]
     EXPORTS.mozilla.gfx += [
         'PrintTargetPDF.h',
+        'PrintTargetWindows.h',
     ]
     SOURCES += [
         'gfxGDIFont.cpp',
@@ -187,6 +188,7 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
         'gfxWindowsPlatform.cpp',
         'gfxWindowsSurface.cpp',
         'PrintTargetPDF.cpp',
+        'PrintTargetWindows.cpp',
     ]
     if CONFIG['MOZ_ENABLE_DWRITE_FONT']:
         UNIFIED_SOURCES += [
@@ -246,7 +248,6 @@ UNIFIED_SOURCES += [
     'gfxScriptItemizer.cpp',
     'gfxSkipChars.cpp',
     'gfxSVGGlyphs.cpp',
-    'gfxTeeSurface.cpp',
     'gfxTextRun.cpp',
     'gfxUserFontSet.cpp',
     'gfxUtils.cpp',

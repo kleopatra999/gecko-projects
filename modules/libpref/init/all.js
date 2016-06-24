@@ -138,8 +138,6 @@ pref("dom.select_events.enabled", false);
 
 // Whether or not Web Workers are enabled.
 pref("dom.workers.enabled", true);
-// The number of workers per domain allowed to run concurrently.
-pref("dom.workers.maxPerDomain", 50);
 
 pref("dom.serviceWorkers.enabled", false);
 
@@ -376,6 +374,8 @@ pref("media.gmp.storage.version.expected", 1);
 pref("media.decoder-doctor.notifications-allowed", "MediaWMFNeeded,MediaWidevineNoWMFNoSilverlight");
 // Whether we report partial failures.
 pref("media.decoder-doctor.verbose", false);
+// Whether DD should consider WMF-disabled a WMF failure, useful for testing.
+pref("media.decoder-doctor.wmf-disabled-is-failure", false);
 
 // Whether to suspend decoding of videos in background tabs.
 #ifdef NIGHTLY_BUILD
@@ -398,8 +398,8 @@ pref("media.navigator.load_adapt.low_load","0.40");
 pref("media.navigator.video.default_fps",30);
 pref("media.navigator.video.default_minfps",10);
 pref("media.navigator.video.use_remb", true);
-pref("media.navigator.video.use_tmmbr", true);
-
+pref("media.navigator.video.use_tmmbr", false);
+pref("media.navigator.audio.use_fec", true);
 
 pref("media.webrtc.debug.trace_mask", 0);
 pref("media.webrtc.debug.multi_log", false);
@@ -596,7 +596,7 @@ pref("apz.axis_lock.lock_angle", "0.5235987");        // PI / 6 (30 degrees)
 pref("apz.axis_lock.breakout_threshold", "0.03125");  // 1/32 inches
 pref("apz.axis_lock.breakout_angle", "0.3926991");    // PI / 8 (22.5 degrees)
 pref("apz.axis_lock.direct_pan_angle", "1.047197");   // PI / 3 (60 degrees)
-pref("apz.content_response_timeout", 300);
+pref("apz.content_response_timeout", 400);
 pref("apz.drag.enabled", false);
 pref("apz.danger_zone_x", 50);
 pref("apz.danger_zone_y", 100);
@@ -612,6 +612,7 @@ pref("apz.fling_curve_function_x2", "1.0");
 pref("apz.fling_curve_function_y2", "1.0");
 pref("apz.fling_curve_threshold_inches_per_ms", "-1.0");
 pref("apz.fling_friction", "0.002");
+pref("apz.fling_min_velocity_threshold", "0.5");
 pref("apz.fling_stop_on_tap_threshold", "0.05");
 pref("apz.fling_stopped_threshold", "0.01");
 pref("apz.highlight_checkerboarded_areas", false);
@@ -642,7 +643,7 @@ pref("apz.record_checkerboarding", false);
 pref("apz.test.logging_enabled", false);
 pref("apz.touch_start_tolerance", "0.1");
 pref("apz.touch_move_tolerance", "0.03");
-pref("apz.velocity_bias", "1.0");
+pref("apz.velocity_bias", "0.0");
 pref("apz.velocity_relevance_time_ms", 150);
 pref("apz.x_skate_highmem_adjust", "0.0");
 pref("apz.y_skate_highmem_adjust", "0.0");
@@ -658,7 +659,7 @@ pref("apz.scale_repaint_delay_ms", 500);
 pref("apz.allow_zooming", true);
 pref("apz.enlarge_displayport_when_clipped", true);
 pref("apz.y_skate_size_multiplier", "1.5");
-pref("apz.y_stationary_size_multiplier", "1.8");
+pref("apz.y_stationary_size_multiplier", "1.5");
 #endif
 
 #ifdef XP_MACOSX
@@ -1191,6 +1192,7 @@ pref("javascript.options.baselinejit",      true);
 pref("javascript.options.ion",              true);
 pref("javascript.options.asmjs",            true);
 pref("javascript.options.wasm",             false);
+pref("javascript.options.wasm_baselinejit", false);
 pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
 #if !defined(RELEASE_BUILD) && !defined(ANDROID) && !defined(MOZ_B2G) && !defined(XP_IOS)
@@ -1411,7 +1413,7 @@ pref("network.http.referer.XOriginPolicy", 0);
 pref("network.http.sendSecureXSiteReferrer", true);
 
 // Controls whether referrer attributes in <a>, <img>, <area>, and <iframe> are honoured
-pref("network.http.enablePerElementReferrer", false);
+pref("network.http.enablePerElementReferrer", true);
 
 // Maximum number of consecutive redirects before aborting.
 pref("network.http.redirection-limit", 20);
@@ -1824,7 +1826,11 @@ pref("network.prefetch-next", true);
 // enables the predictive service
 pref("network.predictor.enabled", true);
 pref("network.predictor.enable-hover-on-ssl", false);
+#ifdef NIGHTLY_BUILD
 pref("network.predictor.enable-prefetch", true);
+#else
+pref("network.predictor.enable-prefetch", false);
+#endif
 pref("network.predictor.page-degradation.day", 0);
 pref("network.predictor.page-degradation.week", 5);
 pref("network.predictor.page-degradation.month", 10);
@@ -4564,6 +4570,7 @@ pref("gfx.apitrace.enabled",false);
 pref("gfx.content.use-native-pushlayer", true);
 #ifdef MOZ_WIDGET_GTK
 pref("gfx.xrender.enabled",false);
+pref("widget.allow-gtk-dark-theme", false);
 #endif
 #endif
 
@@ -5452,5 +5459,5 @@ pref("media.default_volume", "1.0");
 #ifdef RELEASE_BUILD
 pref("media.seekToNextFrame.enabled", false);
 #else
-pref("media.seekToNextFrame.enabled", false);
+pref("media.seekToNextFrame.enabled", true);
 #endif
