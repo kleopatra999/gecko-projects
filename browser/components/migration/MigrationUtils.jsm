@@ -702,7 +702,7 @@ this.MigrationUtils = Object.freeze({
     if (!isRefresh &&
         Services.prefs.getBoolPref("browser.migration.automigrate")) {
       try {
-        AutoMigrate.migrate(aProfileStartup, aMigratorKey, aProfileToMigrate);
+        AutoMigrate.migrate(aProfileStartup, aMigratorKey, null);
         return;
       } catch (ex) {
         // If automigration failed, continue and show the dialog.
